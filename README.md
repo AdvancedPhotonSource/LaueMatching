@@ -21,5 +21,6 @@ C-libraries needed:
 
 TODO:
 
-    - Example files to run indexing, one way is to give a list of grains and a config file. 
+    - Example files to run indexing, one way is to 
+      give a list of grains and a config file. 
     - Streamline installation of NLOPT, then compilation.
