@@ -8,7 +8,7 @@ NCC=$${HOME}/opt/localcuda/bin/nvcc
 CFLAGS=-fPIC -g -ldl -lm -fgnu89-inline -O3 -w -Wall
 current_dir := $(shell dirname $(realpath $(firstword $(MAKEFILE_LIST))))
 CFLAGSNLOPT=-I$(current_dir)/LIBS/NLOPT/include -L$(current_dir)/LIBS/NLOPT/lib -L$(current_dir)/LIBS/NLOPT/lib64 -lnlopt
-NCFLAGS=-O3 -G -g -w -arch sm_90 -gencode=arch=compute_90,code=sm_90 -lm -rdc=true
+NCFLAGS=-O3 -G -g -w -gencode=arch=compute_70,code=sm_70 -gencode=arch=compute_86,code=sm_86 -gencode=arch=compute_90,code=sm_90 -gencode=arch=compute_80,code=sm_80 -lm -rdc=true
 SRC=src/
 BIN=bin/
 
@@ -19,7 +19,6 @@ predep:
 
 help:
 	@echo NLOPT compiler flags in $(CFLAGSNLOPT)
-	@echo 
 
 bindircheck:
 	mkdir -p $(BIN)
