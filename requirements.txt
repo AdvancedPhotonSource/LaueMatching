@@ -1,7 +1,7 @@
 numpy
 h5py
 scipy
-PIL
+pillow
 scikit-image
 diplib
 matplotlib
