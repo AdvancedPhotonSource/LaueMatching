@@ -14,19 +14,24 @@
 imageFile = ['simulated_data.h5']
 configFile = 'params_sim.txt'
 nMax = 50
+nCPUs = 200
 
 import h5py
 import numpy as np
 import scipy.ndimage as ndimg
 import matplotlib.pyplot as plt
 import math
-import os
+import os, sys
 import subprocess
 import shutil
 from PIL import Image
 import pickle as pl
 import skimage
 plt.rcParams['font.size'] = 3
+
+file_path = os.path.dirname(os.path.realpath(__file__))
+env = dict(os.environ)
+libpth = os.environ.get('LD_LIBRARY_PATH','')
 
 colors = plt.get_cmap('nipy_spectral',nMax)
 
@@ -92,8 +97,10 @@ def runFile(imageFN):
 	hf_out.create_dataset('/entry/data/input_blurred',data=h_im2)
 	Image.fromarray(h_im2).save(imageFN+'.bin.inputBlurred.tif')
 	fout = open(imageFN+'.laue_dict_output.txt','w')
-	subprocess.call('./laue_dict_faster '+configFile+' '+orientf+' '+hklf+' '+imageFN+'.bin 200',shell=True,
-				stdout=fout)
+	print(f'Command: {file_path}/bin/LaueMatchingCPU {configFile} {orientf} {hklf} {imageFN}.bin {nCPUs}')
+	env['LD_LIBRARY_PATH'] = f'{file_path}/LIBS/NLOPT/lib:{file_path}/LIBS/NLOPT/lib64:{libpth}'
+	subprocess.call(f'{file_path}/bin/LaueMatchingCPU {configFile} {orientf} {hklf} {imageFN}.bin {nCPUs}',shell=True,env=env,stdout=fout)
+	return
 	fout.close()
 	grainInfo = np.genfromtxt(imageFN+'.bin.solutions.txt',skip_header=1)
 	headgr = open(imageFN+'.bin.solutions.txt').readline()
