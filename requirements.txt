@@ -1,0 +1,7 @@
+numpy
+h5py
+scipy
+PIL
+scikit-image
+diplib
+matplotlib
