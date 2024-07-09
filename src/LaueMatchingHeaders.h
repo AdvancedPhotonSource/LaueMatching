@@ -71,6 +71,9 @@ struct dataFit{
 };
 
 #if defined(__CUDA_ARCH__)
+#define _XOPEN_SOURCE 500
+
+#include<unistd.h>
 #include<cuda.h>
 size_t MaxNrSpots;
 size_t nrPixels;
