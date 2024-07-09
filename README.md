@@ -2,7 +2,13 @@
 
 LaueMatching code to find orientations in Laue Diffraction Images.
 
-To install, you would need to compile C-codes in src. Makefile is coming soon.
+To install, you would need to compile C-codes in src.
+
+Installation:
+    
+    git clone https://https://github.com/AdvancedPhotonSource/LaueMatching
+    cd LaueMatching
+    python install -r requirements.txt
 
 Python packages needed:
 
@@ -14,13 +20,17 @@ Python packages needed:
     - diplib
     - matplotlib
 
-C-libraries needed:
+C-libraries downloaded:
 
     - nlopt
-    - CUDA (for GPU version only)
+
+For GPU Version, provide CUDA executable as follows:
+    make NCC=PATH_TO_NCC lauegpu
+
+For CPU Version:
+    make lauecpu
 
 TODO:
 
     - Example files to run indexing, one way is to 
-      give a list of grains and a config file. 
-    - Streamline installation of NLOPT, then compilation.
+      give a list of images and a config file. 
