@@ -44,13 +44,13 @@ void compare(size_t nrPx, size_t nOr, size_t nrMaxSpots, double minInt, size_t m
 int main(int argc, char *argv[])
 {
 	// What we need: parameterFile, fwdSimulation, orientations, #CPU-cores, 
-	nrPixels = 2048;
+	int nrPixels = 2048;
 	// MaxNrSpots = 30;
 	// size_t minSps = 7;
 	// double minInt = 100;
 	// FILE *fwdFN = fopen("orientation_files/225_Ni/compact_Ni_FwdSim.bin","rb");
 	// FILE *imFN = fopen("results_Ni_cleaned/test_4.h5.bin","rb");
-	MaxNrSpots = 180;
+	int MaxNrSpots = 180;
 	size_t minSps = 35;
 	double minInt = 300;
 	FILE *fwdFN = fopen("orientation_files/4_Eu2AlO4/Eu2AlO4_FwdSim.bin","rb");
