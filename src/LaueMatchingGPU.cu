@@ -338,7 +338,7 @@ if (argc!=6){
 			nrOrientsThread = endOrientNr - startOrientNr;
 			uint16_t *outArrThis;
 			size_t szArr = nrOrientsThread*(1+2*maxNrSpots);
-			outArrThis = calloc(szArr,sizeof(*outArrThis));
+			outArrThis = (uint16_t *) calloc(szArr,sizeof(*outArrThis));
 			if (outArrThis == NULL){
 				printf("Could not allocate outArr per thread, needed %lldMB of RAM. Behavior unexpected now.\n"
 					,(long long int)nrOrientsThread*(10+5*maxNrSpots)*sizeof(double)/(1024*1024));
@@ -364,7 +364,7 @@ if (argc!=6){
 			}
 			int orientNr;
 			double *qhatarr;
-			qhatarr = calloc(maxNrSpots*3,sizeof(qhatarr));
+			qhatarr = (double *) calloc(maxNrSpots*3,sizeof(qhatarr));
 			size_t loc;
 			uint16_t px,py;
 			double thisInt;
@@ -468,6 +468,8 @@ if (argc!=6){
 		size_t szArr = nrOrients *(1+2*maxNrSpots);
 		uint16_t *outArr;
 		outArr = (uint16_t *) calloc(szArr,sizeof(uint16_t));
+		FILE *fwdFN;
+		fwdFN = fopen(outfn,"rb");
 		if(outArr==NULL){
 			printf("Could not allocate.\n");
 			fflush(stdout);
