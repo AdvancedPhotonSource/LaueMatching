@@ -92,8 +92,6 @@ double CubSym[24][4] = {
 #ifdef __cplusplus 
 
 extern "C" {
-
-#endif
 inline
 void QuaternionProduct(double q[4], double r[4], double Q[4])
 {
@@ -109,10 +107,6 @@ void QuaternionProduct(double q[4], double r[4], double Q[4])
 	}
 	normalizeQuat(Q);
 }
-	/* ... */
-
-#ifdef __cplusplus
-
 }
 
 #endif
