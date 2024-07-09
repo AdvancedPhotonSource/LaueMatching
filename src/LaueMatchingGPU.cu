@@ -637,45 +637,4 @@ if (argc!=6){
 	printf("Finished, time elapsed in fitting: %lf seconds.\n"
 		"Initial solutions: %d Unique Orientations: %d\n",time,nrResults,totalSols);
 
-	// What we need: parameterFile, fwdSimulation, orientations, #CPU-cores, 
-	int nrPixels = 2048;
-	// MaxNrSpots = 30;
-	// size_t minSps = 7;
-	// double minInt = 100;
-	// FILE *fwdFN = fopen("orientation_files/225_Ni/compact_Ni_FwdSim.bin","rb");
-	// FILE *imFN = fopen("results_Ni_cleaned/test_4.h5.bin","rb");
-	int MaxNrSpots = 180;
-	size_t minSps = 35;
-	double minInt = 300;
-	FILE *fwdFN = fopen("orientation_files/4_Eu2AlO4/Eu2AlO4_FwdSim.bin","rb");
-	FILE *imFN = fopen("results_EuAl2O4_Modified_AllowedToMove/test_6_cleaned.h5.bin","rb");
-	FILE *orientF = fopen("orientation_files/100MilOrients.bin","rb");
-	fseek(orientF,0L,SEEK_END);
-	size_t szFile = ftell(orientF);
-	rewind(orientF);
-	size_t nrOrients = (size_t)((double)szFile / (double)(9*sizeof(double)));
-	double *orients;
-	orients = (double *) malloc(szFile);
-	fread(orients,1,szFile,orientF);
-	fclose(orientF);
-	// All we need are fwdsim.bin, image.bin and we create an array with results.
-	size_t szArr = nrOrients *(1+2*MaxNrSpots);
-	uint16_t *outArr;
-	outArr = (uint16_t *) calloc(szArr,sizeof(uint16_t));
-	if(outArr==NULL){
-		printf("Could not allocate.\n");
-		fflush(stdout);
-		return 1;
-	}
-	fseek(fwdFN,0L,SEEK_END);
-	size_t sz = ftell(fwdFN);
-	rewind(fwdFN);
-	size_t readBytes = fread(outArr,szArr*sizeof(uint16_t),1,fwdFN);
-	fclose(fwdFN);
-	if (imFN == NULL) return 1;
-	double *image;
-	image = (double *) malloc(nrPixels*nrPixels*sizeof(*image));
-	readBytes = fread(image,nrPixels*nrPixels*sizeof(*image),1,imFN);
-	fclose(imFN);
-
 }
