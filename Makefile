@@ -27,5 +27,5 @@ bindircheck:
 lauecpu: predep help bindircheck $(SRC)LaueMatchingCPU.c $(SRC)LaueMatchingSharedFunctions.c
 	$(CC) $(SRC)LaueMatchingCPU.c $(SRC)LaueMatchingSharedFunctions.c -o $(BIN)LaueMatchingCPU $(CFLAGS) $(CFLAGSNLOPT) -fopenmp
 
-lauegpu: predep help bindircheck $(SRC)LaueMatchingGPU.cu $(SRC)LaueMatchingSharedFunctions.c
-	$(NCC) $(SRC)LaueMatchingGPU.cu $(SRC)LaueMatchingSharedFunctions.c -o $(BIN)LaueMatchingGPU $(NCFLAGS) $(CFLAGSNLOPT)
+lauegpu: predep help bindircheck $(SRC)LaueMatchingGPU.cu
+	$(NCC) $(SRC)LaueMatchingGPU.cu -o $(BIN)LaueMatchingGPU $(NCFLAGS) $(CFLAGSNLOPT)
