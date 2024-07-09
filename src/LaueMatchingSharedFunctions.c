@@ -89,8 +89,6 @@ double CubSym[24][4] = {
    {0.00000,   0.00000,   0.70711,   0.70711},
    {0.00000,   0.00000,   0.70711,  -0.70711}};
 
-#ifdef __cplusplus 
-
 extern "C" {
 inline
 void QuaternionProduct(double q[4], double r[4], double Q[4])
@@ -107,9 +105,6 @@ void QuaternionProduct(double q[4], double r[4], double Q[4])
 	}
 	normalizeQuat(Q);
 }
-}
-
-#endif
 
 inline
 int MakeSymmetries(int SGNr, double Sym[24][4])
