@@ -1,6 +1,7 @@
 #
-# Copyright (c) 2014, UChicago Argonne, LLC
+# Copyright (c) 2024, UChicago Argonne, LLC
 # See LICENSE file.
+# Hemant Sharma, hsharma@anl.gov
 #
 
 CC=gcc
@@ -23,8 +24,8 @@ help:
 bindircheck:
 	mkdir -p $(BIN)
 
-lauecpu: predep help bindircheck $(SRC)LaueMatchingCPU.c
-	$(CC) $(SRC)LaueMatchingCPU.c -o $(BIN)LaueMatchingCPU $(CFLAGS) $(CFLAGSNLOPT) -fopenmp
+lauecpu: predep help bindircheck $(SRC)LaueMatchingCPU.c $(SRC)LaueMatchingSharedFunctions.c
+	$(CC) $(SRC)LaueMatchingCPU.c $(SRC)LaueMatchingSharedFunctions.c -o $(BIN)LaueMatchingCPU $(CFLAGS) $(CFLAGSNLOPT) -fopenmp
 
-lauegpu: predep help bindircheck $(SRC)LaueMatchingGPU.cu
-	$(NCC) $(SRC)LaueMatchingGPU.cu -o $(BIN)LaueMatchingGPU $(NCFLAGS)
+lauegpu: predep help bindircheck $(SRC)LaueMatchingGPU.cu $(SRC)LaueMatchingSharedFunctions.c
+	$(NCC) $(SRC)LaueMatchingGPU.cu $(SRC)LaueMatchingSharedFunctions.c -o $(BIN)LaueMatchingGPU $(NCFLAGS) $(CFLAGSNLOPT) -fopenmp
