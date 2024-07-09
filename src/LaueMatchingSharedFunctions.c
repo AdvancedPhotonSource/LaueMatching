@@ -1,7 +1,4 @@
-extern "C" {
 #include "LaueMatchingHeaders.h"
-}
-// #include "LaueMatchingHeaders.h"
 
 extern double tol_LatC[6];
 extern double tol_c_over_a;
