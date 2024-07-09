@@ -13,7 +13,7 @@
 #include <sys/mman.h>
 #include <fcntl.h>
 #include <string.h>
-#include <nlopt.h>
+// #include <nlopt.h>
 
 #ifdef __linux__ 
 #include <malloc.h>
