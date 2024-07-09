@@ -467,7 +467,7 @@ inline void calcRecipArray(double Lat[6], int SpaceGroup, double recip[3][3]){
 	recip[2][2] = zeroOut((a0*b1-a1*b0)*pv);
 }
 
-inline double calcOverlap(double *image, double euler[3], int *hkls, int nhkls, int nrPxX, int nrPxY,
+inline double calcOverlap(double *image, const double euler[3], int *hkls, int nhkls, int nrPxX, int nrPxY,
 	double recip[3][3], double *outArrThis, int maxNrSpots, double rotTranspose[3][3], double pArr[3], double pxX,
 	double pxY, double Elo, double Ehi){
 	double OM[3][3], OMt[3][3];
