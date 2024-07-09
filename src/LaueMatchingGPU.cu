@@ -1,14 +1,17 @@
-#include<stdio.h>
-#include<time.h>
-#include<malloc.h>
-#include<stdint.h>
-#include<math.h>
-#include<omp.h>
-#include<cuda.h>
-#include<fcntl.h>
+//
+// Copyright (c) 2024, UChicago Argonne, LLC
+// See LICENSE file.
+// Hemant Sharma, hsharma@anl.gov
+//
 
-size_t MaxNrSpots;
-size_t nrPixels;
+#include "LaueMatchingHeaders.h"
+
+double tol_LatC[6];
+double tol_c_over_a;
+double c_over_a_orig;
+int sg_num;
+double cellVol;
+double phiVol;
 
 __global__
 void compare(size_t nrPx, size_t nOr, size_t nrMaxSpots, double minInt, size_t minSps, uint16_t *oA, double *im, double *mA)
@@ -40,6 +43,7 @@ void compare(size_t nrPx, size_t nOr, size_t nrMaxSpots, double minInt, size_t m
 
 int main(int argc, char *argv[])
 {
+	// What we need: parameterFile, fwdSimulation, orientations, #CPU-cores, 
 	nrPixels = 2048;
 	// MaxNrSpots = 30;
 	// size_t minSps = 7;
