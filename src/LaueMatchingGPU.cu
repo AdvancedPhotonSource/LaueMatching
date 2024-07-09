@@ -14,7 +14,7 @@ double cellVol;
 double phiVol;
 
 __global__
-void compare(size_t nrPx, size_t nOr, size_t nrMaxSpots, double minInt, size_t minSps, uint16_t *oA, double *im, double *mA)
+void compare(size_t nrPxX, size_t nOr, size_t nrMaxSpots, double minInt, size_t minSps, uint16_t *oA, double *im, double *mA)
 {
 	size_t i = blockIdx.x*blockDim.x + threadIdx.x;
 	if (i < nOr){
@@ -29,7 +29,7 @@ void compare(size_t nrPx, size_t nOr, size_t nrMaxSpots, double minInt, size_t m
 			px = (size_t) oA[loc];
 			loc++;
 			py = (size_t) oA[loc];
-			thisInt = im[py*nrPx+px];
+			thisInt = im[py*nrPxX+px];
 			if (thisInt>0){
 				totInt += thisInt;
 				nSps++;
@@ -465,19 +465,29 @@ if (argc!=6){
 			free(outArrThis);
 		}
 	} else{
+		size_t szArr = nrOrients *(1+2*maxNrSpots);
+		uint16_t *outArr;
+		outArr = (uint16_t *) calloc(szArr,sizeof(uint16_t));
+		if(outArr==NULL){
+			printf("Could not allocate.\n");
+			fflush(stdout);
+			return 1;
+		}
+		fseek(fwdFN,0L,SEEK_END);
+		size_t readBytes = fread(outArr,szArr*sizeof(uint16_t),1,fwdFN);
 		// CUDA BLOCK
 		uint16_t *device_outArr;
 		cudaMalloc(&device_outArr,szArr*sizeof(uint16_t));
 		double *device_image;
-		cudaMalloc(&device_image,nrPixels*nrPixels*sizeof(double));
+		cudaMalloc(&device_image,nrPxX*nrPx/y*sizeof(double));
 		double *device_matchedArr, *mArr;
 		cudaMalloc(&device_matchedArr,nrOrients*sizeof(double));
 		mArr = (double *) malloc(nrOrients*sizeof(double));
 		cudaMemcpy(device_outArr,outArr,szArr*sizeof(uint16_t),cudaMemcpyHostToDevice);
 		clock_t start = clock();
-		cudaMemcpy(device_image,image,nrPixels*nrPixels*sizeof(double),cudaMemcpyHostToDevice);
+		cudaMemcpy(device_image,image,nrPxX*nrPxY*sizeof(double),cudaMemcpyHostToDevice);
 		cudaMemset(device_matchedArr,0,nrOrients*sizeof(double));
-		compare<<<(nrOrients+1023)/1024, 1024>>>(nrPixels,nrOrients,MaxNrSpots,minInt,minSps,device_outArr,device_image,device_matchedArr);
+		compare<<<(nrOrients+1023)/1024, 1024>>>(nrPxX,nrOrients,maxNrSpots,minIntensity,minNrSpots,device_outArr,device_image,device_matchedArr);
 		cudaDeviceSynchronize();
 		cudaMemcpy(mArr,device_matchedArr,nrOrients*sizeof(double),cudaMemcpyDeviceToHost);
 		clock_t end = clock();
@@ -507,7 +517,7 @@ if (argc!=6){
 	// Check if we can increase maxNrSpots and see if we find more spots
 	maxNrSpots *= 3;
 	int *doneArr;
-	doneArr = calloc(nrOrients,sizeof(*doneArr));
+	doneArr = (int *) calloc(nrOrients,sizeof(*doneArr));
 	int unique = 0, bestSol;
 	char outFN[1000];
 	sprintf(outFN,"%s.solutions.txt",imageFN);
@@ -528,11 +538,11 @@ if (argc!=6){
 		"CoarseNMatches*sqrt(Intensity)\t""misOrientationPostRefinement[degrees]\torientationRowNr\n");
 	// Make an array with the orientations to process
 	double *FinOrientArr;
-	FinOrientArr = calloc(nrResults*9,sizeof(*FinOrientArr));
+	FinOrientArr = (double *) calloc(nrResults*9,sizeof(*FinOrientArr));
 	int iterNr = 0;
 	int *dArr, *bsArr;
-	dArr = calloc(nrResults,sizeof(*dArr));
-	bsArr = calloc(nrResults,sizeof(*bsArr));
+	dArr = (int *) calloc(nrResults,sizeof(*dArr));
+	bsArr = (int *) calloc(nrResults,sizeof(*bsArr));
 	for (global_iterator=0;global_iterator<nrOrients;global_iterator++){
 		if (matchedArr[global_iterator]==0) continue;
 		if (doneArr[global_iterator] != 0) continue;
@@ -584,7 +594,7 @@ if (argc!=6){
 		int saveExtraInfo = 0;
 		int doCrystalFit = 0;
 		double *outArrThisFit;
-		outArrThisFit = calloc(3*maxNrSpots,sizeof(*outArrThisFit));
+		outArrThisFit = (double *) calloc(3*maxNrSpots,sizeof(*outArrThisFit));
 		double latCFit[6],recipFit[3][3],mv=0;
 		FitOrientation(image,eulerBest,hkls,nhkls,nrPxX,nrPxY,recip,outArrThisFit,maxNrSpots,
 			rotTranspose,pArr,pxX,pxY,Elo,Ehi,tol,LatticeParameter,eulerFit,latCFit,&mv, doCrystalFit);
@@ -636,5 +646,37 @@ if (argc!=6){
 	double time = omp_get_wtime() - start_time - time2;
 	printf("Finished, time elapsed in fitting: %lf seconds.\n"
 		"Initial solutions: %d Unique Orientations: %d\n",time,nrResults,totalSols);
+
+	// What we need: parameterFile, fwdSimulation, orientations, #CPU-cores, 
+	int nrPixels = 2048;
+	// MaxNrSpots = 30;
+	// size_t minSps = 7;
+	// double minInt = 100;
+	// FILE *fwdFN = fopen("orientation_files/225_Ni/compact_Ni_FwdSim.bin","rb");
+	// FILE *imFN = fopen("results_Ni_cleaned/test_4.h5.bin","rb");
+	int MaxNrSpots = 180;
+	size_t minSps = 35;
+	double minInt = 300;
+	FILE *fwdFN = fopen("orientation_files/4_Eu2AlO4/Eu2AlO4_FwdSim.bin","rb");
+	FILE *imFN = fopen("results_EuAl2O4_Modified_AllowedToMove/test_6_cleaned.h5.bin","rb");
+	FILE *orientF = fopen("orientation_files/100MilOrients.bin","rb");
+	fseek(orientF,0L,SEEK_END);
+	size_t szFile = ftell(orientF);
+	rewind(orientF);
+	size_t nrOrients = (size_t)((double)szFile / (double)(9*sizeof(double)));
+	double *orients;
+	orients = (double *) malloc(szFile);
+	fread(orients,1,szFile,orientF);
+	fclose(orientF);
+	// All we need are fwdsim.bin, image.bin and we create an array with results.
+	
+	size_t sz = ftell(fwdFN);
+	rewind(fwdFN);
+	fclose(fwdFN);
+	if (imFN == NULL) return 1;
+	double *image;
+	image = (double *) malloc(nrPixels*nrPixels*sizeof(*image));
+	readBytes = fread(image,nrPixels*nrPixels*sizeof(*image),1,imFN);
+	fclose(imFN);
 
 }
