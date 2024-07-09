@@ -10,7 +10,6 @@
 extern "C" {
 #include "LaueMatchingHeaders.h"
 }
-// #include "LaueMatchingHeaders.h"
 
 double tol_LatC[6];
 double tol_c_over_a;
@@ -18,13 +17,6 @@ double c_over_a_orig;
 int sg_num;
 double cellVol;
 double phiVol;
-
-extern double tol_LatC[6];
-extern double tol_c_over_a;
-extern double c_over_a_orig;
-extern int sg_num;
-extern double cellVol;
-extern double phiVol;
 
 inline double sin_cos_to_angle (double s, double c){return (s >= 0.0) ? acos(c) : 2.0 * M_PI - acos(c);}
 
@@ -1407,5 +1399,4 @@ if (argc!=6){
 	double time = omp_get_wtime() - start_time - time2;
 	printf("Finished, time elapsed in fitting: %lf seconds.\n"
 		"Initial solutions: %d Unique Orientations: %d\n",time,nrResults,totalSols);
-
 }
