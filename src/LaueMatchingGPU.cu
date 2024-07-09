@@ -5,6 +5,9 @@
 //
 
 #include "LaueMatchingHeaders.h"
+#define _XOPEN_SOURCE 500
+#include<unistd.h>
+#include<cuda.h>
 
 double tol_LatC[6];
 double tol_c_over_a;
