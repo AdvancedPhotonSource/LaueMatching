@@ -481,7 +481,7 @@ if (argc!=6){
 		uint16_t *device_outArr;
 		cudaMalloc(&device_outArr,szArr*sizeof(uint16_t));
 		double *device_image;
-		cudaMalloc(&device_image,nrPxX*nrPx/y*sizeof(double));
+		cudaMalloc(&device_image,nrPxX*nrPxY*sizeof(double));
 		double *device_matchedArr, *mArr;
 		cudaMalloc(&device_matchedArr,nrOrients*sizeof(double));
 		mArr = (double *) malloc(nrOrients*sizeof(double));
