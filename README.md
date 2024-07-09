@@ -25,9 +25,11 @@ C-libraries downloaded:
     - nlopt
 
 For GPU Version, provide CUDA executable as follows:
+
     make NCC=PATH_TO_NCC lauegpu
 
 For CPU Version:
+
     make lauecpu
 
 TODO:
