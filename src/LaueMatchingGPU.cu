@@ -4,10 +4,10 @@
 // Hemant Sharma, hsharma@anl.gov
 //
 
-#include "LaueMatchingHeaders.h"
 #define _XOPEN_SOURCE 500
 #include<unistd.h>
 #include<cuda.h>
+#include "LaueMatchingHeaders.h"
 
 double tol_LatC[6];
 double tol_c_over_a;
