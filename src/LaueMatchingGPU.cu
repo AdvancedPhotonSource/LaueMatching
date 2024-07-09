@@ -19,8 +19,6 @@ int sg_num;
 double cellVol;
 double phiVol;
 
-#include "LaueMatchingHeaders.h"
-
 extern double tol_LatC[6];
 extern double tol_c_over_a;
 extern double c_over_a_orig;
