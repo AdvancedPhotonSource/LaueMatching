@@ -13,10 +13,12 @@
 #include <sys/mman.h>
 #include <fcntl.h>
 #include <string.h>
-#if defined(__CUDA_ARCH__)
-
-#else
 #include <nlopt.h>
+
+#ifdef __cplusplus 
+
+extern "C" {
+
 #endif
 
 #ifdef __linux__ 
