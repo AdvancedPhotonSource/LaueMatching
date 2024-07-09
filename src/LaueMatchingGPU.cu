@@ -256,7 +256,7 @@ if (argc!=6){
 	rewind(orientF);
 	size_t nrOrients = (size_t)((double)szFile / (double)(9*sizeof(double)));
 	double *orients;
-	orients = malloc(szFile);
+	orients = (double *) malloc(szFile);
 	fread(orients,1,szFile,orientF);
 	fclose(orientF);
 	printf("%zu Orientations read, took %lf seconds, now reading hkls\n",nrOrients,omp_get_wtime()-st_tm);
@@ -271,7 +271,7 @@ if (argc!=6){
 		return 1;
 	}
 	int *hkls;
-	hkls = calloc(MaxNHKLS*3,sizeof(*hkls));
+	hkls = (int *) calloc(MaxNHKLS*3,sizeof(*hkls));
 	int nhkls = 0;
 	while (fgets(aline,1000,hklf)!=NULL){
 		sscanf(aline,"%d %d %d",&hkls[nhkls*3+0],&hkls[nhkls*3+1],&hkls[nhkls*3+2]);
@@ -290,7 +290,7 @@ if (argc!=6){
 		return 1;
 	}
 	double *image;
-	image = malloc(nrPxX*nrPxY*sizeof(*image));
+	image = (double *) malloc(nrPxX*nrPxY*sizeof(*image));
 	fread(image,nrPxX*nrPxY*sizeof(*image),1,imageFile);
 	int pxNr,nonZeroPx=0;
 	for (pxNr=0;pxNr<nrPxX*nrPxY;pxNr++){
@@ -303,7 +303,7 @@ if (argc!=6){
 
 	// Now we have orientations, hkls and all other parameters, let's do forward simulation.
 	double *matchedArr;
-	matchedArr = calloc(nrOrients,sizeof(*matchedArr));
+	matchedArr = (double *) calloc(nrOrients,sizeof(*matchedArr));
 	if (matchedArr == NULL){
 		printf("Could not allocate matchedArr, requested %zu bytes. Please check.\n",(size_t)(nrOrients));
 		return 1;
