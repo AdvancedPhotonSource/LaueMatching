@@ -6,7 +6,7 @@ To install, you would need to compile C-codes in src.
 
 Installation:
     
-    git clone https://https://github.com/AdvancedPhotonSource/LaueMatching
+    git clone https://github.com/AdvancedPhotonSource/LaueMatching
     cd LaueMatching
     pip install -r requirements.txt
 
