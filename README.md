@@ -8,7 +8,7 @@ Installation:
     
     git clone https://https://github.com/AdvancedPhotonSource/LaueMatching
     cd LaueMatching
-    python install -r requirements.txt
+    pip install -r requirements.txt
 
 Python packages needed:
 
