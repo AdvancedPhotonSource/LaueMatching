@@ -89,7 +89,6 @@ double CubSym[24][4] = {
    {0.00000,   0.00000,   0.70711,   0.70711},
    {0.00000,   0.00000,   0.70711,  -0.70711}};
 
-extern "C" {
 inline
 void QuaternionProduct(double q[4], double r[4], double Q[4])
 {
