@@ -13,7 +13,9 @@
 #include <sys/mman.h>
 #include <fcntl.h>
 #include <string.h>
-#ifndef __CUDA_ARCH__
+#if defined(__CUDA_ARCH__)
+
+#else
 #include <nlopt.h>
 #endif
 
@@ -72,10 +74,3 @@ struct dataFit{
 	double Ehi;
 };
 
-#if defined(__CUDA_ARCH__)
-#define _XOPEN_SOURCE 500
-#include<unistd.h>
-#include<cuda.h>
-__global__
-void compare(size_t nrPx, size_t nOr, size_t nrMaxSpots, double minInt, size_t minSps, uint16_t *oA, double *im, double *mA);
-#endif
