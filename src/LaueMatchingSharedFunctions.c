@@ -467,7 +467,7 @@ inline void calcRecipArray(double Lat[6], int SpaceGroup, double recip[3][3]){
 	recip[2][2] = zeroOut((a0*b1-a1*b0)*pv);
 }
 
-inline double calcOverlap(double *image, const double euler[3], int *hkls, int nhkls, int nrPxX, int nrPxY,
+inline double calcOverlap(double *image, double euler[3], int *hkls, int nhkls, int nrPxX, int nrPxY,
 	double recip[3][3], double *outArrThis, int maxNrSpots, double rotTranspose[3][3], double pArr[3], double pxX,
 	double pxY, double Elo, double Ehi){
 	double OM[3][3], OMt[3][3];
@@ -574,7 +574,9 @@ inline double problem_function(unsigned n, const double *x, double *grad, void* 
 	hkls = &(f_data->hkls[0]);
 	outArrThis = &(f_data->outArrThis[0]);
 	double overlap = 0;
-	overlap = calcOverlap(image, x, hkls, f_data->nhkls, f_data->nrPxX, f_data->nrPxY,
+    double Euler[3];
+    for (i=0;i<3;i++) Euler[i] = x[i];
+	overlap = calcOverlap(image, Euler, hkls, f_data->nhkls, f_data->nrPxX, f_data->nrPxY,
 		recip, outArrThis, f_data->maxNrSpots, rotTranspose, pArr, f_data->pxX, f_data->pxY, f_data->Elo,
 		f_data->Ehi);
 	return -overlap;
