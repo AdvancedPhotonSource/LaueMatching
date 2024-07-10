@@ -25,8 +25,8 @@ help:
 bindircheck:
 	mkdir -p $(BIN)
 
-lauecpu: predep help bindircheck $(SRC)LaueMatchingCPU.c $(SRC)LaueMatchingSharedFunctions.c
-	$(CC) $(SRC)LaueMatchingCPU.c $(SRC)LaueMatchingSharedFunctions.c -o $(BIN)LaueMatchingCPU $(CFLAGS) $(CFLAGSNLOPT)
+lauecpu: predep help bindircheck $(SRC)LaueMatchingCPU.c
+	$(CC) $(SRC)LaueMatchingCPU.c -o $(BIN)LaueMatchingCPU $(CFLAGS) $(CFLAGSNLOPT)
 
 lauegpu: predep help bindircheck $(SRC)LaueMatchingGPU.cu
 	$(NCC) $(SRC)LaueMatchingGPU.cu -o $(BIN)LaueMatchingGPU $(NCFLAGS) $(CFLAGSNLOPT)
