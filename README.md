@@ -32,6 +32,10 @@ For CPU Version:
 
     make lauecpu
 
+To make both:
+
+    make all
+
 TODO:
 
     - Example files to run indexing, one way is to 
