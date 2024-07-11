@@ -126,7 +126,7 @@ if os.path.exists(fwdf):
 	nrOrient = int(size_orient/(8*9))
 	size_fwd = os.path.getsize(fwdf)
 	nrOrientFwd = int(size_fwd/(2*(1+2*maxLaueSpots)))
-	if nrOrient != nrOrientFwd: 
+	if nrOrient != nrOrientFwd:
 		doFwd = 'DoFwd 1\n'
 		os.remove(fwdf)
 	else: 
@@ -145,7 +145,7 @@ if os.path.exists(resultdir):
 	shutil.rmtree(resultdir,ignore_errors=True)
 os.makedirs(resultdir,exist_ok=True)
 
-print("Laue image processing using dictionary")
+print("Running Laue Matching")
 
 file_path = os.path.dirname(os.path.realpath(__file__))
 env = dict(os.environ)
@@ -238,7 +238,7 @@ def runFile(imageFN):
 	# Image.fromarray(h_im2).save(imageFN+'.bin.inputBlurred.tif')
 
 	### RUN INDEXING
-	fout = open(imageFN+'.laue_dict_output.txt','w')
+	fout = open(imageFN+'.LaueMatching_stdout.txt','w')
 	if computeType in "CPU":
 		cmmd = f'{file_path}/bin/LaueMatchingCPU {configFile} {orientf} {hklf} {imageFN}.bin {nCPUs}'
 	else:
