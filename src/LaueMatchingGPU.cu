@@ -681,6 +681,7 @@ inline double FitOrientation(double *image, double euler[3], int *hkls, int nhkl
 		}
 	}
 	*minVal = -minf;
+	return 0;
 	// *minVal = sqrt(-minf);
 }
 
