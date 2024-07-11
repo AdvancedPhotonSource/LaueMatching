@@ -1287,7 +1287,6 @@ if (argc!=6){
 	int *dArr, *bsArr;
 	dArr = (int *) calloc(nrResults,sizeof(*dArr));
 	bsArr = (int *) calloc(nrResults,sizeof(*bsArr));
-	return;
 	for (global_iterator=0;global_iterator<nrOrients;global_iterator++){
 		if (matchedArr[global_iterator]==0) continue;
 		if (doneArr[global_iterator] != 0) continue;
