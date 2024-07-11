@@ -1027,7 +1027,7 @@ if (argc!=6){
 		printf("%zu Orientations read, took %lf seconds, now reading hkls\n",nrOrients,omp_get_wtime()-st_tm);
 		fflush(stdout);
 	}
-	
+	return;
 	// Read precomputed hkls from python
 	char *hklfn = argv[3];
 	FILE *hklf;
