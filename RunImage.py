@@ -178,10 +178,10 @@ def runFile(imageFN):
 	
 	h_im_corr = h_im.astype(np.double) - background
 	threshT = 60 * (1+np.std(h_im_corr)//60)
-	if thresh < threshT:
-		thresh = threshT # Use larger value
-	print(f'Computed/input threshold: {thresh}')
-	h_im_corr[h_im_corr < thresh] = 0
+	if thresh > threshT:
+		threshT = thresh # Use larger value
+	print(f'Computed/input threshold: {threshT}')
+	h_im_corr[h_im_corr < threshT] = 0
 	h_im = h_im_corr.astype(np.uint16)
 
 	imageFN = resultdir + '/'+ imageFN
@@ -288,7 +288,7 @@ def runFile(imageFN):
 	orientationNr = 0
 	for orientation in orientationInfo:
 		spotThis = spotInfo[spotInfo[:,0]==orientation[0],:]
-		goodSpots = spotThis[spotThis[:,-1]>=thresh/2,:] # This will ensure that we had intensity greater than the original threshold/2 to account for blurring
+		goodSpots = spotThis[spotThis[:,-1]>=threshT/2,:] # This will ensure that we had intensity greater than the original threshold/2 to account for blurring
 		if goodSpots.shape[0] >= minGoodSpots:
 			# Find which labels were already found, remove those spots from list
 			badRows = []
