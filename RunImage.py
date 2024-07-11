@@ -63,7 +63,7 @@ for line in lines:
 	if line.startswith('SpaceGroup'):
 		sgNum = int(line.split()[1])
 	elif line.startswith('Symmetry'):
-		sym = int(line.split()[1])
+		sym = line.split()[1]
 		if sym not in 'FICAR' and len(sym) != 1:
 			print('Invalid value for sym, must be one character from F,I,C,A,R')
 			sys.exit()
@@ -89,7 +89,7 @@ for line in lines:
 		nrPixels = int(line.split()[1])
 		nPxX = nrPixels
 	elif line.startswith('NrPxY'):
-		nPxY = nrPixels
+		nPxY = int(line.split()[1])
 	elif line.startswith('FilterRadius'):
 		filtRad = int(line.split()[1])
 	elif line.startswith('NMeadianPasses'):
