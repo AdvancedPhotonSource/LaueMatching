@@ -162,6 +162,7 @@ def calcL2(l1,l2):
 	return math.sqrt((l1[0]-l2[0])**2+(l1[1]-l2[1])**2)
 
 def runFile(imageFN):
+	global thresh
 	h_image = h5py.File(imageFN,'r')
 	h_im = np.array(h_image['/entry1/data/data'][()])
 	h_im_raw = np.copy(h_im)
