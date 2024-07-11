@@ -1231,7 +1231,7 @@ if (argc!=6){
 		cudaMemset(device_matchedArr,0,nrOrients*sizeof(double));
 		cudaDeviceSynchronize();
 		// printf("%zu\n",(size_t) (nrOrients+4095)/4096);
-		compare<<<(nrOrients+511)/512, 512>>>(nrPxX,nrOrients,maxNrSpots,minIntensity,minNrSpots,device_outArr,device_image,device_matchedArr);
+		compare<<<(nrOrients+1023)/1024, 1024>>>(nrPxX,nrOrients,maxNrSpots,minIntensity,minNrSpots,device_outArr,device_image,device_matchedArr);
 		cudaDeviceSynchronize();
 		cudaMemcpy(mArr,device_matchedArr,nrOrients*sizeof(double),cudaMemcpyDeviceToHost);
 		cudaDeviceSynchronize();
