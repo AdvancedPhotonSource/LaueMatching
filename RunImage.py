@@ -58,6 +58,7 @@ filtRad = 101
 minArea = 10
 backgroundFN = 'median.bin'
 sym = 'F'
+thresh = 0
 for line in lines:
 	if line.startswith('SpaceGroup'):
 		sgNum = int(line.split()[1])
@@ -110,6 +111,7 @@ for line in lines:
 	elif line.startswith('ForwardFile'):
 		fwdf = line.split()[1]
 
+print(thresh)
 outdpi = 600
 scalarX = nrPixels/outdpi
 scalarY = nrPixels/outdpi
