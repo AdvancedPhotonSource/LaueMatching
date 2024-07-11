@@ -24,6 +24,8 @@ C-libraries downloaded:
 
     - nlopt
 
+**NOTE:** It will download a ~7GB file once when installing. This file consists of a list of 100 million orientation matrices. These were used in the paper.
+
 For GPU Version, provide CUDA executable as follows:
 
     make NCC=PATH_TO_NVCC lauegpu
@@ -36,7 +38,11 @@ To make both:
 
     make all
 
-TODO:
+**simulation** folder consists of files needed to generate a simulation and run indexing.
 
-    - Example files to run indexing, one way is to 
-      give a list of images and a config file. 
+## Best Practices:
+
+> LaueMatching runs only on Linux computers for now.
+> The CPU code can be compiled to run on MAC, but need to `brew install gcc` to get `OpenMP` and possibly other dependencies.
+> Windows support is not planned.
+> Look inside **simulation** folder for instructions to run the example.
