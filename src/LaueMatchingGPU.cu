@@ -1212,7 +1212,7 @@ if (argc!=6){
 			fflush(stdout);
 			return 1;
 		}
-		fseek(fwdFN,0L,SEEK_END);
+		// fseek(fwdFN,0L,SEEK_END);
 		size_t readBytes = fread(outArr,szArr*sizeof(uint16_t),1,fwdFN);
 		printf("%s %zu\n",outfn,readBytes);
 		// CUDA BLOCK
