@@ -1221,9 +1221,10 @@ int main(int argc, char *argv[])
             if (result <= 0){
                 printf("Could not open output file.\n");
             }
+			ssize_t rc;
 			#pragma omp critical
 			{
-            ssize_t rc = pwrite(result,outArrThis,szArr*sizeof(*outArrThis),OffsetHereOut);
+            rc = pwrite(result,outArrThis,szArr*sizeof(*outArrThis),OffsetHereOut);
 			printf("Output written %zu,%zu\n",(size_t)rc,(size_t) szArr*sizeof(*outArrThis) );
 				writtenSize += (size_t) rc;
 				toWriteSize += (size_t) szArr*sizeof(*outArrThis);
