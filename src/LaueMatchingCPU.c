@@ -1215,6 +1215,7 @@ int main(int argc, char *argv[])
 					nrResults++;
 				}
 				matchedArr[orientNr] = totInt * sqrt((double)nSpots);
+				printf("%d %lf\n",orientNr,matchedArr[orientNr]);
 			}
 		}
 		if (doFwd == 1){
