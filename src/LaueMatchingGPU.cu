@@ -1008,13 +1008,10 @@ if (argc!=6){
 	rewind(orientF);
 	size_t nrOrients = (size_t)((double)szFile / (double)(9*sizeof(double)));
 	double *orients;
-	orients = (double *) malloc(szFile);
 	// If the file is located at /dev/shm, we can just mmap it:
 	str = "/dev/shm";
 	LowNr = strncmp(orientFN,str,strlen(str));
 	if (LowNr == 0){
-		printf("Reading %zu Orientations to map into memory");
-		fflush(stdout);
 		fclose(orientF);
 		int fd;
 		fd = open(orientFN,O_RDONLY);
@@ -1022,12 +1019,12 @@ if (argc!=6){
 		printf("%zu Orientations mapped into memory, took %lf seconds, now reading hkls\n",nrOrients,omp_get_wtime()-st_tm);
 		fflush(stdout);
 	} else{
+		orients = (double *) malloc(szFile);
 		fread(orients,1,szFile,orientF);
 		fclose(orientF);
 		printf("%zu Orientations read, took %lf seconds, now reading hkls\n",nrOrients,omp_get_wtime()-st_tm);
 		fflush(stdout);
 	}
-	return;
 	// Read precomputed hkls from python
 	char *hklfn = argv[3];
 	FILE *hklf;
@@ -1220,15 +1217,25 @@ if (argc!=6){
 		clock_t start = clock();
 		size_t szArr = nrOrients *(1+2*maxNrSpots);
 		uint16_t *outArr;
-		outArr = (uint16_t *) calloc(szArr,sizeof(uint16_t));
-		FILE *fwdFN;
-		fwdFN = fopen(outfn,"rb");
-		if(outArr==NULL){
-			printf("Could not allocate.\n");
-			fflush(stdout);
-			return 1;
+		// If the file is located at /dev/shm, we can just mmap it:
+		str = "/dev/shm";
+		LowNr = strncmp(outfn,str,strlen(str));
+		if (LowNr == 0){
+			int fd;
+			fd = open(outfn,O_RDONLY);
+			outArr = (uint16_t *) mmap(0,szArr*sizeof(uint16_t),PROT_READ,MAP_SHARED,fd,0);
+		} else{
+			FILE *fwdFN;
+			fwdFN = fopen(outfn,"rb");
+			if(outArr==NULL){
+				printf("Could not allocate.\n");
+				fflush(stdout);
+				return 1;
+			}
+			outArr = (uint16_t *) calloc(szArr,sizeof(uint16_t));
+			size_t readBytes = fread(outArr,szArr*sizeof(uint16_t),1,fwdFN);
+			fclose(fwdFN);
 		}
-		size_t readBytes = fread(outArr,szArr*sizeof(uint16_t),1,fwdFN);
 		clock_t end = clock();
 		printf("Time elapsed to read the forward simulation: %lf\n",(double)(end-start)/CLOCKS_PER_SEC);
 		// CUDA BLOCK
