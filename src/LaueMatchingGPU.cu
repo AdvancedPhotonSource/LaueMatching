@@ -1009,10 +1009,22 @@ if (argc!=6){
 	size_t nrOrients = (size_t)((double)szFile / (double)(9*sizeof(double)));
 	double *orients;
 	orients = (double *) malloc(szFile);
-	fread(orients,1,szFile,orientF);
-	fclose(orientF);
-	printf("%zu Orientations read, took %lf seconds, now reading hkls\n",nrOrients,omp_get_wtime()-st_tm);
-	fflush(stdout);
+	// If the file is located at /dev/shm, we can just mmap it:
+	str = "/dev/shm";
+	LowNr = strncmp(orientFN,str,strlen(str));
+	if (LowNr == 0){
+		fclose(orientF);
+		int fd;
+		fd = open(orientFN,O_RDONLY);
+		orients = mmap(0,szFile,PROT_READ,MAP_SHARED,fd,0);
+		printf("%zu Orientations mapped into memory, took %lf seconds, now reading hkls\n",nrOrients,omp_get_wtime()-st_tm);
+		fflush(stdout);
+	} else{
+		fread(orients,1,szFile,orientF);
+		fclose(orientF);
+		printf("%zu Orientations read, took %lf seconds, now reading hkls\n",nrOrients,omp_get_wtime()-st_tm);
+		fflush(stdout);
+	}
 	
 	// Read precomputed hkls from python
 	char *hklfn = argv[3];
