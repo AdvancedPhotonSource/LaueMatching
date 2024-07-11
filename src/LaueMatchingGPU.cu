@@ -1235,12 +1235,11 @@ if (argc!=6){
 		cudaMemcpy(mArr,device_matchedArr,nrOrients*sizeof(double),cudaMemcpyDeviceToHost);
 		cudaDeviceSynchronize();
 		clock_t end = clock();
-		printf("Time elapsed: %lf\n",(double)(end-start)/CLOCKS_PER_SEC);
+		printf("Time elapsed to match on the GPU: %lf\n",(double)(end-start)/CLOCKS_PER_SEC);
 		size_t nrMatches=0;
 		for (int i=0;i<nrOrients;i++){
 			if (mArr[i]>0){
 				matchedArr[nrMatches] = mArr[i];
-				printf("%d %lf\n",i,matchedArr[nrMatches]);
 				nrMatches++;
 			}
 		}
@@ -1306,6 +1305,7 @@ if (argc!=6){
 			}
 			OrientMat2Quat(orient2,quat2);
 			misoAngle = GetMisOrientation(quat1,quat2,sg_num);
+			printf("%lf %d %d\n",misoAngle,global_iterator,l);
 			if (misoAngle <= maxAngle) {
 				doneArr[l] = 1;
 				doneArr[global_iterator] ++;
