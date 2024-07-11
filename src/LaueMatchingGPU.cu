@@ -1083,35 +1083,24 @@ if (argc!=6){
 		{
 			int procNr = omp_get_thread_num();
 			int nrOrientsThread = (int)ceil((double)nrOrients/(double)numProcs);
-			int startOrientNr = procNr * nrOrientsThread;
-			int endOrientNr = startOrientNr + nrOrientsThread;
-			if (endOrientNr > nrOrients) endOrientNr = nrOrients;
-			nrOrientsThread = endOrientNr - startOrientNr;
 			uint16_t *outArrThis;
 			size_t szArr = nrOrientsThread*(1+2*maxNrSpots);
-			outArrThis = (uint16_t *) calloc(szArr,sizeof(*outArrThis));
-			if (outArrThis == NULL){
-				printf("Could not allocate outArr per thread, needed %lldMB of RAM. Behavior unexpected now.\n"
-					,(long long int)nrOrientsThread*(10+5*maxNrSpots)*sizeof(double)/(1024*1024));
-			}
 			size_t OffsetHere;
 			OffsetHere = procNr;
 			OffsetHere *= szArr;
 			OffsetHere *= sizeof(*outArrThis);
-			if (doFwd == 0){
-				int result = open(outfn, O_RDONLY|O_SYNC, S_IRUSR|S_IWUSR);
-				ssize_t readBytes = pread(result,outArrThis,szArr*sizeof(*outArrThis),OffsetHere);
-				if (readBytes != szArr*sizeof(*outArrThis)){
-					// printf("Did not finish reading, going again.\n");
-					OffsetHere+=readBytes;
-					size_t offset_arr = readBytes / sizeof(*outArrThis);
-					size_t bytesRemaining = szArr*sizeof(*outArrThis) - readBytes;
-					readBytes = pread(result,outArrThis+offset_arr,bytesRemaining,OffsetHere);
-					if (readBytes!=bytesRemaining) printf("Second try didn't work either."
-											"Too big array. Update code. Read %zu bytes, but wanted to read %zu bytes.\n",
-											readBytes,bytesRemaining);
-				}
-				close(result);
+			outArrThis = calloc(szArr,sizeof(*outArrThis));
+			size_t OffsetHereOut;
+			OffsetHereOut = procNr;
+			OffsetHereOut *= szArr;
+			OffsetHereOut *= sizeof(*outArrThis);
+			int startOrientNr = procNr * nrOrientsThread;
+			int endOrientNr = startOrientNr + nrOrientsThread;
+			if (endOrientNr > nrOrients) endOrientNr = nrOrients;
+			nrOrientsThread = endOrientNr - startOrientNr;
+			if (outArrThis == NULL){
+				printf("Could not allocate outArr per thread, needed %lldMB of RAM. Behavior unexpected now.\n"
+					,(long long int)nrOrientsThread*(10+5*maxNrSpots)*sizeof(double)/(1024*1024));
 			}
 			int orientNr;
 			double *qhatarr;
@@ -1195,10 +1184,6 @@ if (argc!=6){
 					matchedArr[orientNr] = totInt * sqrt((double)nSpots);
 				}
 			}
-			size_t OffsetHereOut;
-			OffsetHereOut = procNr;
-			OffsetHereOut *= szArr;
-			OffsetHereOut *= sizeof(*outArrThis);
 			int result = open(outfn, O_CREAT|O_WRONLY|O_SYNC, S_IRUSR|S_IWUSR);
 			if (result <= 0){
 				printf("Could not open output file.\n");
