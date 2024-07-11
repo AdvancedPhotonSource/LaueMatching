@@ -1079,26 +1079,30 @@ int main(int argc, char *argv[])
 		} else printf("%s file was found. Will not do forward simulation.\n");
 		close(result);
 	} else printf("Forward simulation was requested, will be saved to %s.\n",outfn);
-	size_t writtenSize = 0, toWriteSize = 0,totOrientsThreads = 0;
+
 	#pragma omp parallel num_threads(numProcs)
 	{
 		int procNr = omp_get_thread_num();
 		int nrOrientsThread = (int)ceil((double)nrOrients/(double)numProcs);
+		size_t szArr = nrOrientsThread*(1+2*maxNrSpots);
+		size_t OffsetHere;
+		OffsetHere = procNr;
+		OffsetHere *= szArr;
+		OffsetHere *= sizeof(*outArrThis);
+		outArrThis = calloc(szArr,sizeof(*outArrThis));
+		size_t OffsetHereOut;
+		OffsetHereOut = procNr;
+		OffsetHereOut *= szArr;
+		OffsetHereOut *= sizeof(*outArrThis);
 		int startOrientNr = procNr * nrOrientsThread;
 		int endOrientNr = startOrientNr + nrOrientsThread;
 		if (endOrientNr > nrOrients) endOrientNr = nrOrients;
 		nrOrientsThread = endOrientNr - startOrientNr;
 		uint16_t *outArrThis;
-		size_t szArr = nrOrientsThread*(1+2*maxNrSpots);
-		outArrThis = calloc(szArr,sizeof(*outArrThis));
 		if (outArrThis == NULL){
 			printf("Could not allocate outArr per thread, needed %lldMB of RAM. Behavior unexpected now.\n"
 				,(long long int)nrOrientsThread*(10+5*maxNrSpots)*sizeof(double)/(1024*1024));
 		}
-		size_t OffsetHere;
-		OffsetHere = procNr;
-		OffsetHere *= szArr;
-		OffsetHere *= sizeof(*outArrThis);
 		if (doFwd == 0){
 			int result = open(outfn, O_RDONLY|O_SYNC, S_IRUSR|S_IWUSR);
 			ssize_t readBytes = pread(result,outArrThis,szArr*sizeof(*outArrThis),OffsetHere);
@@ -1213,23 +1217,12 @@ int main(int argc, char *argv[])
 			}
 		}
 		if (doFwd == 1){
-            size_t OffsetHereOut;
-            OffsetHereOut = procNr;
-            OffsetHereOut *= szArr;
-            OffsetHereOut *= sizeof(*outArrThis);
             int result = open(outfn, O_CREAT|O_WRONLY|O_SYNC, S_IRUSR|S_IWUSR);
             if (result <= 0){
                 printf("Could not open output file.\n");
             }
 			ssize_t rc;
-			#pragma omp critical
-			{
             rc = pwrite(result,outArrThis,szArr*sizeof(*outArrThis),OffsetHereOut);
-			printf("Output written %d %d %zu,%zu,%zu %zu\n",procNr, nrOrientsThread,(size_t)rc,(size_t) szArr*sizeof(*outArrThis),(size_t)OffsetHereOut,(size_t)(OffsetHereOut+ szArr*sizeof(*outArrThis)));
-				writtenSize += (size_t) rc;
-				toWriteSize += (size_t) szArr*sizeof(*outArrThis);
-				totOrientsThreads += nrOrientsThread;
-			}
             if (rc < 0) printf("Could not write to output file\n");
             else if (rc != szArr*sizeof(*outArrThis)){
                 OffsetHereOut+=rc;
@@ -1245,7 +1238,6 @@ int main(int argc, char *argv[])
 	double time2 = omp_get_wtime() - start_time;
 	printf("Finished comparing, time elapsed after comparing with forward simulation: %lf seconds.\n"
 		"Searching for unique solutions.\n",time2);
-	printf("%zu %zu\n",writtenSize,toWriteSize);
 	fflush(stdout);
 	
 	// Figure out the unique orientations (within maxAngle) and do optimization for those.
