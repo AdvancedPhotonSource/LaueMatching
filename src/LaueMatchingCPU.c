@@ -1084,6 +1084,7 @@ int main(int argc, char *argv[])
 	{
 		int procNr = omp_get_thread_num();
 		int nrOrientsThread = (int)ceil((double)nrOrients/(double)numProcs);
+		uint16_t *outArrThis;
 		size_t szArr = nrOrientsThread*(1+2*maxNrSpots);
 		size_t OffsetHere;
 		OffsetHere = procNr;
@@ -1098,7 +1099,6 @@ int main(int argc, char *argv[])
 		int endOrientNr = startOrientNr + nrOrientsThread;
 		if (endOrientNr > nrOrients) endOrientNr = nrOrients;
 		nrOrientsThread = endOrientNr - startOrientNr;
-		uint16_t *outArrThis;
 		if (outArrThis == NULL){
 			printf("Could not allocate outArr per thread, needed %lldMB of RAM. Behavior unexpected now.\n"
 				,(long long int)nrOrientsThread*(10+5*maxNrSpots)*sizeof(double)/(1024*1024));
