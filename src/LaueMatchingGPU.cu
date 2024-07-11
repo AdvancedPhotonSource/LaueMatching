@@ -1226,7 +1226,7 @@ if (argc!=6){
 		clock_t start = clock();
 		cudaMemcpy(device_image,image,nrPxX*nrPxY*sizeof(double),cudaMemcpyHostToDevice);
 		cudaMemset(device_matchedArr,0,nrOrients*sizeof(double));
-		compare<<<(nrOrients+1023)/1024, 1024>>>(nrPxX,nrOrients,maxNrSpots,minIntensity,minNrSpots,device_outArr,device_image,device_matchedArr);
+		compare<<<1024, (nrOrients+1023)/1024>>>(nrPxX,nrOrients,maxNrSpots,minIntensity,minNrSpots,device_outArr,device_image,device_matchedArr);
 		cudaDeviceSynchronize();
 		cudaMemcpy(mArr,device_matchedArr,nrOrients*sizeof(double),cudaMemcpyDeviceToHost);
 		clock_t end = clock();
