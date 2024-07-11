@@ -1124,7 +1124,7 @@ int main(int argc, char *argv[])
 				int fd = open(outfn,O_RDONLY);
 				outArrThis = (uint16_t *) mmap(0,szArr*sizeof(*outArrThis),PROT_READ,MAP_SHARED,fd,OffsetHere);
 				if (outArrThis == MAP_FAILED) {
-					printf("Could not mmap.\n");
+					printf("Could not mmap. %d\n", procNr);
 				}
 			} else {
 				int result = open(outfn, O_RDONLY|O_SYNC, S_IRUSR|S_IWUSR);
