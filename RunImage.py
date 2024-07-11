@@ -127,6 +127,7 @@ if os.path.exists(fwdf):
 	nrOrient = int(size_orient/(8*9))
 	size_fwd = os.path.getsize(fwdf)
 	nrOrientFwd = int(size_fwd/(2*(1+2*maxLaueSpots)))
+	print(nrOrient,nrOrientFwd,size_orient,size_fwd)
 	if nrOrient != nrOrientFwd: doFwd = 'DoFwd 1\n'
 	else: doFwd = 'DoFwd 0\n'
 else:
