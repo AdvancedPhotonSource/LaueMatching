@@ -1212,9 +1212,7 @@ if (argc!=6){
 			fflush(stdout);
 			return 1;
 		}
-		// fseek(fwdFN,0L,SEEK_END);
 		size_t readBytes = fread(outArr,szArr*sizeof(uint16_t),1,fwdFN);
-		printf("%s %zu\n",outfn,readBytes);
 		// CUDA BLOCK
 		uint16_t *device_outArr;
 		cudaMalloc(&device_outArr,szArr*sizeof(uint16_t));
@@ -1288,6 +1286,7 @@ if (argc!=6){
 	int *dArr, *bsArr;
 	dArr = (int *) calloc(nrResults,sizeof(*dArr));
 	bsArr = (int *) calloc(nrResults,sizeof(*bsArr));
+	return;
 	for (global_iterator=0;global_iterator<nrOrients;global_iterator++){
 		if (matchedArr[global_iterator]==0) continue;
 		if (doneArr[global_iterator] != 0) continue;
