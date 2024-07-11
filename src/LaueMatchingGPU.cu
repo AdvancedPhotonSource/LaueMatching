@@ -1223,9 +1223,12 @@ if (argc!=6){
 		cudaMalloc(&device_matchedArr,nrOrients*sizeof(double));
 		mArr = (double *) malloc(nrOrients*sizeof(double));
 		cudaMemcpy(device_outArr,outArr,szArr*sizeof(uint16_t),cudaMemcpyHostToDevice);
+		cudaDeviceSynchronize();
 		clock_t start = clock();
 		cudaMemcpy(device_image,image,nrPxX*nrPxY*sizeof(double),cudaMemcpyHostToDevice);
+		cudaDeviceSynchronize();
 		cudaMemset(device_matchedArr,0,nrOrients*sizeof(double));
+		cudaDeviceSynchronize();
 		compare<<<(nrOrients+1023)/1024, 1024>>>(nrPxX,nrOrients,maxNrSpots,minIntensity,minNrSpots,device_outArr,device_image,device_matchedArr);
 		cudaDeviceSynchronize();
 		cudaMemcpy(mArr,device_matchedArr,nrOrients*sizeof(double),cudaMemcpyDeviceToHost);
