@@ -30,4 +30,4 @@ Here `NCPUS` should be the number of CPU cores you want to use and `COMPUTE` can
 
 This will generate results in `results_simulation` folder. This parameter is set in the `params_sim.txt` file as `ResultDir`.
 
-> If you want to reduce initialization times (a few seconds per image to a few microseconds), your `OrientationFile` and `ForwardFile` should be in `/dev/shm`. You can either just provide the path to these files and `LaueMatching` will generate these, or copy already generated files to `/dev/shm`. ***Note*** This will not work on MAC. Any files of `/dev/shm` can be directly memory mapped instead of being read, and this process is millions of times faster.
+> If you want to reduce initialization times (from a few seconds per image to a few microseconds), your `OrientationFile` and `ForwardFile` should be in `/dev/shm`. You can either just provide the path to these files and `LaueMatching` will generate these, or copy already generated files to `/dev/shm`. ***Note:*** This will not work on MAC. Any files of `/dev/shm` can be directly memory mapped instead of being read, and this process is millions of times faster.

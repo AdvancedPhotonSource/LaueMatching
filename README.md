@@ -44,7 +44,7 @@ To make both:
 
 > LaueMatching runs only on Linux computers for now.
 
-> If you want to reduce initialization times (a few seconds per image to a few microseconds), your `OrientationFile` and `ForwardFile` should be in `/dev/shm`. You can either just provide the path to these files and `LaueMatching` will generate these, or copy already generated files to `/dev/shm`. ***Note*** This will not work on MAC. Any files of `/dev/shm` can be directly memory mapped instead of being read, and this process is millions of times faster.
+> If you want to reduce initialization times (from a few seconds per image to a few microseconds), your `OrientationFile` and `ForwardFile` should be in `/dev/shm`. You can either just provide the path to these files and `LaueMatching` will generate these, or copy already generated files to `/dev/shm`. ***Note:*** This will not work on MAC. Any files of `/dev/shm` can be directly memory mapped instead of being read, and this process is millions of times faster.
 
 > The CPU code can be compiled to run on MAC, but need to `brew install gcc` to get `OpenMP` and possibly other dependencies.
 
