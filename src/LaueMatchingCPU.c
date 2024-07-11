@@ -1122,7 +1122,7 @@ int main(int argc, char *argv[])
 			LowNr = strncmp(outfn,str,strlen(str));
 			if (LowNr == 0){
 				int fd = open(outfn,O_RDONLY);
-				outArrThis = (uitn16_t *) mmap(0,szArr*sizeof(*outArrThis),PROT_READ,MAP_SHARED,OffsetHere);
+				outArrThis = (uint16_t *) mmap(0,szArr*sizeof(*outArrThis),PROT_READ,MAP_SHARED,OffsetHere);
 			} else {
 				int result = open(outfn, O_RDONLY|O_SYNC, S_IRUSR|S_IWUSR);
 				ssize_t readBytes = pread(result,outArrThis,szArr*sizeof(*outArrThis),OffsetHere);
