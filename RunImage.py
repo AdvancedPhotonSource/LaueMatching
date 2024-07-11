@@ -111,7 +111,6 @@ for line in lines:
 	elif line.startswith('ForwardFile'):
 		fwdf = line.split()[1]
 
-print(thresh)
 outdpi = 600
 scalarX = nrPixels/outdpi
 scalarY = nrPixels/outdpi
