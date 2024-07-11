@@ -1265,7 +1265,7 @@ int main(int argc, char *argv[])
             }
             close(result);
 		}
-		free(outArrThis);
+		if (LowNr!=0) free(outArrThis);
 	}
 	double time2 = omp_get_wtime() - start_time;
 	printf("Finished comparing, time elapsed after comparing with forward simulation: %lf seconds.\n"
