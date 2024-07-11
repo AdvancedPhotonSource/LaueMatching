@@ -33,7 +33,7 @@ OrientationFile /dev/shm/100MilOrients.bin
 
 #Simulation Definitions
 MaxNrLaueSpots 30
-ForwardFile /dev/shm/Ni_FwdSim.bin
+ForwardFile /dev/shm/Simulated_FwdSim.bin
 OrientationSpacing 0.4
 DoFwd 0
 SimulationSmoothingWidth 2
