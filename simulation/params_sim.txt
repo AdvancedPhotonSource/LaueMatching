@@ -19,12 +19,12 @@ Ehi 30
 # What qualifies a grain?
 MinNrSpots 7
 MinGoodSpots 5
-MinIntensity 100
+MinIntensity 50
 MaxAngle 5
 
 # What qualifies a spot and image processing parameters
 MinArea 5
-Threshold 120
+Threshold 0
 
 # Where to save results, which files to read etc.
 ResultDir results_simulation
