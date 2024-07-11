@@ -1232,7 +1232,9 @@ if (argc!=6){
 		cudaDeviceSynchronize();
 		cudaMemset(device_matchedArr,0,nrOrients*sizeof(double));
 		cudaDeviceSynchronize();
-		// printf("%zu\n",(size_t) (nrOrients+4095)/4096);
+		end = clock();
+		printf("Time elapsed to prepare the GPU: %lf\n",(double)(end-start)/CLOCKS_PER_SEC);
+		start = clock();
 		compare<<<(nrOrients+1023)/1024, 1024>>>(nrPxX,nrOrients,maxNrSpots,minIntensity,minNrSpots,device_outArr,device_image,device_matchedArr);
 		cudaDeviceSynchronize();
 		cudaMemcpy(mArr,device_matchedArr,nrOrients*sizeof(double),cudaMemcpyDeviceToHost);
