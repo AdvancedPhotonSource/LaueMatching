@@ -1240,6 +1240,7 @@ if (argc!=6){
 		for (int i=0;i<nrOrients;i++){
 			if (mArr[i]>0){
 				matchedArr[nrMatches] = mArr[i];
+				printf("%d %lf\n",i,matchedArr[nrMatches]);
 				nrMatches++;
 			}
 		}
