@@ -1013,6 +1013,8 @@ if (argc!=6){
 	str = "/dev/shm";
 	LowNr = strncmp(orientFN,str,strlen(str));
 	if (LowNr == 0){
+		printf("Reading %zu Orientations to map into memory");
+		fflush(stdout);
 		fclose(orientF);
 		int fd;
 		fd = open(orientFN,O_RDONLY);
