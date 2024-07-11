@@ -1225,7 +1225,7 @@ int main(int argc, char *argv[])
 			#pragma omp critical
 			{
             rc = pwrite(result,outArrThis,szArr*sizeof(*outArrThis),OffsetHereOut);
-			printf("Output written %zu,%zu\n",(size_t)rc,(size_t) szArr*sizeof(*outArrThis) );
+			printf("Output written %zu,%zu,%zu %zu\n",(size_t)rc,(size_t) szArr*sizeof(*outArrThis),(size_t)OffsetHereOut,(size_t)(OffsetHereOut+ szArr*sizeof(*outArrThis)));
 				writtenSize += (size_t) rc;
 				toWriteSize += (size_t) szArr*sizeof(*outArrThis);
 			}
