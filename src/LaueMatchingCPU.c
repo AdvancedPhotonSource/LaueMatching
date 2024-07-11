@@ -1079,7 +1079,7 @@ int main(int argc, char *argv[])
 		} else printf("%s file was found. Will not do forward simulation.\n");
 		close(result);
 	} else printf("Forward simulation was requested, will be saved to %s.\n",outfn);
-	
+	size_t writtenSize = 0, toWriteSize = 0;
 	#pragma omp parallel num_threads(numProcs)
 	{
 		int procNr = omp_get_thread_num();
@@ -1222,7 +1222,12 @@ int main(int argc, char *argv[])
                 printf("Could not open output file.\n");
             }
             ssize_t rc = pwrite(result,outArrThis,szArr*sizeof(*outArrThis),OffsetHereOut);
-			printf("%zu,%zu\n",(size_t)rc,(size_t)szArr*outArrThis);
+			printf("Output written %zu,%zu\n",(size_t)rc,(size_t)szArr*outArrThis);
+			#pragma omp critical
+			{
+				writtenSize += (size_t) rc;
+				toWriteSize += (size_t)szArr*outArrThis);
+			}
             if (rc < 0) printf("Could not write to output file\n");
             else if (rc != szArr*sizeof(*outArrThis)){
                 OffsetHereOut+=rc;
@@ -1238,6 +1243,7 @@ int main(int argc, char *argv[])
 	double time2 = omp_get_wtime() - start_time;
 	printf("Finished comparing, time elapsed after comparing with forward simulation: %lf seconds.\n"
 		"Searching for unique solutions.\n",time2);
+	printf("%zu %zu\n",writtenSize,toWriteSize);
 	fflush(stdout);
 	
 	// Figure out the unique orientations (within maxAngle) and do optimization for those.
