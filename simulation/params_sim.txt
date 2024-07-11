@@ -1,0 +1,39 @@
+# Material Definitions
+LatticeParameter 0.35238 0.35238 0.35238 90 90 90
+SpaceGroup 225
+AStar 17.8307091979
+Symmetry F
+
+#Detector Definitions
+P_Array 0.028745 0.002788 0.513115
+R_Array -1.20131258 -1.21399082 -1.21881158
+PxX 0.0002
+PxY 0.0002
+NrPxX 2048
+NrPxY 2048
+
+#Energy filtering
+Elo 5
+Ehi 30
+
+# What qualifies a grain?
+MinNrSpots 7
+MinGoodSpots 5
+MinIntensity 100
+MaxAngle 5
+
+# What qualifies a spot and image processing parameters
+MinArea 5
+Threshold 120
+
+# Where to save results, which files to read etc.
+ResultDir results_simulation
+HKLFile valid_hkls.csv
+OrientationFile 100MilOrients.bin
+
+#Simulation Definitions
+MaxNrLaueSpots 30
+ForwardFile Ni_FwdSim.bin
+OrientationSpacing 0.4
+DoFwd 0
+SimulationSmoothingWidth 2

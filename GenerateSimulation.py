@@ -1,8 +1,86 @@
+#!/usr/bin/env python
+
 import numpy as np
 import h5py
 from math import pi, sin, cos
 import scipy.ndimage as ndimg
 from PIL import Image
+import argparse
+import os, sys
+import subprocess
+pytpath = sys.executable
+installPath = os.path.dirname(os.path.abspath(__file__))
+
+class MyParser(argparse.ArgumentParser):
+    def error(self, message):
+        sys.stderr.write('error: %s\n' % message)
+        self.print_help()
+        sys.exit(2)
+
+#### ONLY IMPLEMENTED TO USE ASTAR (CUBIC)
+
+parser = MyParser(description='''LaueMatching Generate Simulation using an experiment configuration and a list of orientations, contact hsharma@anl.gov''', formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+parser.add_argument('-configFile', type=str, required=True, help='Configuration file to run the simulation.')
+parser.add_argument('-orientationFile', type=str, required=True, help='File containing list of orientations to simulate. Must be orientation matrices with determinant 1. Each row has one orientation.')
+parser.add_argument('-outputFile', type=str, required=True, help='File to save the data. Must be of the format FILESTEM_XX.h5, where XX is the file number, eg. 1.')
+args, unparsed = parser.parse_known_args()
+configFile = args.configFile
+orientationFN = args.orientationFile
+outFN = args.outputFile
+
+### Get parameters
+hklf = 'valid_reflections.csv'
+sym= 'F'
+lines = open(configFile,'r').readlines()
+for line in lines:
+	if line.startswith('SpaceGroup'):
+		sgNum = int(line.split()[1])
+	elif line.startswith('Symmetry'):
+		sym = line.split()[1]
+		if sym not in 'FICAR' and len(sym) != 1:
+			print('Invalid value for sym, must be one character from F,I,C,A,R')
+			sys.exit()
+	elif line.startswith('LatticeParameter'):
+		latC = ' '.join(line.split()[1:7])
+	elif line.startswith('R_Array'):
+		r_arr = ' '.join(line.split()[1:4])
+	elif line.startswith('P_Array'):
+		p_arr = ' '.join(line.split()[1:4])
+	elif line.startswith('PxX'):
+		dx = float(line.split()[1])
+	elif line.startswith('PxY'):
+		dy = float(line.split()[1])
+	elif line.startswith('AStar'):
+		astar = float(line.split()[1])
+	elif line.startswith('Elo'):
+		Elo = float(line.split()[1])
+	elif line.startswith('Ehi'):
+		Ehi = float(line.split()[1])
+	elif line.startswith('SimulationSmoothingWidth'):
+		gaussWidth = int(line.split()[1])
+	elif line.startswith('NrPxX'):
+		nPxX = int(line.split()[1])
+	elif line.startswith('NrPxY'):
+		nPxY = int(line.split()[1])
+	elif line.startswith('HKLFile'):
+		hklf = line.split()[1]
+
+P = np.array([float(p) for p in p_arr.split()])
+R = np.array([float(r) for r in r_arr.split()])
+Nx = nPxX
+Ny = nPxY
+
+orientations = np.genfromtxt(orientationFN)
+
+# If hkl file does not exist, generate.
+if not os.path.exists(hklf):
+	cmmd = f'{pytpath} {installPath}/GenerateHKLs.py -resultFileName {hklf} -sgnum {sgNum} -sym {sym} '
+	cmmd += f'-latticeParameter {latC} -RArray {r_arr} -PArray {p_arr} -NumPxX {nPxX} -NumPxY {nPxY} '
+	cmmd += f'-dx {dx} -dy {dy}'
+	subprocess.call(cmmd,shell=True)
+
+hklarr = np.genfromtxt(hklf)
+
 
 hc_keVnm = 1.2398419739
 
@@ -62,23 +140,7 @@ def getSpots(recip):
 		if np.random.randint(0,10) > 3:
 			nrPx+=1
 			img[int(pixel.item(1)),int(pixel.item(0))] = np.random.randint(0,16000)
-	print(nrPx)
-
-
-# Read grain orientations, hkls
-orientations = np.genfromtxt('Grains.csv',skip_header=9)[:,1:10]
-hklarr = np.genfromtxt('valid_reflections.csv')
-
-astar = 17.8307091979
-P = np.array([0.028745, 0.002788, 0.513115])
-R = np.array([-1.20131258, -1.21399082, -1.21881158])
-dx = 0.0002
-dy = 0.0002
-Nx = 2048
-Ny = 2048
-Elo = 5
-Ehi = 30
-gaussWidth = 2
+	# print(nrPx)
 
 img = np.zeros((Nx,Ny))
 
@@ -96,7 +158,7 @@ for recip in recips:
 	getSpots(recip)
 
 img = ndimg.gaussian_filter(img,gaussWidth).astype(np.uint16)
-Image.fromarray(img).save('simulated_data.tif')
-hFile = h5py.File('simulated_data.h5','w')
+Image.fromarray(img).save(outFN+'.tif')
+hFile = h5py.File(outFN,'w')
 hFile.create_dataset('/entry1/data/data',data=img)
-np.savetxt('simulated_recips.txt',recips,fmt='%.6f',delimiter=' ')
+np.savetxt(f'{outFN}_simulated_recips.txt',recips,fmt='%.6f',delimiter=' ')
