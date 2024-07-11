@@ -1226,11 +1226,12 @@ if (argc!=6){
 		clock_t start = clock();
 		cudaMemcpy(device_image,image,nrPxX*nrPxY*sizeof(double),cudaMemcpyHostToDevice);
 		cudaMemset(device_matchedArr,0,nrOrients*sizeof(double));
-		compare<<<1024, (nrOrients+1023)/1024>>>(nrPxX,nrOrients,maxNrSpots,minIntensity,minNrSpots,device_outArr,device_image,device_matchedArr);
+		compare<<<(nrOrients+1023)/1024, 1024>>>(nrPxX,nrOrients,maxNrSpots,minIntensity,minNrSpots,device_outArr,device_image,device_matchedArr);
 		cudaDeviceSynchronize();
 		cudaMemcpy(mArr,device_matchedArr,nrOrients*sizeof(double),cudaMemcpyDeviceToHost);
+		cudaDeviceSynchronize();
 		clock_t end = clock();
-		printf("%lf\n",(double)(end-start)/CLOCKS_PER_SEC);
+		printf("Time elapsed: %lf\n",(double)(end-start)/CLOCKS_PER_SEC);
 		size_t nrMatches=0;
 		for (int i=0;i<nrOrients;i++){
 			if (mArr[i]>0){
