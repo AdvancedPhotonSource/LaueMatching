@@ -1203,6 +1203,7 @@ if (argc!=6){
 			free(outArrThis);
 		}
 	} else{
+		clock_t start = clock();
 		size_t szArr = nrOrients *(1+2*maxNrSpots);
 		uint16_t *outArr;
 		outArr = (uint16_t *) calloc(szArr,sizeof(uint16_t));
@@ -1214,7 +1215,10 @@ if (argc!=6){
 			return 1;
 		}
 		size_t readBytes = fread(outArr,szArr*sizeof(uint16_t),1,fwdFN);
+		clock_t end = clock();
+		printf("Time elapsed to read the forward simulation: %lf\n",(double)(end-start)/CLOCKS_PER_SEC);
 		// CUDA BLOCK
+		start = clock();
 		uint16_t *device_outArr;
 		cudaMalloc(&device_outArr,szArr*sizeof(uint16_t));
 		double *device_image;
@@ -1224,7 +1228,6 @@ if (argc!=6){
 		mArr = (double *) malloc(nrOrients*sizeof(double));
 		cudaMemcpy(device_outArr,outArr,szArr*sizeof(uint16_t),cudaMemcpyHostToDevice);
 		cudaDeviceSynchronize();
-		clock_t start = clock();
 		cudaMemcpy(device_image,image,nrPxX*nrPxY*sizeof(double),cudaMemcpyHostToDevice);
 		cudaDeviceSynchronize();
 		cudaMemset(device_matchedArr,0,nrOrients*sizeof(double));
@@ -1234,7 +1237,7 @@ if (argc!=6){
 		cudaDeviceSynchronize();
 		cudaMemcpy(mArr,device_matchedArr,nrOrients*sizeof(double),cudaMemcpyDeviceToHost);
 		cudaDeviceSynchronize();
-		clock_t end = clock();
+		end = clock();
 		printf("Time elapsed to match on the GPU: %lf\n",(double)(end-start)/CLOCKS_PER_SEC);
 		size_t nrMatches=0;
 		for (int i=0;i<nrOrients;i++){
