@@ -768,6 +768,7 @@ __global__
 void compare(size_t nrPxX, size_t nOr, size_t nrMaxSpots, double minInt, size_t minSps, uint16_t *oA, double *im, double *mA)
 {
 	size_t i = blockIdx.x*blockDim.x + threadIdx.x;
+	printf("%zu\n",i);
 	if (i < nOr){
 		size_t loc = i*(1+2*nrMaxSpots);
 		size_t nrSpots = (size_t) oA[loc];
@@ -1229,8 +1230,8 @@ if (argc!=6){
 		cudaDeviceSynchronize();
 		cudaMemset(device_matchedArr,0,nrOrients*sizeof(double));
 		cudaDeviceSynchronize();
-		printf("%zu\n",(size_t) (nrOrients+2047)/2048);
-		compare<<<(nrOrients+2047)/2048, 2048>>>(nrPxX,nrOrients,maxNrSpots,minIntensity,minNrSpots,device_outArr,device_image,device_matchedArr);
+		printf("%zu\n",(size_t) (nrOrients+4095)/4096);
+		compare<<<(nrOrients+4095)/4096, 4096>>>(nrPxX,nrOrients,maxNrSpots,minIntensity,minNrSpots,device_outArr,device_image,device_matchedArr);
 		cudaDeviceSynchronize();
 		cudaMemcpy(mArr,device_matchedArr,nrOrients*sizeof(double),cudaMemcpyDeviceToHost);
 		cudaDeviceSynchronize();
