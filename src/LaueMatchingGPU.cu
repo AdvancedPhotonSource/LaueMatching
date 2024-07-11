@@ -1078,7 +1078,7 @@ if (argc!=6){
 		close(result);
 	} else printf("Forward simulation was requested, will be saved to %s.\n",outfn);
 	
-	if (doFwd==0){
+	if (doFwd==1){
 		#pragma omp parallel num_threads(numProcs)
 		{
 			int procNr = omp_get_thread_num();
