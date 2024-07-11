@@ -1092,6 +1092,19 @@ int main(int argc, char *argv[])
 		close(result);
 	} else printf("Forward simulation was requested, will be saved to %s.\n",outfn);
 
+	uint16_t *outArr;
+	LowNr = 1;
+	if (doFwd==0){
+		// If the file is located at /dev/shm, we can just mmap it:
+		str = "/dev/shm";
+		LowNr = strncmp(outfn,str,strlen(str));
+		size_t szArrFull = nrOrients *(1+2*maxNrSpots);
+		if (LowNr == 0){
+			int fd = open(outfn,O_RDONLY);
+			outArr = (uint16_t *) mmap(0,szArrFull*sizeof(uint16_t),PROT_READ,MAP_SHARED,fd,0);
+		}
+	}
+
 	#pragma omp parallel num_threads(numProcs)
 	{
 		int procNr = omp_get_thread_num();
@@ -1117,16 +1130,7 @@ int main(int argc, char *argv[])
 				,(long long int)nrOrientsThread*(10+5*maxNrSpots)*sizeof(double)/(1024*1024));
 		}
 		if (doFwd == 0){
-			// If the file is located at /dev/shm, we can just mmap it:
-			str = "/dev/shm";
-			LowNr = strncmp(outfn,str,strlen(str));
-			if (LowNr == 0){
-				int fd = open(outfn,O_RDONLY);
-				outArrThis = (uint16_t *) mmap(0,szArr*sizeof(*outArrThis),PROT_READ,MAP_SHARED,fd,OffsetHere);
-				if (outArrThis == MAP_FAILED) {
-					printf("Could not mmap. %d\n", procNr);
-				}
-			} else {
+			if (LowNr !=0){
 				int result = open(outfn, O_RDONLY|O_SYNC, S_IRUSR|S_IWUSR);
 				ssize_t readBytes = pread(result,outArrThis,szArr*sizeof(*outArrThis),OffsetHere);
 				if (readBytes != szArr*sizeof(*outArrThis)){
@@ -1140,6 +1144,10 @@ int main(int argc, char *argv[])
 											readBytes,bytesRemaining);
 				}
 				close(result);
+			} else{
+				size_t locOffset = OffsetHere;
+				locOffset /= sizeof(*outArr);
+				outArrThis = &outArr[locOffset];
 			}
 		}
 		int orientNr;
