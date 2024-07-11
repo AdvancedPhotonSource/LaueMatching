@@ -1089,7 +1089,6 @@ if (argc!=6){
 			OffsetHere = procNr;
 			OffsetHere *= szArr;
 			OffsetHere *= sizeof(*outArrThis);
-			outArrThis = calloc(szArr,sizeof(*outArrThis));
 			size_t OffsetHereOut;
 			OffsetHereOut = procNr;
 			OffsetHereOut *= szArr;
@@ -1098,6 +1097,8 @@ if (argc!=6){
 			int endOrientNr = startOrientNr + nrOrientsThread;
 			if (endOrientNr > nrOrients) endOrientNr = nrOrients;
 			nrOrientsThread = endOrientNr - startOrientNr;
+			szArr = nrOrientsThread*(1+2*maxNrSpots);
+			outArrThis = (uint16_t *) calloc(szArr,sizeof(*outArrThis));
 			if (outArrThis == NULL){
 				printf("Could not allocate outArr per thread, needed %lldMB of RAM. Behavior unexpected now.\n"
 					,(long long int)nrOrientsThread*(10+5*maxNrSpots)*sizeof(double)/(1024*1024));
