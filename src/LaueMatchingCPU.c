@@ -1079,7 +1079,7 @@ int main(int argc, char *argv[])
 		} else printf("%s file was found. Will not do forward simulation.\n");
 		close(result);
 	} else printf("Forward simulation was requested, will be saved to %s.\n",outfn);
-	size_t writtenSize = 0, toWriteSize = 0;
+	size_t writtenSize = 0, toWriteSize = 0,totOrientsThreads = 0;
 	#pragma omp parallel num_threads(numProcs)
 	{
 		int procNr = omp_get_thread_num();
@@ -1225,9 +1225,10 @@ int main(int argc, char *argv[])
 			#pragma omp critical
 			{
             rc = pwrite(result,outArrThis,szArr*sizeof(*outArrThis),OffsetHereOut);
-			printf("Output written %zu,%zu,%zu %zu\n",(size_t)rc,(size_t) szArr*sizeof(*outArrThis),(size_t)OffsetHereOut,(size_t)(OffsetHereOut+ szArr*sizeof(*outArrThis)));
+			printf("Output written %d %d %zu,%zu,%zu %zu\n",procNr, nrOrientsThread,(size_t)rc,(size_t) szArr*sizeof(*outArrThis),(size_t)OffsetHereOut,(size_t)(OffsetHereOut+ szArr*sizeof(*outArrThis)));
 				writtenSize += (size_t) rc;
 				toWriteSize += (size_t) szArr*sizeof(*outArrThis);
+				totOrientsThreads += nrOrientsThread;
 			}
             if (rc < 0) printf("Could not write to output file\n");
             else if (rc != szArr*sizeof(*outArrThis)){
