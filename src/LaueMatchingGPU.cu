@@ -768,6 +768,7 @@ __global__
 void compare(size_t nrPxX, size_t nOr, size_t nrMaxSpots, double minInt, size_t minSps, uint16_t *oA, double *im, double *mA)
 {
 	size_t i = blockIdx.x*blockDim.x + threadIdx.x;
+	printf("%zu\n",i);
 	if (i < nOr){
 		size_t loc = i*(1+2*nrMaxSpots);
 		size_t nrSpots = (size_t) oA[loc];
