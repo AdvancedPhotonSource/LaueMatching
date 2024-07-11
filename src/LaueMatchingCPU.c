@@ -1117,19 +1117,27 @@ int main(int argc, char *argv[])
 				,(long long int)nrOrientsThread*(10+5*maxNrSpots)*sizeof(double)/(1024*1024));
 		}
 		if (doFwd == 0){
-			int result = open(outfn, O_RDONLY|O_SYNC, S_IRUSR|S_IWUSR);
-			ssize_t readBytes = pread(result,outArrThis,szArr*sizeof(*outArrThis),OffsetHere);
-			if (readBytes != szArr*sizeof(*outArrThis)){
-				// printf("Did not finish reading, going again.\n");
-				OffsetHere+=readBytes;
-				size_t offset_arr = readBytes / sizeof(*outArrThis);
-				size_t bytesRemaining = szArr*sizeof(*outArrThis) - readBytes;
-				readBytes = pread(result,outArrThis+offset_arr,bytesRemaining,OffsetHere);
-				if (readBytes!=bytesRemaining) printf("Second try didn't work either."
-										"Too big array. Update code. Read %zu bytes, but wanted to read %zu bytes.\n",
-										readBytes,bytesRemaining);
+			// If the file is located at /dev/shm, we can just mmap it:
+			str = "/dev/shm";
+			LowNr = strncmp(outfn,str,strlen(str));
+			if (LowNr == 0){
+				int fd = open(outfn,O_RDONLY);
+				outArrThis = (uitn16_t *) mmap(0,szArr*sizeof(*outArrThis),PROT_READ,MAP_SHARED,OffsetHere);
+			} else {
+				int result = open(outfn, O_RDONLY|O_SYNC, S_IRUSR|S_IWUSR);
+				ssize_t readBytes = pread(result,outArrThis,szArr*sizeof(*outArrThis),OffsetHere);
+				if (readBytes != szArr*sizeof(*outArrThis)){
+					// printf("Did not finish reading, going again.\n");
+					OffsetHere+=readBytes;
+					size_t offset_arr = readBytes / sizeof(*outArrThis);
+					size_t bytesRemaining = szArr*sizeof(*outArrThis) - readBytes;
+					readBytes = pread(result,outArrThis+offset_arr,bytesRemaining,OffsetHere);
+					if (readBytes!=bytesRemaining) printf("Second try didn't work either."
+											"Too big array. Update code. Read %zu bytes, but wanted to read %zu bytes.\n",
+											readBytes,bytesRemaining);
+				}
+				close(result);
 			}
-			close(result);
 		}
 		int orientNr;
         double *qhatarr;
