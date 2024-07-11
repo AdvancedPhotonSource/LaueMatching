@@ -1214,7 +1214,7 @@ if (argc!=6){
 		}
 		fseek(fwdFN,0L,SEEK_END);
 		size_t readBytes = fread(outArr,szArr*sizeof(uint16_t),1,fwdFN);
-		printf("%zu\n",readBytes);
+		printf("%s %zu\n",fwdFN,readBytes);
 		// CUDA BLOCK
 		uint16_t *device_outArr;
 		cudaMalloc(&device_outArr,szArr*sizeof(uint16_t));
