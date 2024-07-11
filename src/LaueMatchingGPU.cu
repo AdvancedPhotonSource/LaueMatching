@@ -1239,7 +1239,7 @@ if (argc!=6){
 		size_t nrMatches=0;
 		for (int i=0;i<nrOrients;i++){
 			if (mArr[i]>0){
-				matchedArr[nrMatches] = mArr[i];
+				matchedArr[i] = mArr[i];
 				nrMatches++;
 			}
 		}
