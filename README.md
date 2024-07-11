@@ -26,7 +26,7 @@ C-libraries downloaded:
 
 For GPU Version, provide CUDA executable as follows:
 
-    make NCC=PATH_TO_NCC lauegpu
+    make NCC=PATH_TO_NVCC lauegpu
 
 For CPU Version:
 
