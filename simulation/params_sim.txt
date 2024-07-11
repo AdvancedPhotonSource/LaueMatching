@@ -29,11 +29,11 @@ Threshold 0
 # Where to save results, which files to read etc.
 ResultDir results_simulation
 HKLFile valid_hkls.csv
-OrientationFile 100MilOrients.bin
+OrientationFile /dev/shm/100MilOrients.bin
 
 #Simulation Definitions
 MaxNrLaueSpots 30
-ForwardFile Ni_FwdSim.bin
+ForwardFile /dev/shm/Ni_FwdSim.bin
 OrientationSpacing 0.4
 DoFwd 0
 SimulationSmoothingWidth 2
