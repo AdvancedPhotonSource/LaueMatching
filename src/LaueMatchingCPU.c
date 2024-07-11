@@ -1123,7 +1123,9 @@ int main(int argc, char *argv[])
 			if (LowNr == 0){
 				int fd = open(outfn,O_RDONLY);
 				outArrThis = (uint16_t *) mmap(0,szArr*sizeof(*outArrThis),PROT_READ,MAP_SHARED,fd,OffsetHere);
-				continue;
+				if (outArrThis == MAP_FAILED) {
+					printf("Could not mmap.\n");
+				}
 			} else {
 				int result = open(outfn, O_RDONLY|O_SYNC, S_IRUSR|S_IWUSR);
 				ssize_t readBytes = pread(result,outArrThis,szArr*sizeof(*outArrThis),OffsetHere);
