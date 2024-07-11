@@ -43,6 +43,9 @@ To make both:
 ## Best Practices:
 
 > LaueMatching runs only on Linux computers for now.
+
 > The CPU code can be compiled to run on MAC, but need to `brew install gcc` to get `OpenMP` and possibly other dependencies.
+
 > Windows support is not planned.
+
 > Look inside **simulation** folder for instructions to run the example.
