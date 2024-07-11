@@ -1306,7 +1306,6 @@ int main(int argc, char *argv[])
 			}
 			OrientMat2Quat(orient2,quat2);
 			misoAngle = GetMisOrientation(quat1,quat2,sg_num);
-			printf("%lf %d %d\n",misoAngle,global_iterator,l);
 			if (misoAngle <= maxAngle) {
 				doneArr[l] = 1;
 				doneArr[global_iterator] ++;
