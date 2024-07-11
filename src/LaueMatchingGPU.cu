@@ -1016,7 +1016,7 @@ if (argc!=6){
 		fclose(orientF);
 		int fd;
 		fd = open(orientFN,O_RDONLY);
-		orients = mmap(0,szFile,PROT_READ,MAP_SHARED,fd,0);
+		orients = (double *) mmap(0,szFile,PROT_READ,MAP_SHARED,fd,0);
 		printf("%zu Orientations mapped into memory, took %lf seconds, now reading hkls\n",nrOrients,omp_get_wtime()-st_tm);
 		fflush(stdout);
 	} else{
