@@ -775,6 +775,7 @@ void compare(size_t nrPxX, size_t nOr, size_t nrMaxSpots, double minInt, size_t 
 		size_t px,py;
 		double thisInt, totInt=0;
 		size_t nSps = 0;
+		printf("%zu\n",nrSpots);
 		for (hklnr=0;hklnr<nrSpots;hklnr++){
 			loc++;
 			px = (size_t) oA[loc];
