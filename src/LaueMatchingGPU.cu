@@ -1196,9 +1196,8 @@ if (argc!=6){
 		cudaMalloc(&device_outArr,szArr*sizeof(uint16_t));
 		double *device_image;
 		cudaMalloc(&device_image,nrPxX*nrPxY*sizeof(double));
-		double *device_matchedArr, *mArr;
+		double *device_matchedArr;
 		cudaMalloc(&device_matchedArr,nrOrients*sizeof(double));
-		mArr = (double *) malloc(nrOrients*sizeof(double));
 		cudaMemcpy(device_outArr,outArr,szArr*sizeof(uint16_t),cudaMemcpyHostToDevice);
 		cudaDeviceSynchronize();
 		cudaMemcpy(device_image,image,nrPxX*nrPxY*sizeof(double),cudaMemcpyHostToDevice);
@@ -1210,20 +1209,16 @@ if (argc!=6){
 		start = clock();
 		compare<<<(nrOrients+1023)/1024, 1024>>>(nrPxX,nrOrients,maxNrSpots,minIntensity,minNrSpots,device_outArr,device_image,device_matchedArr);
 		cudaDeviceSynchronize();
-		cudaMemcpy(mArr,device_matchedArr,nrOrients*sizeof(double),cudaMemcpyDeviceToHost);
+		cudaMemcpy(matchedArr,device_matchedArr,nrOrients*sizeof(double),cudaMemcpyDeviceToHost);
 		cudaDeviceSynchronize();
 		end = clock();
 		printf("Time elapsed to match on the GPU: %lf\n",(double)(end-start)/CLOCKS_PER_SEC);
-		size_t nrMatches=0;
 		for (int i=0;i<nrOrients;i++){
-			if (mArr[i]>0){
-				matchedArr[i] = mArr[i];
-				nrMatches++;
+			if (matchedArr[i]>0){
+				nrResults++;
 			}
 		}
-		printf("NrMatches: %zu\n",nrMatches);
-		nrResults = nrMatches;
-
+		printf("NrMatches: %zu\n",nrResults);
 	}
 	double time2 = omp_get_wtime() - start_time;
 	printf("Finished comparing, time elapsed after comparing with forward simulation: %lf seconds.\n"
