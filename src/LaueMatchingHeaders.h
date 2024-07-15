@@ -47,7 +47,7 @@ inline void OrientMat2Euler(double m[3][3],double Euler[3]);
 inline void OrientMat2Quat33(double OM[3][3], double Quat[4]);
 inline void OrientMat2Quat(double OrientMat[9], double Quat[4]);
 inline double GetMisOrientation(double quat1[4], double quat2[4], int SGNr);
-inline void BringDownToFundamentalRegion(double QuatIn[4], double QuatOut[4],int SGNr);
+inline void BringDownToFundamentalRegion(double QuatIn[4], double QuatOut[4]);
 inline int MakeSymmetries(int SGNr, double Sym[24][4]);
 inline void QuaternionProduct(double q[4], double r[4], double Q[4]);
 inline void normalizeQuat(double quat[4]);
