@@ -1275,7 +1275,6 @@ int main(int argc, char *argv[])
 	FinOrientArr = calloc(nrResults*9,sizeof(*FinOrientArr));
 	int iterNr = 0;
 	int *dArr, *bsArr;
-	double t1, t2, t1_, t2_, tTot_ = 0, tTot=0;
 	dArr = calloc(nrResults,sizeof(*dArr));
 	bsArr = calloc(nrResults,sizeof(*bsArr));
 	for (global_iterator=0;global_iterator<nrResults;global_iterator++){
@@ -1311,7 +1310,7 @@ int main(int argc, char *argv[])
 		iterNr ++;
 	}
 	double time3 = omp_get_wtime() - start_time;
-	printf("Finished finding unique solutions, took: %lf seconds. %lf %lf\n",time3-time2,tTot,tTot_);
+	printf("Finished finding unique solutions, took: %lf seconds.\n",time3-time2);
 	int totalSols = iterNr;
 	# pragma omp parallel for num_threads(numProcs)
 	for (iterNr=0;iterNr<totalSols;iterNr++){
