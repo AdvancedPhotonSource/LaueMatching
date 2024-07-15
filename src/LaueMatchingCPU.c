@@ -1342,6 +1342,7 @@ int main(int argc, char *argv[])
 		iterNr ++;
 	}
 	double time3 = omp_get_wtime() - start_time;
+	printf("Finished finding unique solutions, took: %lf seconds.\n",time3-time2);
 	int totalSols = iterNr;
 	# pragma omp parallel for num_threads(numProcs)
 	for (iterNr=0;iterNr<totalSols;iterNr++){
