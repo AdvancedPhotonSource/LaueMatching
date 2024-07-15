@@ -12,6 +12,7 @@ from PIL import Image
 import diplib as dip
 import skimage
 import argparse
+import time
 plt.rcParams['font.size'] = 3
 pytpath = sys.executable
 installPath = os.path.dirname(os.path.abspath(__file__))
@@ -164,6 +165,8 @@ def calcL2(l1,l2):
 	return math.sqrt((l1[0]-l2[0])**2+(l1[1]-l2[1])**2)
 
 def runFile(imageFN):
+	print(f"Starting file: {imageFN}")
+	tSt = time.time()
 	global thresh
 	h_image = h5py.File(imageFN,'r')
 	h_im = np.array(h_image['/entry1/data/data'][()])
@@ -236,6 +239,8 @@ def runFile(imageFN):
 	h_im2.astype(np.double).tofile(imageFN+'.bin') # THIS IS THE FILE FED TO THE INDEXING C/CU CODE.
 	hf_out.create_dataset('/entry/data/input_blurred',data=h_im2)
 	# Image.fromarray(h_im2).save(imageFN+'.bin.inputBlurred.tif')
+	tInt1 = time.time()
+	print(f'Time elapsed in preparing: {tInt1-tSt}')
 
 	### RUN INDEXING
 	fout = open(imageFN+'.LaueMatching_stdout.txt','w')
@@ -247,6 +252,9 @@ def runFile(imageFN):
 	env['LD_LIBRARY_PATH'] = f'{file_path}/LIBS/NLOPT/lib:{file_path}/LIBS/NLOPT/lib64:{libpth}'
 	subprocess.call(cmmd,shell=True,env=env,stdout=fout)
 	fout.close()
+
+	tInt2 = time.time()
+	print(f'Time elapsed in Indexing: {tInt2-tInt1}')
 
 	# Read solutions and spots
 	orientationInfo = np.genfromtxt(imageFN+'.bin.solutions.txt',skip_header=1)
@@ -348,6 +356,8 @@ def runFile(imageFN):
 	hf_out.create_dataset('/entry/results/not_found_pixels',data=im_notfound)
 	hf_out.create_dataset('/entry/results/not_found_pixels_blurred',data=ndimg.gaussian_filter(im_notfound,gaussWidth))
 	hf_out.close()
+	tInt3 = time.time()
+	print(f'Time elapsed in Sorting: {tInt3-tInt2}')
 
 	# Image.fromarray(im_found).save(imageFN+'.bin.FoundPixels.tif')
 	# Image.fromarray(im_notfound).save(imageFN+'.bin.notFoundPixels.tif')
