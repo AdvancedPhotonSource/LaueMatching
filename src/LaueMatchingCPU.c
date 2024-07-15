@@ -1269,14 +1269,14 @@ int main(int argc, char *argv[])
 
 
 	int *doneArr;
-	doneArr = calloc(nrResults,sizeof(*doneArr));
+	doneArr = (int *) calloc(nrResults,sizeof(*doneArr));
 	// Make an array with the orientations to process
 	double *FinOrientArr;
-	FinOrientArr = calloc(nrResults*9,sizeof(*FinOrientArr));
+	FinOrientArr = (double *) calloc(nrResults*9,sizeof(*FinOrientArr));
 	int iterNr = 0;
 	int *dArr, *bsArr;
-	dArr = calloc(nrResults,sizeof(*dArr));
-	bsArr = calloc(nrResults,sizeof(*bsArr));
+	dArr = (int *) calloc(nrResults,sizeof(*dArr));
+	bsArr = (int *) calloc(nrResults,sizeof(*bsArr));
 	for (global_iterator=0;global_iterator<nrResults;global_iterator++){
 		if (doneArr[global_iterator] !=0) continue;
 		for (k=0;k<9;k++){
@@ -1328,7 +1328,7 @@ int main(int argc, char *argv[])
 		int saveExtraInfo = 0;
 		int doCrystalFit = 0;
 		double *outArrThisFit;
-		outArrThisFit = calloc(3*maxNrSpots,sizeof(*outArrThisFit));
+		outArrThisFit = (double *) calloc(3*maxNrSpots,sizeof(*outArrThisFit));
 		double latCFit[6],recipFit[3][3],mv=0;
 		FitOrientation(image,eulerBest,hkls,nhkls,nrPxX,nrPxY,recip,outArrThisFit,maxNrSpots,
 			rotTranspose,pArr,pxX,pxY,Elo,Ehi,tol,LatticeParameter,eulerFit,latCFit,&mv, doCrystalFit);
