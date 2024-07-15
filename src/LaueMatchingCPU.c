@@ -1331,7 +1331,7 @@ int main(int argc, char *argv[])
 			rotTranspose, pArr, pxX, pxY, Elo, Ehi, ExtraInfo, saveExtraInfo, &simulNrSps);
 		if (nrSps>=minNrSpots){
 			int bs = bsArr[iterNr];
-			double miso = GetMisOrientation(q1,q2,sg_num);
+			double miso = GetMisOrientation(q1,q2);
 			saveExtraInfo = iterNr+1;
 			calcRecipArray(latCFit,sg_num,recipFit);
 			writeCalcOverlap(image,eulerFit,hkls,nhkls,nrPxX,nrPxY,recipFit,outArrThisFit,
