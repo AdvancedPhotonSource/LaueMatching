@@ -237,7 +237,7 @@ void BringDownToFundamentalRegion(double QuatIn[4], double QuatOut[4])
 }
 
 inline
-double GetMisOrientation(double quat1[4], double quat2[4], int SGNr)
+double GetMisOrientation(double quat1[4], double quat2[4])
 {
 	double q1FR[4], q2FR[4], q1Inv[4], QP[4], MisV[4];
 	BringDownToFundamentalRegion(quat1,q1FR);
