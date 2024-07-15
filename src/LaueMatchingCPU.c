@@ -1341,6 +1341,7 @@ int main(int argc, char *argv[])
 		bsArr[iterNr] = bestSol;
 		iterNr ++;
 	}
+	double time3 = omp_get_wtime() - start_time;
 	int totalSols = iterNr;
 	# pragma omp parallel for num_threads(numProcs)
 	for (iterNr=0;iterNr<totalSols;iterNr++){
@@ -1407,7 +1408,7 @@ int main(int argc, char *argv[])
 	}
 	fclose(ExtraInfo);
 	fclose(outF);
-	double time = omp_get_wtime() - start_time - time2;
+	double timef = omp_get_wtime() - start_time - time3;
 	printf("Finished, time elapsed in fitting: %lf seconds.\n"
-		"Initial solutions: %d Unique Orientations: %d\n",time,nrResults,totalSols);
+		"Initial solutions: %d Unique Orientations: %d\n",timef,nrResults,totalSols);
 }

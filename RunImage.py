@@ -240,7 +240,7 @@ def runFile(imageFN):
 	hf_out.create_dataset('/entry/data/input_blurred',data=h_im2)
 	# Image.fromarray(h_im2).save(imageFN+'.bin.inputBlurred.tif')
 	tInt1 = time.time()
-	print(f'Time elapsed in preparing: {tInt1-tSt}')
+	print(f'Time elapsed in Preparing: {tInt1-tSt}')
 
 	### RUN INDEXING
 	fout = open(imageFN+'.LaueMatching_stdout.txt','w')
