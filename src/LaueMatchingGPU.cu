@@ -1274,7 +1274,7 @@ if (argc!=6){
 			orient1[k] = orients[global_iterator*9+k];
 		}
 		OrientMat2Quat(orient1,quat1);
-		doneArr[global_iterator] ++;
+		doneArr[global_iterator] = 1;
 		bestSol = global_iterator;
 		bestIntensity = matchedArr[global_iterator];
 		for (l=global_iterator+1;l<nrOrients;l++){
