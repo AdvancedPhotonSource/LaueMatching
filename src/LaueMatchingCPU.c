@@ -1259,12 +1259,12 @@ int main(int argc, char *argv[])
 	FinOrientArr = calloc(nrResults*9,sizeof(*FinOrientArr));
 	int iterNr = 0;
 	int *dArr, *bsArr;
-	double t1, t2,tTot=0;
+	double t1, t2, t1_, t2_, tTot_ = 0, tTot=0;
 	dArr = calloc(nrResults,sizeof(*dArr));
 	bsArr = calloc(nrResults,sizeof(*bsArr));
 	for (global_iterator=0;global_iterator<nrOrients;global_iterator++){
 		if (matchedArr[global_iterator]==0) continue;
-		if (doneArr[global_iterator] != 0) continue;
+		if (doneArr[global_iterator]   !=0) continue;
 		for (k=0;k<9;k++){
 			orient1[k] = orients[global_iterator*9+k];
 		}
@@ -1275,6 +1275,7 @@ int main(int argc, char *argv[])
 		doneArr[global_iterator] = 1;
 		bestSol = global_iterator;
 		bestIntensity = matchedArr[global_iterator];
+		t1_ = omp_get_wtime();
 		for (l=global_iterator+1;l<nrOrients;l++){
 			if (matchedArr[l]==0) continue;
 			if (doneArr[l] > 0) continue;
@@ -1295,6 +1296,8 @@ int main(int argc, char *argv[])
 				}
 			}
 		}
+		t2_ = omp_get_wtime();
+		tTot_ += t2_ - t1_;
 		for (k=0;k<9;k++){
 			FinOrientArr[iterNr*9+k] = orients[bestSol*9+k];
 		}
@@ -1303,7 +1306,7 @@ int main(int argc, char *argv[])
 		iterNr ++;
 	}
 	double time3 = omp_get_wtime() - start_time;
-	printf("Finished finding unique solutions, took: %lf seconds. %lf\n",time3-time2,tTot);
+	printf("Finished finding unique solutions, took: %lf seconds. %lf %lf\n",time3-time2,tTot,tTot_);
 	int totalSols = iterNr;
 	# pragma omp parallel for num_threads(numProcs)
 	for (iterNr=0;iterNr<totalSols;iterNr++){
