@@ -51,6 +51,9 @@ int sg_num;
 double cellVol;
 double phiVol;
 
+int nSym;
+double Symm[24][4];
+
 inline double sin_cos_to_angle (double s, double c){return (s >= 0.0) ? acos(c) : 2.0 * M_PI - acos(c);}
 
 inline void normalizeQuat(double quat[4]){
@@ -207,66 +210,15 @@ int MakeSymmetries(int SGNr, double Sym[24][4])
 }
 
 inline
-void BringDownToFundamentalRegion(double QuatIn[4], double QuatOut[4],int SGNr)
+void BringDownToFundamentalRegion(double QuatIn[4], double QuatOut[4])
 {
-	int i, j, maxCosRowNr=0, NrSymmetries;
-	double Sym[24][4];
-	if (SGNr <= 2){ // Triclinic
-		NrSymmetries = 1;
-		for (i=0;i<NrSymmetries;i++){
-			for (j=0;j<4;j++){
-				Sym[i][j] = TricSym[i][j];
-			}
-		}
-	}else if (SGNr > 2 && SGNr <= 15){  // Monoclinic
-		NrSymmetries = 2;
-		for (i=0;i<NrSymmetries;i++){
-			for (j=0;j<4;j++){
-				Sym[i][j] = MonoSym[i][j];
-			}
-		}
-	}else if (SGNr >= 16 && SGNr <= 74){ // Orthorhombic
-		NrSymmetries = 4;
-		for (i=0;i<NrSymmetries;i++){
-			for (j=0;j<4;j++){
-				Sym[i][j] = OrtSym[i][j];
-			}
-		}
-	}else if (SGNr >= 75 && SGNr <= 142){  // Tetragonal
-		NrSymmetries = 8;
-		for (i=0;i<NrSymmetries;i++){
-			for (j=0;j<4;j++){
-				Sym[i][j] = TetSym[i][j];
-			}
-		}
-	}else if (SGNr >= 143 && SGNr <= 167){ // Trigonal
-		NrSymmetries = 6;
-		for (i=0;i<NrSymmetries;i++){
-			for (j=0;j<4;j++){
-				Sym[i][j] = TrigSym[i][j];
-			}
-		}
-	}else if (SGNr >= 168 && SGNr <= 194){ // Hexagonal
-		NrSymmetries = 12;
-		for (i=0;i<NrSymmetries;i++){
-			for (j=0;j<4;j++){
-				Sym[i][j] = HexSym[i][j];
-			}
-		}
-	}else if (SGNr >= 195 && SGNr <= 230){ // Cubic
-		NrSymmetries = 24;
-		for (i=0;i<NrSymmetries;i++){
-			for (j=0;j<4;j++){
-				Sym[i][j] = CubSym[i][j];
-			}
-		}
-	}
-	double qps[NrSymmetries][4], q2[4], qt[4], maxCos=-10000;
-	for (i=0;i<NrSymmetries;i++){
-		q2[0] = Sym[i][0];
-		q2[1] = Sym[i][1];
-		q2[2] = Sym[i][2];
-		q2[3] = Sym[i][3];
+	int i, j, maxCosRowNr=0;
+	double qps[nSym][4], q2[4], qt[4], maxCos=-10000;
+	for (i=0;i<nSym;i++){
+		q2[0] = Symm[i][0];
+		q2[1] = Symm[i][1];
+		q2[2] = Symm[i][2];
+		q2[3] = Symm[i][3];
 		QuaternionProduct(QuatIn,q2,qt);
 		qps[i][0] = qt[0];
 		qps[i][1] = qt[1];
@@ -1273,8 +1225,10 @@ int main(int argc, char *argv[])
 	fflush(stdout);
 	
 	// Figure out the unique orientations (within maxAngle) and do optimization for those.
-	// This is not parallelized because we normally don't have many of these.
-	// Look into making this parallel.
+
+	// Make Symmetries
+	nSym = MakeSymmetries(sg_num,Symm);
+
 	double orient1[9], orient2[9], quat1[4], quat2[4], misoAngle, bestIntensity;
 	double orientBest[3][3], eulerBest[3],eulerFit[3], orientFit[3][3], bestOverlap;
 	double tol= 3*deg2rad;
@@ -1324,7 +1278,7 @@ int main(int argc, char *argv[])
 				orient2[m] = orients[l*9+m];
 			}
 			OrientMat2Quat(orient2,quat2);
-			misoAngle = GetMisOrientation(quat1,quat2,sg_num);
+			misoAngle = GetMisOrientation(quat1,quat2);
 			if (misoAngle <= maxAngle) {
 				doneArr[l] = 1;
 				doneArr[global_iterator] ++;
