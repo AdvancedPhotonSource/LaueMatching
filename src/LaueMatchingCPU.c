@@ -1279,9 +1279,9 @@ int main(int argc, char *argv[])
 				orient2[m] = orients[l*9+m];
 			}
 			OrientMat2Quat(orient2,quat2);
-			t1 = omg_get_wtime();
+			t1 = omp_get_wtime();
 			misoAngle = GetMisOrientation(quat1,quat2);
-			t2 = omg_get_wtime();
+			t2 = omp_get_wtime();
 			tTot += t2-t1;
 			if (misoAngle <= maxAngle) {
 				doneArr[l] = 1;
