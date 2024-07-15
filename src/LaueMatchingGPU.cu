@@ -1323,6 +1323,7 @@ if (argc!=6){
 		doneArr[global_iterator] ++;
 		bestSol = global_iterator;
 		bestIntensity = matchedArr[global_iterator];
+		double tThis = omp_get_wtime();
 		for (l=global_iterator+1;l<nrOrients;l++){
 			if (matchedArr[l]==0) continue;
 			if (doneArr[l] > 0) continue;
@@ -1343,6 +1344,8 @@ if (argc!=6){
 		for (k=0;k<9;k++){
 			FinOrientArr[iterNr*9+k] = orients[bestSol*9+k];
 		}
+		double tThis2 = omp_get_wtime();
+		printf("%lf seconds.\n",tThis2-tThis);
 		dArr[iterNr] = doneArr[global_iterator];
 		bsArr[iterNr] = bestSol;
 		iterNr ++;
