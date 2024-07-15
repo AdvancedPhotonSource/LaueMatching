@@ -1323,8 +1323,6 @@ if (argc!=6){
 		doneArr[global_iterator] ++;
 		bestSol = global_iterator;
 		bestIntensity = matchedArr[global_iterator];
-		double tThis = omp_get_wtime();
-		int nr = 0;
 		for (l=global_iterator+1;l<nrOrients;l++){
 			if (matchedArr[l]==0) continue;
 			if (doneArr[l] > 0) continue;
@@ -1341,17 +1339,16 @@ if (argc!=6){
 					bestSol = l;
 				}
 			}
-			nr++;
 		}
 		for (k=0;k<9;k++){
 			FinOrientArr[iterNr*9+k] = orients[bestSol*9+k];
 		}
-		double tThis2 = omp_get_wtime();
-		printf("%d %lf seconds.\n",nr,tThis2-tThis);
 		dArr[iterNr] = doneArr[global_iterator];
 		bsArr[iterNr] = bestSol;
 		iterNr ++;
 	}
+	double time3 = omp_get_wtime() - start_time;
+	printf("Finished finding unique solutions, took: %lf seconds.\n",time3-time2);
 	int totalSols = iterNr;
 	# pragma omp parallel for num_threads(numProcs)
 	for (iterNr=0;iterNr<totalSols;iterNr++){
