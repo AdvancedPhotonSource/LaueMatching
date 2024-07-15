@@ -1268,7 +1268,10 @@ int main(int argc, char *argv[])
 		for (k=0;k<9;k++){
 			orient1[k] = orients[global_iterator*9+k];
 		}
+		t1 = omp_get_wtime();
 		OrientMat2Quat(orient1,quat1);
+		t2 = omp_get_wtime();
+		tTot += t2-t1;
 		doneArr[global_iterator] = 1;
 		bestSol = global_iterator;
 		bestIntensity = matchedArr[global_iterator];
@@ -1278,8 +1281,8 @@ int main(int argc, char *argv[])
 			for (m=0;m<9;m++){
 				orient2[m] = orients[l*9+m];
 			}
-			OrientMat2Quat(orient2,quat2);
 			t1 = omp_get_wtime();
+			OrientMat2Quat(orient2,quat2);
 			misoAngle = GetMisOrientation(quat1,quat2);
 			t2 = omp_get_wtime();
 			tTot += t2-t1;
