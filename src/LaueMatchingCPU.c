@@ -1234,8 +1234,6 @@ int main(int argc, char *argv[])
 	double tol= 3*deg2rad;
 	// Check if we can increase maxNrSpots and see if we find more spots
 	maxNrSpots *= 3;
-	int *doneArr;
-	doneArr = calloc(nrOrients,sizeof(*doneArr));
 	int unique = 0, bestSol;
 	char outFN[1000];
 	sprintf(outFN,"%s.solutions.txt",imageFN);
@@ -1254,6 +1252,24 @@ int main(int argc, char *argv[])
 		"OrientMatrix0\tOrientMatrix1\tOrientMatrix2\tOrientMatrix3\tOrientMatrix4\tOrientMatrix5\t"
 		"OrientMatrix6\tOrientMatrix7\tOrientMatrix8\t"
 		"CoarseNMatches*sqrt(Intensity)\t""misOrientationPostRefinement[degrees]\torientationRowNr\n");
+	
+	// Make a sorted matchedArr
+	double mA;
+	mA = (double *) calloc(nrResults,sizeof(*mA));
+	size_t rowNrs[nrResults];
+	rowNrs = (size_t *) calloc(nrResults,sizeof(*rowNrs));
+	int resultNr = 0;
+	for (global_iterator=0;global_iterator<nrOrients;global_iterator++){
+		if (matchedArr[global_iterator] != 0){
+			mA[resultNr] = matchedArr[global_iterator];
+			rowNrs[resultNr] = global_iterator;
+			resultNr ++;
+		}
+	}
+
+
+	int *doneArr;
+	doneArr = calloc(nrResults,sizeof(*doneArr));
 	// Make an array with the orientations to process
 	double *FinOrientArr;
 	FinOrientArr = calloc(nrResults*9,sizeof(*FinOrientArr));
@@ -1262,42 +1278,31 @@ int main(int argc, char *argv[])
 	double t1, t2, t1_, t2_, tTot_ = 0, tTot=0;
 	dArr = calloc(nrResults,sizeof(*dArr));
 	bsArr = calloc(nrResults,sizeof(*bsArr));
-	for (global_iterator=0;global_iterator<nrOrients;global_iterator++){
-		if (matchedArr[global_iterator]==0) continue;
-		if (doneArr[global_iterator]   !=0) continue;
+	for (global_iterator=0;global_iterator<nrResults;global_iterator++){
+		if (doneArr[global_iterator] !=0) continue;
 		for (k=0;k<9;k++){
-			orient1[k] = orients[global_iterator*9+k];
+			orient1[k] = orients[rowNrs[global_iterator]*9+k];
 		}
-		t1 = omp_get_wtime();
 		OrientMat2Quat(orient1,quat1);
-		t2 = omp_get_wtime();
-		tTot += t2-t1;
 		doneArr[global_iterator] = 1;
-		bestSol = global_iterator;
-		bestIntensity = matchedArr[global_iterator];
-		t1_ = omp_get_wtime();
-		for (l=global_iterator+1;l<nrOrients;l++){
-			if (matchedArr[l]==0) continue;
+		bestSol = rowNrs[global_iterator];
+		bestIntensity = mA[global_iterator];
+		for (l=global_iterator+1;l<nrResults;l++){
 			if (doneArr[l] > 0) continue;
 			for (m=0;m<9;m++){
 				orient2[m] = orients[l*9+m];
 			}
-			t1 = omp_get_wtime();
 			OrientMat2Quat(orient2,quat2);
 			misoAngle = GetMisOrientation(quat1,quat2);
-			t2 = omp_get_wtime();
-			tTot += t2-t1;
 			if (misoAngle <= maxAngle) {
 				doneArr[l] = 1;
 				doneArr[global_iterator] ++;
-				if (matchedArr[l] > bestIntensity){
-					bestIntensity = matchedArr[l];
-					bestSol = l;
+				if (mA[l] > bestIntensity){
+					bestIntensity = mA[l];
+					bestSol = rowNrs[l];
 				}
 			}
 		}
-		t2_ = omp_get_wtime();
-		tTot_ += t2_ - t1_;
 		for (k=0;k<9;k++){
 			FinOrientArr[iterNr*9+k] = orients[bestSol*9+k];
 		}
