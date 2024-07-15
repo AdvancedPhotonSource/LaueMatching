@@ -1254,9 +1254,9 @@ int main(int argc, char *argv[])
 		"CoarseNMatches*sqrt(Intensity)\t""misOrientationPostRefinement[degrees]\torientationRowNr\n");
 	
 	// Make a sorted matchedArr
-	double mA;
+	double *mA;
 	mA = (double *) calloc(nrResults,sizeof(*mA));
-	size_t rowNrs[nrResults];
+	size_t *rowNrs;
 	rowNrs = (size_t *) calloc(nrResults,sizeof(*rowNrs));
 	int resultNr = 0;
 	for (global_iterator=0;global_iterator<nrOrients;global_iterator++){
