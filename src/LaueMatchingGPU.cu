@@ -1226,7 +1226,7 @@ if (argc!=6){
 	fflush(stdout);
 	
 	// Figure out the unique orientations (within maxAngle) and do optimization for those.
-	
+
 	// Make Symmetries
 	nSym = MakeSymmetries(sg_num,Symm);
 
@@ -1235,8 +1235,6 @@ if (argc!=6){
 	double tol= 3*deg2rad;
 	// Check if we can increase maxNrSpots and see if we find more spots
 	maxNrSpots *= 3;
-	int *doneArr;
-	doneArr = (int *) calloc(nrOrients,sizeof(*doneArr));
 	int unique = 0, bestSol;
 	char outFN[1000];
 	sprintf(outFN,"%s.solutions.txt",imageFN);
@@ -1255,25 +1253,41 @@ if (argc!=6){
 		"OrientMatrix0\tOrientMatrix1\tOrientMatrix2\tOrientMatrix3\tOrientMatrix4\tOrientMatrix5\t"
 		"OrientMatrix6\tOrientMatrix7\tOrientMatrix8\t"
 		"CoarseNMatches*sqrt(Intensity)\t""misOrientationPostRefinement[degrees]\torientationRowNr\n");
+	
+	// Make a sorted matchedArr
+	double *mA;
+	mA = (double *) calloc(nrResults,sizeof(*mA));
+	size_t *rowNrs;
+	rowNrs = (size_t *) calloc(nrResults,sizeof(*rowNrs));
+	int resultNr = 0;
+	for (global_iterator=0;global_iterator<nrOrients;global_iterator++){
+		if (matchedArr[global_iterator] != 0){
+			mA[resultNr] = matchedArr[global_iterator];
+			rowNrs[resultNr] = global_iterator;
+			resultNr ++;
+		}
+	}
+
+
+	int *doneArr;
+	doneArr = calloc(nrResults,sizeof(*doneArr));
 	// Make an array with the orientations to process
 	double *FinOrientArr;
-	FinOrientArr = (double *) calloc(nrResults*9,sizeof(*FinOrientArr));
+	FinOrientArr = calloc(nrResults*9,sizeof(*FinOrientArr));
 	int iterNr = 0;
 	int *dArr, *bsArr;
-	dArr = (int *) calloc(nrResults,sizeof(*dArr));
-	bsArr = (int *) calloc(nrResults,sizeof(*bsArr));
-	for (global_iterator=0;global_iterator<nrOrients;global_iterator++){
-		if (matchedArr[global_iterator]==0) continue;
-		if (doneArr[global_iterator] != 0) continue;
+	dArr = calloc(nrResults,sizeof(*dArr));
+	bsArr = calloc(nrResults,sizeof(*bsArr));
+	for (global_iterator=0;global_iterator<nrResults;global_iterator++){
+		if (doneArr[global_iterator] !=0) continue;
 		for (k=0;k<9;k++){
-			orient1[k] = orients[global_iterator*9+k];
+			orient1[k] = orients[rowNrs[global_iterator]*9+k];
 		}
 		OrientMat2Quat(orient1,quat1);
 		doneArr[global_iterator] = 1;
-		bestSol = global_iterator;
-		bestIntensity = matchedArr[global_iterator];
-		for (l=global_iterator+1;l<nrOrients;l++){
-			if (matchedArr[l]==0) continue;
+		bestSol = rowNrs[global_iterator];
+		bestIntensity = mA[global_iterator];
+		for (l=global_iterator+1;l<nrResults;l++){
 			if (doneArr[l] > 0) continue;
 			for (m=0;m<9;m++){
 				orient2[m] = orients[l*9+m];
@@ -1283,9 +1297,9 @@ if (argc!=6){
 			if (misoAngle <= maxAngle) {
 				doneArr[l] = 1;
 				doneArr[global_iterator] ++;
-				if (matchedArr[l] > bestIntensity){
-					bestIntensity = matchedArr[l];
-					bestSol = l;
+				if (mA[l] > bestIntensity){
+					bestIntensity = mA[l];
+					bestSol = rowNrs[l];
 				}
 			}
 		}
@@ -1315,7 +1329,7 @@ if (argc!=6){
 		int saveExtraInfo = 0;
 		int doCrystalFit = 0;
 		double *outArrThisFit;
-		outArrThisFit = (double *) calloc(3*maxNrSpots,sizeof(*outArrThisFit));
+		outArrThisFit = calloc(3*maxNrSpots,sizeof(*outArrThisFit));
 		double latCFit[6],recipFit[3][3],mv=0;
 		FitOrientation(image,eulerBest,hkls,nhkls,nrPxX,nrPxY,recip,outArrThisFit,maxNrSpots,
 			rotTranspose,pArr,pxX,pxY,Elo,Ehi,tol,LatticeParameter,eulerFit,latCFit,&mv, doCrystalFit);
