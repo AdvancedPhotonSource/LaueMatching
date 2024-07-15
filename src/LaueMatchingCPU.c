@@ -240,14 +240,14 @@ inline
 double GetMisOrientation(double quat1[4], double quat2[4], int SGNr)
 {
 	double q1FR[4], q2FR[4], q1Inv[4], QP[4], MisV[4];
-	BringDownToFundamentalRegion(quat1,q1FR,SGNr);
-	BringDownToFundamentalRegion(quat2,q2FR,SGNr);
+	BringDownToFundamentalRegion(quat1,q1FR);
+	BringDownToFundamentalRegion(quat2,q2FR);
 	q1Inv[0] = -q1FR[0];
 	q1Inv[1] =  q1FR[1];
 	q1Inv[2] =  q1FR[2];
 	q1Inv[3] =  q1FR[3];
 	QuaternionProduct(q1Inv,q2FR,QP);
-	BringDownToFundamentalRegion(QP,MisV,SGNr);
+	BringDownToFundamentalRegion(QP,MisV);
 	if (MisV[0] > 1) MisV[0] = 1;
 	double angle = 2*(acos(MisV[0]))*rad2deg;
 	return angle;
