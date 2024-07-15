@@ -1,6 +1,9 @@
-simulation/results_simulation
-simulation/simulated_1.h5*
 .DS_Store
 .vscode/
 bin
 LIBS
+*.bin
+simulation/*.bin
+simulation/valid_hkls.csv
+simulation/results_simulation
+simulation/simulated_1.h5*
