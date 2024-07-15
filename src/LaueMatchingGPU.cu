@@ -1413,7 +1413,7 @@ if (argc!=6){
 	}
 	fclose(ExtraInfo);
 	fclose(outF);
-	double time = omp_get_wtime() - start_time - time2;
+	double timef = omp_get_wtime() - start_time - time2;
 	printf("Finished, time elapsed in fitting: %lf seconds.\n"
-		"Initial solutions: %d Unique Orientations: %d\n",time,nrResults,totalSols);
+		"Initial solutions: %d Unique Orientations: %d\n",timef,nrResults,totalSols);
 }
