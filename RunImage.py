@@ -201,6 +201,8 @@ def runFile(imageFN):
 	# Do connected components and filter smaller spots
 	labels,nlabels = ndimg.label(h_im)
 	hf_out.create_dataset('/entry/data/cleaned_data_threshold_labels_unfiltered',data=labels)
+	tInt1a = time.time()
+	print(f'Time elapsed in connected components: {tInt1a-tSt2}')
 	centers = []
 	for lNr in range(1,nlabels):
 		if (np.sum(labels==lNr) > minArea):
