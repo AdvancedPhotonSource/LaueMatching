@@ -214,8 +214,8 @@ def runFile(imageFN):
 	hf_out.create_dataset('/entry/data/cleaned_data_threshold_filtered',data=h_im)
 	hf_out.create_dataset('/entry/data/cleaned_data_threshold_filtered_labels',data=labels)
 	# Image.fromarray(h_im).save(imageFN+'.bin.input.tif')
-	tInt1a = time.time()
-	print(f'Time elapsed in connected components: {tInt1a-tSt2}')
+	tInt1b = time.time()
+	print(f'Time elapsed in label filtering: {tInt1b-tInt1a}')
 	
 	# Find the Gaussian Width to use for blurring
 	bestLen = nrPixels*2
@@ -233,6 +233,8 @@ def runFile(imageFN):
 	gaussWidth = int(math.ceil(0.25*math.ceil(min(deltaPos,bestLenThis))))
 	h_im2 = ndimg.gaussian_filter(h_im,gaussWidth)
 
+	tInt1c = time.time()
+	print(f'Time elapsed in calculating widths: {tInt1c-tInt1b}')
 	# Use watershed to find the labels
 	labels2 = skimage.segmentation.watershed(-h_im2,mask=h_im2,connectivity=2)
 	nlabels2 = np.max(labels2)
@@ -244,7 +246,7 @@ def runFile(imageFN):
 	hf_out.create_dataset('/entry/data/input_blurred',data=h_im2)
 	# Image.fromarray(h_im2).save(imageFN+'.bin.inputBlurred.tif')
 	tInt1 = time.time()
-	print(f'Time elapsed in watershed: {tInt1-tInt1a}')
+	print(f'Time elapsed in watershed: {tInt1-tInt1c}')
 
 	### RUN INDEXING
 	fout = open(imageFN+'.LaueMatching_stdout.txt','w')
