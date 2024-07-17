@@ -194,6 +194,9 @@ def runFile(imageFN):
 	print(f'Processing file {imageFN}.bin')
 	hf_out.create_dataset('/entry/data/raw_data',data=h_im_raw)
 	hf_out.create_dataset('/entry/data/cleaned_data_threshold',data=h_im)
+	tInt1 = time.time()
+	print(f'Time elapsed in Preparing: {tInt1-tSt}')
+	tSt = time.time()
 
 	# Do connected components and filter smaller spots
 	labels,nlabels = ndimg.label(h_im)
@@ -240,7 +243,7 @@ def runFile(imageFN):
 	hf_out.create_dataset('/entry/data/input_blurred',data=h_im2)
 	# Image.fromarray(h_im2).save(imageFN+'.bin.inputBlurred.tif')
 	tInt1 = time.time()
-	print(f'Time elapsed in Preparing: {tInt1-tSt}')
+	print(f'Time elapsed in connected components: {tInt1-tSt}')
 
 	### RUN INDEXING
 	fout = open(imageFN+'.LaueMatching_stdout.txt','w')
