@@ -13,6 +13,7 @@ import diplib as dip
 import skimage
 import argparse
 import time
+import cv2
 plt.rcParams['font.size'] = 3
 pytpath = sys.executable
 installPath = os.path.dirname(os.path.abspath(__file__))
@@ -199,18 +200,40 @@ def runFile(imageFN):
 	tSt2 = time.time()
 
 	# Do connected components and filter smaller spots
-	labels,nlabels = ndimg.label(h_im)
+	im_inter = cv2.threshold(h_im, 0, 255,cv2.THRESH_BINARY)[1].astype(np.uint8)
+	output = cv2.connectedComponentsWithStats(im_inter,8,cv2.CV_32S)
+	nlabels = output[0]
+	areas = output[2][:,-1]
+	bbs = output[2][:,:-1]
+	centroids = output[3][:]
+	labels = output[1]
 	hf_out.create_dataset('/entry/data/cleaned_data_threshold_labels_unfiltered',data=labels)
 	tInt1a = time.time()
 	print(f'Time elapsed in connected components: {tInt1a-tSt2}')
 	centers = []
 	for lNr in range(1,nlabels):
-		if (np.sum(labels==lNr) > minArea):
-			com = ndimg.center_of_mass(h_im,labels,lNr)
-			centers.append([lNr,com,np.sum(labels==lNr)])
+		if (areas[lNr] > minArea):
+			im_loc = h_im[bbs[lNr,1]:bbs[lNr,1]+bbs[lNr,3],bbs[lNr,0]:bbs[lNr,0]+bbs[lNr,2]]
+			com = ndimg.center_of_mass(im_loc)
+			com_1 = com[1] + bbs[lNr,0]
+			com_2 = com[0] + bbs[lNr,1]
+			centers.append([lNr,(com_1,com_2),areas[lNr]])
 		else:
-			h_im[labels==lNr] = 0
-			labels[labels==lNr] = 0
+			h_im[bbs[lNr,1]:bbs[lNr,1]+bbs[lNr,3],bbs[lNr,0]:bbs[lNr,0]+bbs[lNr,2]] = 0
+			labels[bbs[lNr,1]:bbs[lNr,1]+bbs[lNr,3],bbs[lNr,0]:bbs[lNr,0]+bbs[lNr,2]] = 0
+
+	# labels,nlabels = ndimg.label(h_im)
+	# hf_out.create_dataset('/entry/data/cleaned_data_threshold_labels_unfiltered',data=labels)
+	# tInt1a = time.time()
+	# print(f'Time elapsed in connected components: {tInt1a-tSt2}')
+	# centers = []
+	# for lNr in range(1,nlabels):
+	# 	if (np.sum(labels==lNr) > minArea):
+	# 		com = ndimg.center_of_mass(h_im,labels,lNr)
+	# 		centers.append([lNr,com,np.sum(labels==lNr)])
+	# 	else:
+	# 		h_im[labels==lNr] = 0
+	# 		labels[labels==lNr] = 0
 	hf_out.create_dataset('/entry/data/cleaned_data_threshold_filtered',data=h_im)
 	hf_out.create_dataset('/entry/data/cleaned_data_threshold_filtered_labels',data=labels)
 	# Image.fromarray(h_im).save(imageFN+'.bin.input.tif')
