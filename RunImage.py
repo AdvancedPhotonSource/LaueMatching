@@ -245,8 +245,7 @@ def runFile(imageFN):
 
 	tInt1c = time.time()
 	print(f'Time elapsed in calculating widths: {tInt1c-tInt1b}')
-	labels2 = np.copy(labels)
-	nlabels2 = nlabels
+
 	# Use watershed to find the labels
 	labels2 = skimage.segmentation.watershed(-h_im2,mask=h_im2,connectivity=2)
 	nlabels2 = np.max(labels2)
