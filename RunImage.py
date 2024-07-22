@@ -205,7 +205,6 @@ def runFile(imageFN):
 	nlabels = output[0]
 	areas = output[2][:,-1]
 	bbs = output[2][:,:-1]
-	centroids = output[3][:]
 	labels = output[1]
 	hf_out.create_dataset('/entry/data/cleaned_data_threshold_labels_unfiltered',data=labels)
 	tInt1a = time.time()
@@ -222,21 +221,8 @@ def runFile(imageFN):
 			h_im[bbs[lNr,1]:bbs[lNr,1]+bbs[lNr,3],bbs[lNr,0]:bbs[lNr,0]+bbs[lNr,2]] = 0
 			labels[bbs[lNr,1]:bbs[lNr,1]+bbs[lNr,3],bbs[lNr,0]:bbs[lNr,0]+bbs[lNr,2]] = 0
 
-	# labels,nlabels = ndimg.label(h_im)
-	# hf_out.create_dataset('/entry/data/cleaned_data_threshold_labels_unfiltered',data=labels)
-	# tInt1a = time.time()
-	# print(f'Time elapsed in connected components: {tInt1a-tSt2}')
-	# centers = []
-	# for lNr in range(1,nlabels):
-	# 	if (np.sum(labels==lNr) > minArea):
-	# 		com = ndimg.center_of_mass(h_im,labels,lNr)
-	# 		centers.append([lNr,com,np.sum(labels==lNr)])
-	# 	else:
-	# 		h_im[labels==lNr] = 0
-	# 		labels[labels==lNr] = 0
 	hf_out.create_dataset('/entry/data/cleaned_data_threshold_filtered',data=h_im)
 	hf_out.create_dataset('/entry/data/cleaned_data_threshold_filtered_labels',data=labels)
-	# Image.fromarray(h_im).save(imageFN+'.bin.input.tif')
 	tInt1b = time.time()
 	print(f'Time elapsed in label filtering: {tInt1b-tInt1a}')
 	
@@ -255,6 +241,7 @@ def runFile(imageFN):
 	# We have deltaPos and bestLenThis, we should use gaussWidth
 	gaussWidth = int(math.ceil(0.25*math.ceil(min(deltaPos,bestLenThis))))
 	h_im2 = ndimg.gaussian_filter(h_im,gaussWidth)
+	print(f'Blurring width of {gaussWidth} pixels was used.')
 
 	tInt1c = time.time()
 	print(f'Time elapsed in calculating widths: {tInt1c-tInt1b}')
@@ -267,7 +254,6 @@ def runFile(imageFN):
 
 	h_im2.astype(np.double).tofile(imageFN+'.bin') # THIS IS THE FILE FED TO THE INDEXING C/CU CODE.
 	hf_out.create_dataset('/entry/data/input_blurred',data=h_im2)
-	# Image.fromarray(h_im2).save(imageFN+'.bin.inputBlurred.tif')
 	tInt1 = time.time()
 	print(f'Time elapsed in watershed: {tInt1-tInt1c}')
 
@@ -300,10 +286,6 @@ def runFile(imageFN):
 	outfsp = open(imageFN+'.bin.good_spots.txt','a')
 	outfor.write(headgr)
 	outfsp.write(headsp)
-
-	# orientations = []
-	# spots = []
-	# legends=[]
 
 	nsols = 0
 	label_found = []
@@ -373,7 +355,6 @@ def runFile(imageFN):
 	go_sp.attrs['head'] = np.string_(headsp)
 	# Find the labels found, remove them and save a figure with those spots only.
 	label_found = set(label_found)
-	print(f'Blurring width of {gaussWidth} pixels was used.')
 	print(f'{len(centers)} peaks in original image, {len(label_found)} successfully identified.')
 	print(f'{nsols} orientations were found after filtering out intensity and duplicate matches.')
 	im_notfound = np.copy(h_im)
@@ -388,10 +369,6 @@ def runFile(imageFN):
 	tInt3 = time.time()
 	print(f'Time elapsed in Sorting: {tInt3-tInt2}')
 	print(f'Total time for this image: {tInt3-tSt}')
-
-	# Image.fromarray(im_found).save(imageFN+'.bin.FoundPixels.tif')
-	# Image.fromarray(im_notfound).save(imageFN+'.bin.notFoundPixels.tif')
-	# Image.fromarray(ndimg.gaussian_filter(im_notfound,gaussWidth)).save(imageFN+'.bin.notFoundPixelsBlurred.tif')
 
 for iF in imageFiles:
 	fparams = open(configFile,'w')
