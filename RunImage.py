@@ -315,15 +315,14 @@ def runFile(imageFN):
 	else: orientationInfo = np.expand_dims(orientationInfo,axis=0)
 
 	# Make a figure with the image on the background
-	fig = plt.figure(frameon=False)
-	ax = plt.Axes(fig,[0.,0.,1.,1.])
-	ax.set_axis_off()
-	fig.add_axes(ax)
+	# fig = plt.figure(frameon=False)
+	# ax = plt.Axes(fig,[0.,0.,1.,1.])
+	# ax.set_axis_off()
+	# fig.add_axes(ax)
 	# fig,ax = plt.subplots()
 	h_im_plt = h_im
 	h_im_plt[h_im_plt==0] = 1
-	ax.imshow(np.log(h_im_plt),cmap='Greens')
-	return
+	# ax.imshow(np.log(h_im_plt),cmap='Greens')
 
 	orientationNr = 0
 	for orientation in orientationInfo:
@@ -346,7 +345,7 @@ def runFile(imageFN):
 			#Figure out which labels were found
 			for spot in goodSpots:
 				indices = indices_to_text(int(spot[2]),int(spot[3]),int(spot[4]))
-				ax.text(spot[5]-np.random.randint(0,20),spot[6]-20,indices,c=colors(orientationNr))
+				# ax.text(spot[5]-np.random.randint(0,20),spot[6]-20,indices,c=colors(orientationNr))
 				if labels2[int(spot[6])][int(spot[5])]:
 					label_found.append(labels2[int(spot[6])][int(spot[5])])
 			# We need to check for the spots that were overlapping, but in the gaussian blurred image
@@ -358,12 +357,12 @@ def runFile(imageFN):
 			np.savetxt(outfsp,goodSpots,fmt='%4d\t%3d\t%3d\t%3d\t%3d\t%5d\t%5d\t%9.6f\t%9.6f\t%9.6f\t%7d')
 			# Save an image with the blobs from found spots as open squares and orientation id
 			lbl = 'OrientationID '+str(int(thisID))
-			ax.plot(goodSpots[:,5],goodSpots[:,6],'ks', markerfacecolor='none', ms=3, markeredgecolor=colors(orientationNr),markeredgewidth=0.1,label=lbl)
+			# ax.plot(goodSpots[:,5],goodSpots[:,6],'ks', markerfacecolor='none', ms=3, markeredgecolor=colors(orientationNr),markeredgewidth=0.1,label=lbl)
 			orientationNr+=1
-	plt.legend()
-	plt.savefig(imageFN+'.bin.LabeledImage.tif',dpi=outdpi)
-	l_im = np.array(Image.open(imageFN+'.bin.LabeledImage.tif').convert('RGB'))
-	hf_out.create_dataset('/entry/results/LabeledImage',data=l_im)
+	# plt.legend()
+	# plt.savefig(imageFN+'.bin.LabeledImage.tif',dpi=outdpi)
+	# l_im = np.array(Image.open(imageFN+'.bin.LabeledImage.tif').convert('RGB'))
+	# hf_out.create_dataset('/entry/results/LabeledImage',data=l_im)
 	outfor.close()
 	outfsp.close()
 	goodGrs = np.genfromtxt(imageFN+'.bin.good_solutions.txt',skip_header=1)
