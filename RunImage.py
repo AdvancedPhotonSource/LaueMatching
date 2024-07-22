@@ -247,9 +247,9 @@ def runFile(imageFN):
 	print(f'Time elapsed in calculating widths: {tInt1c-tInt1b}')
 	labels2 = np.copy(labels)
 	nlabels2 = nlabels
-	# # Use watershed to find the labels
-	# labels2 = skimage.segmentation.watershed(-h_im2,mask=h_im2,connectivity=2)
-	# nlabels2 = np.max(labels2)
+	# Use watershed to find the labels
+	labels2 = skimage.segmentation.watershed(-h_im2,mask=h_im2,connectivity=2)
+	nlabels2 = np.max(labels2)
 
 	# Hard coded that maximum number of orientations can be nSpots/5.
 	colors = plt.get_cmap('nipy_spectral',nlabels2/5)
