@@ -139,7 +139,7 @@ def getSpots(recip):
 	for pixel in pixels:
 		if np.random.randint(0,10) > 2:
 			nrPx+=1
-			img[int(pixel.item(1)),int(pixel.item(0))] = np.random.randint(100,16000)
+			img[int(pixel.item(1)),int(pixel.item(0))] = np.random.randint(500,16000)
 	print(f'Number of spots: {nrPx}')
 
 img = np.zeros((Nx,Ny))
