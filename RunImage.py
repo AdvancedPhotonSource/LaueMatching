@@ -313,6 +313,7 @@ def runFile(imageFN):
 
 	if (len(orientationInfo.shape)==2): orientationInfo = orientationInfo[np.argsort(-orientationInfo[:,4])]
 	else: orientationInfo = np.expand_dims(orientationInfo,axis=0)
+	return
 
 	# Make a figure with the image on the background
 	fig = plt.figure(frameon=False)
