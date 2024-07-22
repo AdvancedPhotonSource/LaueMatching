@@ -5,4 +5,4 @@ pillow
 scikit-image
 diplib
 matplotlib
-opencv-contrib-python
+opencv-python-headless
