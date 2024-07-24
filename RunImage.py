@@ -170,6 +170,9 @@ def indices_to_text(h,k,l):
 def calcL2(l1,l2):
 	return math.sqrt((l1[0]-l2[0])**2+(l1[1]-l2[1])**2)
 
+if os.path.exists(backgroundFN):
+	bkg = np.fromfile(backgroundFN,dtype=np.double).reshape((nPxX,nPxY))
+
 def runFile(imageFN):
 	print(f"Starting file: {imageFN}")
 	tSt = time.time()
@@ -187,7 +190,7 @@ def runFile(imageFN):
 		np.array(background).astype(np.double).tofile(backgroundFN)
 	else:
 		print("Background file was found, will not compute again.")
-		background = np.fromfile(backgroundFN,dtype=np.double).reshape((nPxX,nPxY))
+		background = bkg
 	
 	h_im_corr = h_im.astype(np.double) - background
 	threshT = 60 * (1+np.std(h_im_corr)//60)
