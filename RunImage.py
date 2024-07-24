@@ -258,6 +258,7 @@ def runFile(imageFN):
 	else:
 		labels2 = np.copy(labels)
 		nlabels2 = nlabels
+		print('Watershed was not used.')
 
 	# Hard coded that maximum number of orientations can be nSpots/5.
 	colors = plt.get_cmap('nipy_spectral',nlabels2/5)
