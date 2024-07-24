@@ -253,6 +253,8 @@ def runFile(imageFN):
 		# Use watershed to find the labels
 		labels2 = skimage.segmentation.watershed(-h_im2,mask=h_im2,connectivity=2)
 		nlabels2 = np.max(labels2)
+		tInt1 = time.time()
+		print(f'Time elapsed in watershed: {tInt1-tInt1c}')	
 	else:
 		labels2 = np.copy(labels)
 		nlabels2 = nlabels
@@ -262,8 +264,6 @@ def runFile(imageFN):
 
 	h_im2.astype(np.double).tofile(imageFN+'.bin') # THIS IS THE FILE FED TO THE INDEXING C/CU CODE.
 	hf_out.create_dataset('/entry/data/input_blurred',data=h_im2)
-	tInt1 = time.time()
-	print(f'Time elapsed in watershed: {tInt1-tInt1c}')
 
 	### RUN INDEXING
 	fout = open(imageFN+'.LaueMatching_stdout.txt','w')
