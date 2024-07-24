@@ -9,7 +9,7 @@ import math
 import os, sys
 import subprocess
 import shutil
-from PIL import Image
+# from PIL import Image     # LABEL
 import diplib as dip
 import skimage
 import argparse
