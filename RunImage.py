@@ -61,6 +61,7 @@ minArea = 10
 backgroundFN = 'median.bin'
 sym = 'F'
 thresh = 0
+doWatershed = 1
 for line in lines:
 	if line.startswith('SpaceGroup'):
 		sgNum = int(line.split()[1])
@@ -87,6 +88,8 @@ for line in lines:
 		dy = float(line.split()[1])
 	elif line.startswith('OrientationSpacing'):
 		orientSpacing = float(line.split()[1])
+	elif line.startswith('WatershedImage'):
+		doWatershed = int(line.split()[1])
 	elif line.startswith('NrPxX'):
 		nrPixels = int(line.split()[1])
 		nPxX = nrPixels
@@ -246,9 +249,13 @@ def runFile(imageFN):
 	tInt1c = time.time()
 	print(f'Time elapsed in calculating widths: {tInt1c-tInt1b}')
 
-	# Use watershed to find the labels
-	labels2 = skimage.segmentation.watershed(-h_im2,mask=h_im2,connectivity=2)
-	nlabels2 = np.max(labels2)
+	if doWatershed:
+		# Use watershed to find the labels
+		labels2 = skimage.segmentation.watershed(-h_im2,mask=h_im2,connectivity=2)
+		nlabels2 = np.max(labels2)
+	else:
+		labels2 = np.copy(labels)
+		nlabels2 = nlabels
 
 	# Hard coded that maximum number of orientations can be nSpots/5.
 	colors = plt.get_cmap('nipy_spectral',nlabels2/5)
