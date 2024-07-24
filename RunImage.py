@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 
+# from PIL import Image     # LABEL
 import h5py
 import numpy as np
 import scipy.ndimage as ndimg
@@ -9,7 +10,6 @@ import math
 import os, sys
 import subprocess
 import shutil
-# from PIL import Image     # LABEL
 import diplib as dip
 import skimage
 import argparse
