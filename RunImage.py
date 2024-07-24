@@ -24,7 +24,7 @@ class MyParser(argparse.ArgumentParser):
         self.print_help()
         sys.exit(2)
 
-parser = MyParser(description='''LaueMatching Index Images, contact hsharma@anl.gov''', formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+parser = MyParser(description='''LaueMatching Index Images, contact Hemant Sharma at hsharma@anl.gov''', formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 parser.add_argument('-configFile', type=str, required=True, help='Configuration file to run the analysis.')
 parser.add_argument('-imageFile', type=str, required=True, help='Image FileName, if you want multiple files, give first filename.')
 parser.add_argument('-nCPUs', type=int, required=True, help='Number of CPU cores to use. Both GPU and CPU codes use this.')
@@ -36,6 +36,7 @@ imageFile = args.imageFile
 nCPUs = args.nCPUs
 computeType = args.computeType
 nFiles = args.nFiles
+print("Running Laue Matching. In case of problems, contact Hemant Sharma at hsharma@anl.gov")
 
 if computeType not in ["CPU","GPU"]:
 	print("Compute type MUST be either CPU or GPU. Please provide either.")
@@ -141,16 +142,17 @@ else:
 
 # If hkl file does not exist, generate.
 if not os.path.exists(hklf):
+	print("HKL file was not found, generating.")
 	cmmd = f'{pytpath} {installPath}/GenerateHKLs.py -resultFileName {hklf} -sgnum {sgNum} -sym {sym} '
 	cmmd += f'-latticeParameter {latC} -RArray {r_arr} -PArray {p_arr} -NumPxX {nPxX} -NumPxY {nPxY} '
 	cmmd += f'-dx {dx} -dy {dy}'
 	subprocess.call(cmmd,shell=True)
+else:
+	print("HKL file was found, reading.")
 
 if os.path.exists(resultdir):
 	shutil.rmtree(resultdir,ignore_errors=True)
 os.makedirs(resultdir,exist_ok=True)
-
-print("Running Laue Matching")
 
 file_path = os.path.dirname(os.path.realpath(__file__))
 env = dict(os.environ)
@@ -178,11 +180,13 @@ def runFile(imageFN):
 	
 	# Check if background exists:
 	if not os.path.exists(backgroundFN):
+		print("Background file as not found, running background computation. Will save the file.")
 		background = dip.Image(h_im)
 		for i in range(nPasses):
 			background = dip.MedianFilter(background,filtRad)
 		np.array(background).astype(np.double).tofile(backgroundFN)
 	else:
+		print("Background file was found, will not compute again.")
 		background = np.fromfile(backgroundFN,dtype=np.double).reshape((nPxX,nPxY))
 	
 	h_im_corr = h_im.astype(np.double) - background
