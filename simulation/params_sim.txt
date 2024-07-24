@@ -25,6 +25,7 @@ MaxAngle 5 # Minimum misorientation between grains to be detected.
 # What qualifies a spot and image processing parameters
 MinArea 5 # Minimum number of pixels that qualify a spot. Connected pixels smaller than this number will be set to 0.
 Threshold 0 # If you want to apply a threshold. It will also compute the threshold automatically, and will use the higher of the two values. This is before gaussian blurring.
+doWatershed 0 # If you don't want to do watershed to split overlapping peaks, put this to 0.
 
 # Where to save results, which files to read etc.
 ResultDir results_simulation # This directory will be created in the execution directory.
