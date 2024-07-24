@@ -382,8 +382,10 @@ def runFile(imageFN):
 for iF in imageFiles:
 	fparams = open(configFile,'w')
 	for line in lines:
-		if line.startswith('DoFwd'): fparams.write(doFwd)
-		else: fparams.write(line)
+		if line.startswith('DoFwd'): 
+			fparams.write(doFwd)
+		else: 
+			fparams.write(line)
 	fparams.close()
 	runFile(iF)
 	doFwd = 'DoFwd 0\n'
