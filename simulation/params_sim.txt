@@ -1,39 +1,39 @@
 # Material Definitions
-LatticeParameter 0.35238 0.35238 0.35238 90 90 90
-SpaceGroup 225
-AStar 17.8307091979
-Symmetry F
+LatticeParameter 0.35238 0.35238 0.35238 90 90 90 # [nm, degrees]
+SpaceGroup 225 # Number from 1-230
+AStar 17.8307091979 # nm-1 #### ONLY NEEDED FOR GENERATING SIMULATION
+Symmetry F # One from F I C A R
 
 #Detector Definitions
-P_Array 0.028745 0.002788 0.513115
-R_Array -1.20131258 -1.21399082 -1.21881158
-PxX 0.0002
-PxY 0.0002
-NrPxX 2048
-NrPxY 2048
+P_Array 0.028745 0.002788 0.513115 # 3 array defining the location of the detector. [meters] [See paper for definitions]
+R_Array -1.20131258 -1.21399082 -1.21881158 # 3 array defining the orientation of the detector [See paper for definitions]
+PxX 0.0002 # Horizontal pixel size [meters]
+PxY 0.0002 # Vertical pixel size [meters]
+NrPxX 2048 # Number of horizontal pixels
+NrPxY 2048 # Number of vertical pixels
 
 #Energy filtering
-Elo 5
-Ehi 30
+Elo 5 # Minimum expected energy [keV]
+Ehi 30 # Maximum expected enegy [keV]
 
-# What qualifies a grain?
-MinNrSpots 7
-MinGoodSpots 5
-MinIntensity 50
-MaxAngle 5
+# What qualifies an orientation?
+MinNrSpots 7 # Minimum number of spots in the first pass to qualify an orientation
+MinGoodSpots 5 # Minimum number of good spots in the second pass to qualify an orientation [See paper for details]
+MinIntensity 50 # Minimum total intensity from forward projection pixels to qualify an orientation
+MaxAngle 5 # Minimum misorientation between grains to be detected.
 
 # What qualifies a spot and image processing parameters
-MinArea 5
-Threshold 0
+MinArea 5 # Minimum number of pixels that qualify a spot. Connected pixels smaller than this number will be set to 0.
+Threshold 0 # If you want to apply a threshold. It will also compute the threshold automatically, and will use the higher of the two values. This is before gaussian blurring.
 
 # Where to save results, which files to read etc.
-ResultDir results_simulation
-HKLFile valid_hkls.csv
-OrientationFile /dev/shm/100MilOrients.bin
+ResultDir results_simulation # This directory will be created in the execution directory.
+HKLFile valid_hkls.csv # The valid hkls will be saved / read from this file. Will be created if it doesn't exist.
+OrientationFile /dev/shm/100MilOrients.bin # Orientations file, if this is in /dev/shm, it will memory map it, is very fast.
 
 #Simulation Definitions
-MaxNrLaueSpots 30
-ForwardFile /dev/shm/Simulated_FwdSim.bin
-OrientationSpacing 0.4
-DoFwd 0
-SimulationSmoothingWidth 2
+MaxNrLaueSpots 30 # For simulation, the maximum number of expected spots. This is used in the first pass only. The second pass during refinement uses 3x this number.
+ForwardFile /dev/shm/Simulated_FwdSim.bin # Location where the forward simulation is written / read from. /dev/shm is recommended for performance.
+OrientationSpacing 0.4 # Orientation spacing for the OrientationFile in degrees. This doesn't need to be exact, but should be close to what is used. 0.4 for the 100 million points.
+DoFwd 0 # If you want to do forward simulation, put to 1. If the ForwardFile does not exist, it will automatically put this to 1 and run the simulation.
+SimulationSmoothingWidth 2 # Only for generating a synthetic simulation image, it is the width of the Gaussian diffraction peaks.
