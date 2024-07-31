@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 
+from PIL import Image     # LABEL
 import h5py
 import numpy as np
 import scipy.ndimage as ndimg
@@ -313,7 +314,6 @@ def runFile(imageFN):
 	else: orientationInfo = np.expand_dims(orientationInfo,axis=0)
 
 	# Make a figure with the image on the background     # LABEL
-	from PIL import Image     # LABEL
 	fig = plt.figure(frameon=False)     # LABEL
 	ax = plt.Axes(fig,[0.,0.,1.,1.])     # LABEL
 	ax.set_axis_off()     # LABEL
