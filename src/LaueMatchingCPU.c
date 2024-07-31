@@ -1046,6 +1046,7 @@ int main(int argc, char *argv[])
 
 	uint16_t *outArr;
 	LowNr = 1;
+	bool *pxImgAll;
 	if (doFwd==0){
 		// If the file is located at /dev/shm, we can just mmap it:
 		str = "/dev/shm";
@@ -1055,6 +1056,8 @@ int main(int argc, char *argv[])
 			int fd = open(outfn,O_RDONLY);
 			outArr = (uint16_t *) mmap(0,szArrFull*sizeof(uint16_t),PROT_READ,MAP_SHARED,fd,0);
 		}
+	} else {
+		pxImgAll = calloc(nrPxX*nrPxY*numProcs,sizeof(*pxImgAll));
 	}
 
 	#pragma omp parallel num_threads(numProcs)
@@ -1120,7 +1123,11 @@ int main(int argc, char *argv[])
 			totInt = 0;
 			if (doFwd==1){
 				bool *pxImg;
-				pxImg = calloc(nrPxX*nrPxY,sizeof(*pxImg));
+				size_t offstBoolImg;
+				offstBoolImg = nrPxX;
+				offstBoolImg *= nrPxY;
+				offstBoolImg *= procNr;
+				pxImg = &pxImgAll[offstBoolImg];
 				spotNr = 0;
 				for (i=0;i<3;i++) for (j=0;j<3;j++) tO[i][j] = orients[orientNr*9+i*3+j];
 				MatrixMultF33(tO,recip,thisOrient);
@@ -1180,7 +1187,9 @@ int main(int argc, char *argv[])
 						}
 					}
 				}
-				free(pxImg);
+				for (iterNr=0;iterNr<spotNr;iterNr++){
+					pxImg[outArrThis[(orientNr-startOrientNr)*(1+2*maxNrSpots)+1+2*iterNr+0]*nrPxY+outArrThis[(orientNr-startOrientNr)*(1+2*maxNrSpots)+1+2*iterNr+1]] = false;
+				}
 				outArrThis[(orientNr-startOrientNr)*(1+2*maxNrSpots)+0] = (uint16_t)spotNr;
 			} else {
                 loc = (orientNr-startOrientNr)*(1+2*maxNrSpots)+0;
