@@ -345,7 +345,7 @@ def runFile(imageFN):
 			#Figure out which labels were found
 			for spot in goodSpots:
 				indices = indices_to_text(int(spot[2]),int(spot[3]),int(spot[4]))
-				ax.text(spot[5]-np.random.randint(0,20),spot[6]-20,indices,c=colors(orientationNr))     # LABEL
+				# ax.text(spot[5]-np.random.randint(0,20),spot[6]-20,indices,c=colors(orientationNr))     # LABEL
 				if labels2[int(spot[6])][int(spot[5])]:
 					label_found.append(labels2[int(spot[6])][int(spot[5])])
 			# We need to check for the spots that were overlapping, but in the gaussian blurred image
@@ -356,7 +356,7 @@ def runFile(imageFN):
 			np.savetxt(outfor,orientation,fmt=fmtout)
 			np.savetxt(outfsp,goodSpots,fmt='%4d\t%3d\t%3d\t%3d\t%3d\t%5d\t%5d\t%9.6f\t%9.6f\t%9.6f\t%7d')
 			# Save an image with the blobs from found spots as open squares and orientation id
-			lbl = 'OrientationID '+str(int(orientationNr))
+			lbl = 'OrientationID '+str(int(orientationNr))     # LABEL
 			ax.plot(goodSpots[:,5],goodSpots[:,6],'ks', markerfacecolor='none', ms=3, markeredgecolor=colors(orientationNr),markeredgewidth=0.1,label=lbl)     # LABEL
 			orientationNr+=1
 	plt.legend()     # LABEL
