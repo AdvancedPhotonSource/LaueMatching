@@ -197,6 +197,7 @@ def runFile(imageFN):
 	threshT = 60 * (1+np.std(h_im_corr)//60)
 	# if thresh > threshT:
 	# 	threshT = thresh # Use larger value
+	threshT = thresh
 	print(f'Computed/input threshold: {threshT}')
 	h_im_corr[h_im_corr < threshT] = 0
 	h_im = h_im_corr.astype(np.uint16)
