@@ -270,7 +270,7 @@ def runFile(imageFN):
 		print('Watershed was not used.')
 
 	# Hard coded that maximum number of orientations can be nSpots/5.
-	colors = plt.get_cmap('nipy_spectral',nlabels2/5)
+	colors = plt.get_cmap('nipy_spectral',nlabels2/minGoodSpots)
 
 	h_im2.astype(np.double).tofile(imageFN+'.bin') # THIS IS THE FILE FED TO THE INDEXING C/CU CODE.
 	hf_out.create_dataset('/entry/data/input_blurred',data=h_im2)
