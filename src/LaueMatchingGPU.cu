@@ -1043,6 +1043,8 @@ if (argc!=6){
 	} else printf("Forward simulation was requested, will be saved to %s.\n",outfn);
 	
 	if (doFwd==1){
+		bool *pxImgAll;
+		pxImgAll = calloc(nrPxX*nrPxY*numProcs,sizeof(*pxImgAll));
 		#pragma omp parallel num_threads(numProcs)
 		{
 			int procNr = omp_get_thread_num();
@@ -1080,6 +1082,12 @@ if (argc!=6){
 			int spotNr, iterNr;
 			int nSpots;
 			double totInt;
+			bool *pxImg;
+			size_t offstBoolImg;
+			offstBoolImg = nrPxX;
+			offstBoolImg *= nrPxY;
+			offstBoolImg *= procNr;
+			pxImg = &pxImgAll[offstBoolImg];
 			for (orientNr = startOrientNr; orientNr < endOrientNr; orientNr++){
 				nSpots = 0;
 				totInt = 0;
@@ -1115,14 +1123,15 @@ if (argc!=6){
 					E = hc_keVnm * qlen / (4*M_PI*sinTheta);
 					if (E < Elo || E > Ehi) continue;
 					badSpot = 0;
-					for (iterNr=0;iterNr<spotNr;iterNr++){
-						if ((fabs(qhat[0] - qhatarr[3*iterNr+0])*100000 < 0.1)&&
-							(fabs(qhat[1] - qhatarr[3*iterNr+1])*100000 < 0.1)&&
-							(fabs(qhat[2] - qhatarr[3*iterNr+2])*100000 < 0.1)) {
-								badSpot = 1;
-								break;
-						}
-					}
+					if (pxImg[px*nrPxY+py]) badSpot = 1;
+					// for (iterNr=0;iterNr<spotNr;iterNr++){
+					// 	if ((fabs(qhat[0] - qhatarr[3*iterNr+0])*100000 < 0.1)&&
+					// 		(fabs(qhat[1] - qhatarr[3*iterNr+1])*100000 < 0.1)&&
+					// 		(fabs(qhat[2] - qhatarr[3*iterNr+2])*100000 < 0.1)) {
+					// 			badSpot = 1;
+					// 			break;
+					// 	}
+					// }
 					if (badSpot == 0){
 						qhatarr[3*spotNr+0] = qhat[0];
 						qhatarr[3*spotNr+1] = qhat[1];
@@ -1139,6 +1148,9 @@ if (argc!=6){
 							break;
 						}
 					}
+				}
+				for (iterNr=0;iterNr<spotNr;iterNr++){
+					pxImg[outArrThis[(orientNr-startOrientNr)*(1+2*maxNrSpots)+1+2*iterNr+0]*nrPxY+outArrThis[(orientNr-startOrientNr)*(1+2*maxNrSpots)+1+2*iterNr+1]] = false;
 				}
 				outArrThis[(orientNr-startOrientNr)*(1+2*maxNrSpots)+0] = (uint16_t)spotNr;
 				if (nSpots >= minNrSpots && totInt >= minIntensity){
