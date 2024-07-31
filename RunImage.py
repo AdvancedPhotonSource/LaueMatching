@@ -169,13 +169,14 @@ def indices_to_text(h,k,l):
 def calcL2(l1,l2):
 	return math.sqrt((l1[0]-l2[0])**2+(l1[1]-l2[1])**2)
 
+bkg = np.zeros((nPxX,nPxY))
 if os.path.exists(backgroundFN):
 	bkg = np.fromfile(backgroundFN,dtype=np.double).reshape((nPxX,nPxY))
 
 def runFile(imageFN):
 	print(f"Starting file: {imageFN}")
 	tSt = time.time()
-	global thresh
+	global thresh, bkg
 	h_image = h5py.File(imageFN,'r')
 	h_im = np.array(h_image['/entry1/data/data'][()])
 	h_im_raw = np.copy(h_im)
