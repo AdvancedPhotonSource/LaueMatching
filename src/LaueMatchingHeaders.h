@@ -14,6 +14,7 @@
 #include <fcntl.h>
 #include <string.h>
 #include <nlopt.h>
+#include <stdbool.h>
 
 #ifdef __linux__ 
 #include <malloc.h>
