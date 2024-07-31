@@ -30,12 +30,14 @@ parser.add_argument('-imageFile', type=str, required=True, help='Image FileName,
 parser.add_argument('-nCPUs', type=int, required=True, help='Number of CPU cores to use. Both GPU and CPU codes use this.')
 parser.add_argument('-computeType', type=str, required=False, default='CPU', help='Computation type: provide either CPU or GPU.')
 parser.add_argument('-nFiles', type=int, required=False, default=1, help='Number of files to run. Files must be of the format: FILESTEM_XX.h5, where XX is the filenumber.')
+parser.add_argument('-overrideThresh', type=int, required=False, default=0, help='If you want to override the standard-deviation computed threshold.')
 args, unparsed = parser.parse_known_args()
 configFile = args.configFile
 imageFile = args.imageFile
 nCPUs = args.nCPUs
 computeType = args.computeType
 nFiles = args.nFiles
+overrideThresh = args.overrideThresh
 print("Running Laue Matching. In case of problems, contact Hemant Sharma at hsharma@anl.gov")
 
 if computeType not in ["CPU","GPU"]:
@@ -195,9 +197,11 @@ def runFile(imageFN):
 	
 	h_im_corr = h_im.astype(np.double) - background
 	threshT = 60 * (1+np.std(h_im_corr)//60)
-	if thresh > threshT:
-		threshT = thresh # Use larger value
-	# threshT = thresh
+	if not overrideThresh:
+		if thresh > threshT:
+			threshT = thresh # Use larger value
+	else:
+		threshT = thresh
 	print(f'Computed/input threshold: {threshT}')
 	h_im_corr[h_im_corr < threshT] = 0
 	h_im = h_im_corr.astype(np.uint16)
