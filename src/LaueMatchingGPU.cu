@@ -1044,7 +1044,7 @@ if (argc!=6){
 	
 	if (doFwd==1){
 		bool *pxImgAll;
-		pxImgAll = calloc(nrPxX*nrPxY*numProcs,sizeof(*pxImgAll));
+		pxImgAll = (bool *) calloc(nrPxX*nrPxY*numProcs,sizeof(*pxImgAll));
 		#pragma omp parallel num_threads(numProcs)
 		{
 			int procNr = omp_get_thread_num();
