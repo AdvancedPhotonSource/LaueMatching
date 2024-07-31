@@ -357,7 +357,7 @@ def runFile(imageFN):
 			np.savetxt(outfsp,goodSpots,fmt='%4d\t%3d\t%3d\t%3d\t%3d\t%5d\t%5d\t%9.6f\t%9.6f\t%9.6f\t%7d')
 			# Save an image with the blobs from found spots as open squares and orientation id
 			lbl = 'OrientationID '+str(int(orientationNr))     # LABEL
-			ax.plot(goodSpots[:,5],goodSpots[:,6],'ks', markerfacecolor='none', ms=3, markeredgecolor=colors(orientationNr),markeredgewidth=0.1,label=lbl)     # LABEL
+			ax.plot(goodSpots[:,5],goodSpots[:,6],'ks', markerfacecolor='none', ms=3, markeredgecolor=colors(orientationNr),markeredgewidth=0.3,label=lbl)     # LABEL
 			orientationNr+=1
 	plt.legend()     # LABEL
 	plt.savefig(imageFN+'.bin.LabeledImage.tif',dpi=outdpi)     # LABEL
