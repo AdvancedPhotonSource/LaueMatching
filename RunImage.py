@@ -139,6 +139,10 @@ if os.path.exists(fwdf):
 else:
 	doFwd = 'DoFwd 1\n'
 
+if os.path.exists(resultdir):
+	shutil.rmtree(resultdir,ignore_errors=True)
+os.makedirs(resultdir,exist_ok=True)
+
 # If hkl file does not exist, generate.
 if not os.path.exists(hklf):
 	print("HKL file was not found, generating.")
@@ -148,10 +152,6 @@ if not os.path.exists(hklf):
 	subprocess.call(cmmd,shell=True)
 else:
 	print("HKL file was found, reading.")
-
-if os.path.exists(resultdir):
-	shutil.rmtree(resultdir,ignore_errors=True)
-os.makedirs(resultdir,exist_ok=True)
 
 file_path = os.path.dirname(os.path.realpath(__file__))
 env = dict(os.environ)
