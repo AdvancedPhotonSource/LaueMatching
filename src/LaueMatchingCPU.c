@@ -1161,14 +1161,6 @@ int main(int argc, char *argv[])
 					if (E < Elo || E > Ehi) continue;
 					badSpot = 0;
 					if (pxImg[px*nrPxY+py]) badSpot = 1;
-					// for (iterNr=0;iterNr<spotNr;iterNr++){
-					// 	if ((fabs(qhat[0] - qhatarr[3*iterNr+0])*100000 < 0.1)&&
-					// 	    (fabs(qhat[1] - qhatarr[3*iterNr+1])*100000 < 0.1)&&
-					// 	    (fabs(qhat[2] - qhatarr[3*iterNr+2])*100000 < 0.1)) {
-					// 			badSpot = 1;
-					// 			break;
-					// 	   }
-					// }
 					if (badSpot == 0){
 						pxImg[px*nrPxY+py] = true;
 						qhatarr[3*spotNr+0] = qhat[0];
