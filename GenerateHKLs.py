@@ -28,7 +28,7 @@ parser.add_argument('-dy', type=float, required=False, default=200e-6, help='Pix
 args, unparsed = parser.parse_known_args()
 fn = args.resultFileName
 sym = args.sym
-if sym not in 'FICAR' and len(sym) != 1:
+if sym not in 'FICARPB' and len(sym) != 1:
     print('Invalid value for sym, must be one character from F,I,C,A,R')
     sys.exit()
 LatC = args.latticeParameter
