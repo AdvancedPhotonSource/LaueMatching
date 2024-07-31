@@ -1119,6 +1119,8 @@ int main(int argc, char *argv[])
 			nSpots = 0;
 			totInt = 0;
 			if (doFwd==1){
+				bool *pxImg;
+				pxImg = calloc(nrPxX*nrPxY,sizeof(*pxImg));
 				spotNr = 0;
 				for (i=0;i<3;i++) for (j=0;j<3;j++) tO[i][j] = orients[orientNr*9+i*3+j];
 				MatrixMultF33(tO,recip,thisOrient);
@@ -1151,15 +1153,17 @@ int main(int argc, char *argv[])
 					E = hc_keVnm * qlen / (4*M_PI*sinTheta);
 					if (E < Elo || E > Ehi) continue;
 					badSpot = 0;
-					for (iterNr=0;iterNr<spotNr;iterNr++){
-						if ((fabs(qhat[0] - qhatarr[3*iterNr+0])*100000 < 0.1)&&
-						    (fabs(qhat[1] - qhatarr[3*iterNr+1])*100000 < 0.1)&&
-						    (fabs(qhat[2] - qhatarr[3*iterNr+2])*100000 < 0.1)) {
-								badSpot = 1;
-								break;
-						   }
-					}
+					if (pxImg[px*nrPxY+py]) badSpot = 1;
+					// for (iterNr=0;iterNr<spotNr;iterNr++){
+					// 	if ((fabs(qhat[0] - qhatarr[3*iterNr+0])*100000 < 0.1)&&
+					// 	    (fabs(qhat[1] - qhatarr[3*iterNr+1])*100000 < 0.1)&&
+					// 	    (fabs(qhat[2] - qhatarr[3*iterNr+2])*100000 < 0.1)) {
+					// 			badSpot = 1;
+					// 			break;
+					// 	   }
+					// }
 					if (badSpot == 0){
+						pxImg[px*nrPxY+py] = true;
 						qhatarr[3*spotNr+0] = qhat[0];
 						qhatarr[3*spotNr+1] = qhat[1];
 						qhatarr[3*spotNr+2] = qhat[2];
@@ -1176,6 +1180,7 @@ int main(int argc, char *argv[])
 						}
 					}
 				}
+				free(pxImg);
 				outArrThis[(orientNr-startOrientNr)*(1+2*maxNrSpots)+0] = (uint16_t)spotNr;
 			} else {
                 loc = (orientNr-startOrientNr)*(1+2*maxNrSpots)+0;
