@@ -184,7 +184,7 @@ def runFile(imageFN):
 	
 	# Check if background exists:
 	if not os.path.exists(backgroundFN):
-		print("Background file as not found, running background computation. Will save the file.")
+		print("Background file was not found, running background computation. Will save the file.")
 		background = dip.Image(h_im)
 		for i in range(nPasses):
 			background = dip.MedianFilter(background,filtRad)
@@ -195,8 +195,8 @@ def runFile(imageFN):
 	
 	h_im_corr = h_im.astype(np.double) - background
 	threshT = 60 * (1+np.std(h_im_corr)//60)
-	if thresh > threshT:
-		threshT = thresh # Use larger value
+	# if thresh > threshT:
+	# 	threshT = thresh # Use larger value
 	print(f'Computed/input threshold: {threshT}')
 	h_im_corr[h_im_corr < threshT] = 0
 	h_im = h_im_corr.astype(np.uint16)
