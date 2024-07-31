@@ -294,9 +294,9 @@ def runFile(imageFN):
 
 	# Write some stuff
 	or_gr = hf_out.create_dataset('/entry/results/original_orientations',data=orientationInfo)
-	or_gr.attrs['head'] = np.string_(headgr)
+	or_gr.attrs['head'] = np.bytes_(headgr)
 	or_sp = hf_out.create_dataset('/entry/results/original_spots',data=spotInfo)
-	or_sp.attrs['head'] = np.string_(headsp)
+	or_sp.attrs['head'] = np.bytes_(headsp)
 	outfor = open(imageFN+'.bin.good_solutions.txt','a')
 	outfsp = open(imageFN+'.bin.good_spots.txt','a')
 	outfor.write(headgr)
@@ -366,9 +366,9 @@ def runFile(imageFN):
 	goodGrs = np.genfromtxt(imageFN+'.bin.good_solutions.txt',skip_header=1)
 	goodSps = np.genfromtxt(imageFN+'.bin.good_spots.txt',skip_header=1)
 	go_gr = hf_out.create_dataset('/entry/results/filtered_orientations',data=goodGrs)
-	go_gr.attrs['head'] = np.string_(headgr)
+	go_gr.attrs['head'] = np.bytes_(headgr)
 	go_sp = hf_out.create_dataset('/entry/results/filtered_spots',data=goodSps)
-	go_sp.attrs['head'] = np.string_(headsp)
+	go_sp.attrs['head'] = np.bytes_(headsp)
 	# Find the labels found, remove them and save a figure with those spots only.
 	label_found = set(label_found)
 	print(f'{len(centers)} peaks in original image, {len(label_found)} successfully identified.')
