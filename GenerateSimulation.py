@@ -99,6 +99,7 @@ def XYZ2pixel(XYZ):
 	return (px, py)
 
 def getSpots(recip):
+	global posArr
 	hkls = np.copy(hklarr[:,:3])
 	qvecs = recip.dot(hkls.T).T
 	qlens = np.linalg.norm(qvecs,axis=1)
@@ -137,19 +138,24 @@ def getSpots(recip):
 	pixels = pixels[goodE.flat,:]
 	nrPx = 0
 	for pixel in pixels:
+		posArr.append(pixel.item(1),pixel.item(0))
 		if np.random.randint(0,10) > 2:
 			nrPx+=1
 			img[int(pixel.item(1)),int(pixel.item(0))] = np.random.randint(500,16000)
+			posArr[-1].append(1)
+		else:
+			posArr[-1].append(0)
 	print(f'Number of spots: {nrPx}')
 
 img = np.zeros((Nx,Ny))
+posArr = []
 
 rotang = np.linalg.norm(R)
 rotvect = R/np.linalg.norm(R)
 rot = np.matrix([[cos(rotang)+(1-cos(rotang))*(rotvect[0]**2), (1-cos(rotang))*rotvect[0]*rotvect[1]-sin(rotang)*rotvect[2], (1-cos(rotang))*rotvect[0]*rotvect[2]+sin(rotang)*rotvect[1]],
                               [(1-cos(rotang))*rotvect[1]*rotvect[0]+sin(rotang)*rotvect[2], cos(rotang)+(1-cos(rotang))*(rotvect[1]**2),  (1-cos(rotang))*rotvect[1]*rotvect[2]-sin(rotang)*rotvect[0]],
                               [(1-cos(rotang))*rotvect[2]*rotvect[0]-sin(rotang)*rotvect[1], (1-cos(rotang))*rotvect[2]*rotvect[1]+sin(rotang)*rotvect[0], cos(rotang)+(1-cos(rotang))*(rotvect[2]**2)]
-                              ]);
+                              ])
 ki = np.matrix([0,0,1.0])
 recips = orientations*astar
 
@@ -161,4 +167,7 @@ img = ndimg.gaussian_filter(img,gaussWidth).astype(np.uint16)
 Image.fromarray(img).save(outFN+'.tif')
 hFile = h5py.File(outFN,'w')
 hFile.create_dataset('/entry1/data/data',data=img)
-np.savetxt(f'{outFN}_simulated_recips.txt',recips,fmt='%.6f',delimiter=' ')
+hFile.create_dataset('/entry1/recips',data=recips)
+posArr = np.array(posArr)
+hFile.create_dataset('/entry1/spots',data=posArr)
+hFile.close()
