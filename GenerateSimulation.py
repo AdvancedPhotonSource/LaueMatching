@@ -98,7 +98,7 @@ def XYZ2pixel(XYZ):
 	if py < 0 or py >= (Ny-1): return None
 	return (px, py)
 
-def getSpots(recip):
+def getSpots(recip,nr):
 	global posArr
 	hkls = np.copy(hklarr[:,:3])
 	qvecs = recip.dot(hkls.T).T
@@ -138,7 +138,7 @@ def getSpots(recip):
 	pixels = pixels[goodE.flat,:]
 	nrPx = 0
 	for pixel in pixels:
-		posArr.append([pixel.item(1),pixel.item(0)])
+		posArr.append([pixel.item(1),pixel.item(0),nr])
 		if np.random.randint(0,10) > 2:
 			nrPx+=1
 			img[int(pixel.item(1)),int(pixel.item(0))] = np.random.randint(500,16000)
@@ -159,9 +159,11 @@ rot = np.matrix([[cos(rotang)+(1-cos(rotang))*(rotvect[0]**2), (1-cos(rotang))*r
 ki = np.matrix([0,0,1.0])
 recips = orientations*astar
 
+nr = 0
 for recip in recips:
 	recip = recip.reshape((3,3))
-	getSpots(recip)
+	getSpots(recip,nr)
+	nr+=1
 
 img = ndimg.gaussian_filter(img,gaussWidth).astype(np.uint16)
 Image.fromarray(img).save(outFN+'.tif')
