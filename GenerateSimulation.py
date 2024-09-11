@@ -152,10 +152,9 @@ posArr = []
 
 rotang = np.linalg.norm(R)
 rotvect = R/np.linalg.norm(R)
-rot = np.matrix([[cos(rotang)+(1-cos(rotang))*(rotvect[0]**2), (1-cos(rotang))*rotvect[0]*rotvect[1]-sin(rotang)*rotvect[2], (1-cos(rotang))*rotvect[0]*rotvect[2]+sin(rotang)*rotvect[1]],
-                              [(1-cos(rotang))*rotvect[1]*rotvect[0]+sin(rotang)*rotvect[2], cos(rotang)+(1-cos(rotang))*(rotvect[1]**2),  (1-cos(rotang))*rotvect[1]*rotvect[2]-sin(rotang)*rotvect[0]],
-                              [(1-cos(rotang))*rotvect[2]*rotvect[0]-sin(rotang)*rotvect[1], (1-cos(rotang))*rotvect[2]*rotvect[1]+sin(rotang)*rotvect[0], cos(rotang)+(1-cos(rotang))*(rotvect[2]**2)]
-                              ])
+rot = np.matrix([[cos(rotang)+(1-cos(rotang))*(rotvect[0]**2),                  (1-cos(rotang))*rotvect[0]*rotvect[1]-sin(rotang)*rotvect[2], (1-cos(rotang))*rotvect[0]*rotvect[2]+sin(rotang)*rotvect[1]],
+                 [(1-cos(rotang))*rotvect[1]*rotvect[0]+sin(rotang)*rotvect[2], cos(rotang)+(1-cos(rotang))*(rotvect[1]**2),                  (1-cos(rotang))*rotvect[1]*rotvect[2]-sin(rotang)*rotvect[0]],
+                 [(1-cos(rotang))*rotvect[2]*rotvect[0]-sin(rotang)*rotvect[1], (1-cos(rotang))*rotvect[2]*rotvect[1]+sin(rotang)*rotvect[0], cos(rotang)+(1-cos(rotang))*(rotvect[2]**2)]])
 ki = np.matrix([0,0,1.0])
 recips = orientations*astar
 
