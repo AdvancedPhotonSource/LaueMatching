@@ -32,6 +32,7 @@ outFN = args.outputFile
 hklf = 'valid_reflections.csv'
 sym= 'F'
 lines = open(configFile,'r').readlines()
+astar = -1
 for line in lines:
 	if line.startswith('SpaceGroup'):
 		sgNum = int(line.split()[1])
@@ -69,8 +70,14 @@ P = np.array([float(p) for p in p_arr.split()])
 R = np.array([float(r) for r in r_arr.split()])
 Nx = nPxX
 Ny = nPxY
+if astar == -1:
+	astar = 2*pi/latC[0]
 
-orientations = np.genfromtxt(orientationFN)
+lines = open(orientationFN).readlines()
+if lines[0].startswith('%GrainNr'):
+	orientations = np.genfromtxt(orientationFN,skip_header=1)[:,22:31]
+else:
+	orientations = np.genfromtxt(orientationFN)
 
 # If hkl file does not exist, generate.
 if not os.path.exists(hklf):
