@@ -201,7 +201,7 @@ def runFile(imageFN):
 		if thresh > threshT:
 			threshT = thresh # Use larger value
 	else:
-		threshT = thresh
+		threshT = overrideThresh
 	print(f'Computed/input threshold: {threshT}')
 	h_im_corr[h_im_corr < threshT] = 0
 	h_im = h_im_corr.astype(np.uint16)
