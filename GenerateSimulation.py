@@ -71,7 +71,7 @@ R = np.array([float(r) for r in r_arr.split()])
 Nx = nPxX
 Ny = nPxY
 if astar == -1:
-	astar = 2*pi/latC[0]
+	astar = 2*pi/float(latC[0])
 
 lines = open(orientationFN).readlines()
 if lines[0].startswith('%GrainNr'):
