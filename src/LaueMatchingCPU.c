@@ -506,11 +506,11 @@ inline double calcOverlap(double *image, double euler[3], int *hkls, int nhkls, 
 		badSpot = 0;
 		for (iterNr=0;iterNr<spotNr;iterNr++){
 			if ((fabs(qhat[0] - outArrThis[3*iterNr+0])*100000 < 0.1)&&
-			   (fabs(qhat[1] - outArrThis[3*iterNr+1])*100000 < 0.1)&&
-			   (fabs(qhat[2] - outArrThis[3*iterNr+2])*100000 < 0.1)) {
+				(fabs(qhat[1] - outArrThis[3*iterNr+1])*100000 < 0.1)&&
+				(fabs(qhat[2] - outArrThis[3*iterNr+2])*100000 < 0.1)) {
 					badSpot = 1;
 					break;
-			   }
+				}
 		}
 		if (badSpot == 0){
 			outArrThis[3*spotNr+0] = qhat[0];
@@ -1340,6 +1340,7 @@ int main(int argc, char *argv[])
 			rotTranspose,pArr,pxX,pxY,Elo,Ehi,tol,LatticeParameter,eulerFit,latCFit,&mv, doCrystalFit);
 		doCrystalFit = 1;
 		for (iK=0;iK<3;iK++) eulerBest[iK] = eulerFit[iK];
+		outArrThisFit = (double *) calloc(3*maxNrSpots,sizeof(*outArrThisFit));
 		FitOrientation(image,eulerBest,hkls,nhkls,nrPxX,nrPxY,recip,outArrThisFit,maxNrSpots,
 			rotTranspose,pArr,pxX,pxY,Elo,Ehi,tol,LatticeParameter,eulerFit,latCFit,&mv,doCrystalFit);
 		Euler2OrientMat(eulerFit,orientFit);
@@ -1347,6 +1348,7 @@ int main(int argc, char *argv[])
 		OrientMat2Quat33(orientFit,q2);
 		int simulNrSps=0;
 		calcRecipArray(latCFit,sg_num,recipFit);
+		outArrThisFit = (double *) calloc(3*maxNrSpots,sizeof(*outArrThisFit));
 		int nrSps = writeCalcOverlap(image, eulerFit, hkls, nhkls, nrPxX, nrPxY, recipFit, outArrThisFit, maxNrSpots, 
 			rotTranspose, pArr, pxX, pxY, Elo, Ehi, ExtraInfo, saveExtraInfo, &simulNrSps);
 		if (nrSps>=minNrSpots){
@@ -1354,6 +1356,7 @@ int main(int argc, char *argv[])
 			double miso = GetMisOrientation(q1,q2);
 			saveExtraInfo = iterNr+1;
 			calcRecipArray(latCFit,sg_num,recipFit);
+			outArrThisFit = (double *) calloc(3*maxNrSpots,sizeof(*outArrThisFit));
 			writeCalcOverlap(image,eulerFit,hkls,nhkls,nrPxX,nrPxY,recipFit,outArrThisFit,
 				maxNrSpots,rotTranspose,pArr,pxX,pxY,Elo,Ehi,ExtraInfo,saveExtraInfo,&simulNrSps);
 			double OF[3][3];
