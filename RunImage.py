@@ -366,7 +366,7 @@ def runFile(imageFN):
 		goodSpots = np.empty_like(spotThis)
 		nSp = 0
 		for sp in spotThis:
-			if h2[int(sp[6]),int(sp[5])]:
+			if h2[int(sp[6]),int(sp[5])]: # This will ensure we had intensity in the initial filtered image.
 				goodSpots[nSp] = sp
 				nSp+=1
 		goodSpots = goodSpots[:nSp,:]
