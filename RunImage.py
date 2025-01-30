@@ -211,6 +211,7 @@ def runFile(imageFN):
 	print(f'Processing file {imageFN}.bin')
 	hf_out.create_dataset('/entry/data/raw_data',data=h_im_raw)
 	hf_out.create_dataset('/entry/data/cleaned_data_threshold',data=h_im)
+	h2 = np.copy(h_im)
 	tInt1 = time.time()
 	print(f'Time elapsed in preparing: {tInt1-tSt}')
 	tSt2 = time.time()
@@ -331,7 +332,14 @@ def runFile(imageFN):
 	orientationNr = 0
 	for orientation in orientationInfo:
 		spotThis = spotInfo[spotInfo[:,0]==orientation[0],:]
-		goodSpots = spotThis[spotThis[:,-1]>=threshT/2,:] # This will ensure that we had intensity greater than the original threshold/2 to account for blurring
+		goodSpots = np.empty_like(spotThis)
+		nSp = 0
+		for sp in spotThis:
+			if h2[int(sp[6]),int(sp[5])]: # This will ensure we had intensity in the initial filtered image.
+				goodSpots[nSp] = sp
+				sp+=1
+		goodSpots = goodSpots[:sp,:]
+		# goodSpots = spotThis[spotThis[:,-1]>=threshT/2,:] # This will ensure that we had intensity greater than the original threshold/2 to account for blurring
 		#### We need to find first which grains have spots found
 		if goodSpots.shape[0] >= minGoodSpots:
 			# Find which labels were already found, remove those spots from list
@@ -366,7 +374,14 @@ def runFile(imageFN):
 			orientationNr+=1
 	#### LETS check which orientations still had left-over spots, write them now.
 	for orientation in orientationInfo:
-		goodSpots = spotInfo[spotInfo[:,0]==orientation[0],:]
+		spotThis = spotInfo[spotInfo[:,0]==orientation[0],:]
+		goodSpots = np.empty_like(spotThis)
+		nSp = 0
+		for sp in spotThis:
+			if h2[int(sp[6]),int(sp[5])]:
+				goodSpots[nSp] = sp
+				sp+=1
+		goodSpots = goodSpots[:sp,:]
 		#### We need to find first which grains have spots found
 		badRows = []
 		for spotNr in range(goodSpots.shape[0]):
@@ -375,8 +390,8 @@ def runFile(imageFN):
 				if labels2[int(spot[6])][int(spot[5])] in label_found:
 					# Remove this spot from the list
 					badRows.append(spotNr)
-		if goodSpots.shape[0] <= len(badRows):
-			continue # We already found this grain or all the spots, not writing again
+		if goodSpots.shape[0] <= len(badRows)+2:
+			continue # We already found this grain or everything except at least two spots, not writing again
 		for spot in goodSpots:
 			lbl = labels2[int(spot[6])][int(spot[5])]
 			if lbl and lbl not in label_found:
