@@ -378,7 +378,7 @@ def runFile(imageFN):
 					if labels2[int(spot[6])][int(spot[5])] in label_found:
 						# Remove this spot from the list
 						badRows.append(spotNr)
-			if len(goodSpots) <= len(badRows):
+			if goodSpots.shape[0] <= len(badRows):
 				continue
 			for spot in goodSpots:
 				# indices = indices_to_text(int(spot[2]),int(spot[3]),int(spot[4]))     # LABEL
