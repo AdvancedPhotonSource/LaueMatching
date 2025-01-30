@@ -390,7 +390,7 @@ def runFile(imageFN):
 				if labels2[int(spot[6])][int(spot[5])] in label_found:
 					# Remove this spot from the list
 					badRows.append(spotNr)
-		if goodSpots.shape[0] <= len(badRows)+2:
+		if goodSpots.shape[0] <= len(badRows)+1:
 			continue # We already found this grain or everything except at least two spots, not writing again
 		for spot in goodSpots:
 			lbl = labels2[int(spot[6])][int(spot[5])]
