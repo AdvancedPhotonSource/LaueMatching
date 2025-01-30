@@ -337,7 +337,7 @@ def runFile(imageFN):
 		for sp in spotThis:
 			if h2[int(sp[6]),int(sp[5])]: # This will ensure we had intensity in the initial filtered image.
 				goodSpots[nSp] = sp
-				sp+=1
+				nSp+=1
 		goodSpots = goodSpots[:nSp,:]
 		# goodSpots = spotThis[spotThis[:,-1]>=threshT/2,:] # This will ensure that we had intensity greater than the original threshold/2 to account for blurring
 		#### We need to find first which grains have spots found
@@ -380,7 +380,7 @@ def runFile(imageFN):
 		for sp in spotThis:
 			if h2[int(sp[6]),int(sp[5])]:
 				goodSpots[nSp] = sp
-				sp+=1
+				nSp+=1
 		goodSpots = goodSpots[:nSp,:]
 		#### We need to find first which grains have spots found
 		badRows = []
