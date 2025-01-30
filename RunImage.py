@@ -332,6 +332,7 @@ def runFile(imageFN):
 	for orientation in orientationInfo:
 		spotThis = spotInfo[spotInfo[:,0]==orientation[0],:]
 		goodSpots = spotThis[spotThis[:,-1]>=threshT/2,:] # This will ensure that we had intensity greater than the original threshold/2 to account for blurring
+		#### We need to find first which grains have spots found
 		if goodSpots.shape[0] >= minGoodSpots:
 			# Find which labels were already found, remove those spots from list
 			badRows = []
@@ -341,28 +342,61 @@ def runFile(imageFN):
 					if labels2[int(spot[6])][int(spot[5])] in label_found:
 						# Remove this spot from the list
 						badRows.append(spotNr)
-			badRows.reverse()
+			# badRows.reverse()   #### DEL
 			if goodSpots.shape[0] - len(badRows) < minGoodSpots:
 				continue
-			for rowNr in badRows:
-				goodSpots = np.delete(goodSpots,rowNr,0)
+			# for rowNr in badRows:    #### DEL
+			# 	goodSpots = np.delete(goodSpots,rowNr,0)    #### DEL
 			#Figure out which labels were found
 			for spot in goodSpots:
-				indices = indices_to_text(int(spot[2]),int(spot[3]),int(spot[4]))
+				# indices = indices_to_text(int(spot[2]),int(spot[3]),int(spot[4]))     # LABEL
 				# ax.text(spot[5]-np.random.randint(0,20),spot[6]-20,indices,c=colors(orientationNr))     # LABEL
-				if labels2[int(spot[6])][int(spot[5])]:
-					label_found.append(labels2[int(spot[6])][int(spot[5])])
-			# We need to check for the spots that were overlapping, but in the gaussian blurred image
+				# if labels2[int(spot[6])][int(spot[5])]:    #### DEL
+				lbl = labels2[int(spot[6])][int(spot[5])]
+				if lbl and lbl not in label_found:
+					label_found.append(lbl)
 			orientation[5] = goodSpots.shape[0]
-			thisID = orientation[0]
 			nsols+=1
 			orientation = orientation.reshape(orientation.shape[0],-1).transpose()
 			np.savetxt(outfor,orientation,fmt=fmtout)
 			np.savetxt(outfsp,goodSpots,fmt='%4d\t%3d\t%3d\t%3d\t%3d\t%5d\t%5d\t%9.6f\t%9.6f\t%9.6f\t%7d')
 			# Save an image with the blobs from found spots as open squares and orientation id
-			lbl = 'ID '+str(int(orientationNr))     # LABEL
+			lbl = 'oID '+str(int(orientationNr))     # LABEL
 			ax.plot(goodSpots[:,5],goodSpots[:,6],'ks', markerfacecolor='none', ms=3, markeredgecolor=colors(orientationNr),markeredgewidth=0.3,label=lbl)     # LABEL
 			orientationNr+=1
+	#### LETS check which orientations still had left-over spots, write them now.
+	for orientation in orientationInfo:
+		spotThis = spotInfo[spotInfo[:,0]==orientation[0],:]
+		goodSpots = spotThis[spotThis[:,-1]>=threshT/2,:] # This will ensure that we had intensity greater than the original threshold/2 to account for blurring
+		#### We need to find first which grains have spots found
+		if goodSpots.shape[0] >= minGoodSpots:
+			# Find which labels were already found, remove those spots from list
+			badRows = []
+			for spotNr in range(goodSpots.shape[0]):
+				spot = goodSpots[spotNr]
+				if labels2[int(spot[6])][int(spot[5])]:
+					if labels2[int(spot[6])][int(spot[5])] in label_found:
+						# Remove this spot from the list
+						badRows.append(spotNr)
+			if len(goodSpots) <= len(badRows):
+				continue
+			for spot in goodSpots:
+				# indices = indices_to_text(int(spot[2]),int(spot[3]),int(spot[4]))     # LABEL
+				# ax.text(spot[5]-np.random.randint(0,20),spot[6]-20,indices,c=colors(orientationNr))     # LABEL
+				# if labels2[int(spot[6])][int(spot[5])]:    #### DEL
+				lbl = labels2[int(spot[6])][int(spot[5])]
+				if lbl and lbl not in label_found:
+					label_found.append(lbl)
+			orientation[5] = goodSpots.shape[0]
+			nsols+=1
+			orientation = orientation.reshape(orientation.shape[0],-1).transpose()
+			np.savetxt(outfor,orientation,fmt=fmtout)
+			np.savetxt(outfsp,goodSpots,fmt='%4d\t%3d\t%3d\t%3d\t%3d\t%5d\t%5d\t%9.6f\t%9.6f\t%9.6f\t%7d')
+			# Save an image with the blobs from found spots as open squares and orientation id
+			lbl = 'rID '+str(int(orientationNr))     # LABEL
+			ax.plot(goodSpots[:,5],goodSpots[:,6],'ks', markerfacecolor='none', ms=3, markeredgecolor=colors(orientationNr),markeredgewidth=0.3,label=lbl)     # LABEL
+			orientationNr+=1
+
 	plt.legend()     # LABEL
 	plt.savefig(imageFN+'.bin.LabeledImage.tif',dpi=outdpi)     # LABEL
 	l_im = np.array(Image.open(imageFN+'.bin.LabeledImage.tif').convert('RGB'))     # LABEL
