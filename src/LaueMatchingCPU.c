@@ -1295,7 +1295,7 @@ int main(int argc, char *argv[])
 		for (l=global_iterator+1;l<nrResults;l++){
 			if (doneArr[l] > 0) continue;
 			for (m=0;m<9;m++){
-				orient2[m] = orients[l*9+m];
+				orient2[m] = orients[rowNrs[l]*9+m];
 			}
 			OrientMat2Quat(orient2,quat2);
 			misoAngle = GetMisOrientation(quat1,quat2);
