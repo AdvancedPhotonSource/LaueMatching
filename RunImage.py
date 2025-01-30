@@ -369,7 +369,7 @@ def runFile(imageFN):
 			np.savetxt(outfor,orientation,fmt=fmtout)
 			np.savetxt(outfsp,goodSpots,fmt='%4d\t%3d\t%3d\t%3d\t%3d\t%5d\t%5d\t%9.6f\t%9.6f\t%9.6f\t%7d')
 			# Save an image with the blobs from found spots as open squares and orientation id
-			lbl = 'oID '+str(int(orientationNr))     # LABEL
+			lbl = 'ID '+str(int(orientationNr))     # LABEL
 			ax.plot(goodSpots[:,5],goodSpots[:,6],'ks', markerfacecolor='none', ms=3, markeredgecolor=colors(orientationNr),markeredgewidth=0.3,label=lbl)     # LABEL
 			orientationNr+=1
 	#### LETS check which orientations still had left-over spots, write them now.
@@ -402,7 +402,7 @@ def runFile(imageFN):
 		np.savetxt(outfor,orientation,fmt=fmtout)
 		np.savetxt(outfsp,goodSpots,fmt='%4d\t%3d\t%3d\t%3d\t%3d\t%5d\t%5d\t%9.6f\t%9.6f\t%9.6f\t%7d')
 		# Save an image with the blobs from found spots as open squares and orientation id
-		lbl = 'rID '+str(int(orientationNr))     # LABEL
+		lbl = 'ID '+str(int(orientationNr))     # LABEL
 		ax.plot(goodSpots[:,5],goodSpots[:,6],'ks', markerfacecolor='none', ms=3, markeredgecolor=colors(orientationNr),markeredgewidth=0.3,label=lbl)     # LABEL
 		orientationNr+=1
 
