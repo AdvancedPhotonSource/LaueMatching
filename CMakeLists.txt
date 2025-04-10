@@ -67,7 +67,7 @@ if(USE_SYSTEM_NLOPT)
   set(NLOPT_INCLUDE_DIRS ${NLOPT_INCLUDE_DIRS})
   set(NLOPT_LIBRARIES ${NLOPT_LIBRARIES})
 else()
-  # Build NLopt from source
+  # Build NLopt from source with C++ interfaces disabled
   include(ExternalProject)
   ExternalProject_Add(
     nlopt_external
@@ -80,6 +80,7 @@ else()
               -DNLOPT_MATLAB=OFF
               -DNLOPT_GUILE=OFF
               -DNLOPT_SWIG=OFF
+              -DNLOPT_CXX=OFF
   )
   
   # Set include and library paths for built NLopt
