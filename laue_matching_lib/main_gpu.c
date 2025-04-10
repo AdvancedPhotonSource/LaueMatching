@@ -116,6 +116,7 @@
      
      // Perform matching using the GPU implementation
      MatchingResults results;
+     printf("We are RUNNING ON THE GPU!!!\n");
      ret = laue_perform_matching_gpu(&config, orientFile, hklFile, imageFile, &results);
      if (ret != LAUE_SUCCESS) {
          if (ret == LAUE_ERROR_GPU) {
