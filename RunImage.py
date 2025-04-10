@@ -1903,6 +1903,23 @@ Examples:
     
   Generate a report:
     python RunImage.py report -i results/image_001.h5.bin.output.h5 -o report.html
+
+Command Summary:
+  process - Process Laue diffraction images
+    Required: -c/--config, -i/--image
+    Optional: -n/--ncpus, -g/--gpu, -t/--threshold, -o/--output, --dry-run
+    
+  config  - Generate or validate configuration files
+    Required: -o/--output (for generation), -v/--validate (for validation)
+    Optional: -t/--type (when generating)
+    Note: Use either generation OR validation mode, not both
+    
+  view    - View processing results interactively
+    Required: -i/--input
+    
+  report  - Generate analysis reports
+    Required: -i/--input
+    Optional: -o/--output, -t/--template
         """
     )
     
@@ -1910,64 +1927,112 @@ Examples:
     subparsers = parser.add_subparsers(dest='command', help='Command to execute')
     
     # Process command
-    process_parser = subparsers.add_parser('process', help='Process Laue diffraction images')
-    process_parser.add_argument('-c', '--config', type=str, required=True, help='Configuration file')
-    process_parser.add_argument('-i', '--image', type=str, required=True, help='Image file or glob pattern')
-    process_parser.add_argument('-n', '--ncpus', type=int, default=4, help='Number of CPU cores to use')
-    process_parser.add_argument('-g', '--gpu', action='store_true', help='Use GPU for processing')
-    process_parser.add_argument('-t', '--threshold', type=int, default=0, help='Override threshold value')
-    process_parser.add_argument('-o', '--output', type=str, help='Output directory (overrides config)')
-    process_parser.add_argument('--dry-run', action='store_true', help='Validate configuration without processing')
+    process_parser = subparsers.add_parser('process', 
+        help='Process Laue diffraction images',
+        description='Process single or multiple Laue diffraction images using specified configuration',
+        epilog="""
+Examples:
+  Basic processing:
+    python RunImage.py process -c config.txt -i image_001.h5
+  
+  With GPU acceleration:
+    python RunImage.py process -c config.txt -i image_001.h5 -g
+    
+  Process multiple files with 8 CPU cores:
+    python RunImage.py process -c config.txt -i "data/*.h5" -n 8
+    
+  Test configuration without processing:
+    python RunImage.py process -c config.txt -i image_001.h5 --dry-run
+        """
+    )
+    process_parser.add_argument('-c', '--config', type=str, required=True, help='Configuration file (required)')
+    process_parser.add_argument('-i', '--image', type=str, required=True, help='Image file or glob pattern (required)')
+    process_parser.add_argument('-n', '--ncpus', type=int, default=4, help='Number of CPU cores to use (default: 4)')
+    process_parser.add_argument('-g', '--gpu', action='store_true', help='Use GPU for processing if available')
+    process_parser.add_argument('-t', '--threshold', type=int, default=0, 
+                              help='Override threshold value from configuration (default: 0, no override)')
+    process_parser.add_argument('-o', '--output', type=str, 
+                              help='Output directory (overrides config; default: results/)')
+    process_parser.add_argument('--dry-run', action='store_true', 
+                              help='Validate configuration without processing images')
     
     # Config command
-    config_parser = subparsers.add_parser('config', help='Generate or validate configuration file')
-    config_parser.add_argument('-o', '--output', type=str, required=True, help='Output configuration file')
+    config_parser = subparsers.add_parser('config', 
+        help='Generate or validate configuration file',
+        description='Generate a new configuration file or validate an existing one',
+        epilog="""
+Examples:
+  Generate default configuration:
+    python RunImage.py config -o config.txt
+    
+  Generate JSON configuration:
+    python RunImage.py config -o config.json -t json
+    
+  Validate existing configuration:
+    python RunImage.py config -v existing_config.txt
+        """
+    )
+    config_parser.add_argument('-o', '--output', type=str, 
+                             help='Output configuration file (required for generation)')
     config_parser.add_argument('-t', '--type', type=str, choices=['txt', 'json', 'yaml'], default='txt', 
-                            help='Configuration file format')
-    config_parser.add_argument('-v', '--validate', type=str, help='Validate existing configuration file')
+                            help='Configuration file format (default: txt)')
+    config_parser.add_argument('-v', '--validate', type=str, 
+                             help='Validate existing configuration file (incompatible with -o/--output)')
     
     # View command
-    view_parser = subparsers.add_parser('view', help='View processing results interactively')
-    view_parser.add_argument('-i', '--input', type=str, required=True, help='Processed H5 file')
+    view_parser = subparsers.add_parser('view', 
+        help='View processing results interactively',
+        description='Launch interactive viewer for processed results',
+        epilog="""
+Examples:
+  View a single result file:
+    python RunImage.py view -i results/image_001.h5.bin.output.h5
+        """
+    )
+    view_parser.add_argument('-i', '--input', type=str, required=True, 
+                           help='Processed H5 file to view (required)')
     
     # Report command
-    report_parser = subparsers.add_parser('report', help='Generate analysis report')
-    report_parser.add_argument('-i', '--input', type=str, required=True, help='Processed H5 file')
-    report_parser.add_argument('-o', '--output', type=str, help='Output report file')
-    report_parser.add_argument('-t', '--template', type=str, default='default', help='Report template')
+    report_parser = subparsers.add_parser('report', 
+        help='Generate analysis report',
+        description='Generate detailed report from processed results',
+        epilog="""
+Examples:
+  Generate default HTML report:
+    python RunImage.py report -i results/image_001.h5.bin.output.h5 -o report.html
     
-    # For backwards compatibility, support old-style arguments
-    parser.add_argument('-configFile', type=str, help='Configuration file (legacy)')
-    parser.add_argument('-imageFile', type=str, help='Image FileName (legacy)')
-    parser.add_argument('-nCPUs', type=int, help='Number of CPU cores to use (legacy)')
-    parser.add_argument('-computeType', type=str, choices=['CPU', 'GPU'], help='Computation type (legacy)')
-    parser.add_argument('-nFiles', type=int, default=1, help='Number of files to run (legacy)')
-    parser.add_argument('-overrideThresh', type=int, default=0, help='Override threshold (legacy)')
+  Generate report with custom template:
+    python RunImage.py report -i results/image_001.h5.bin.output.h5 -o report.pdf -t publication
+        """
+    )
+    report_parser.add_argument('-i', '--input', type=str, required=True, 
+                             help='Processed H5 file (required)')
+    report_parser.add_argument('-o', '--output', type=str, 
+                             help='Output report file (default: report.html)')
+    report_parser.add_argument('-t', '--template', type=str, default='default', 
+                             help='Report template to use (default: default)')
     
     # Add common arguments
     parser.add_argument('--loglevel', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'], default='INFO', 
-                       help='Logging level')
-    parser.add_argument('--logfile', type=str, help='Log to file instead of console')
+                       help='Logging level (default: INFO)')
+    parser.add_argument('--logfile', type=str, 
+                       help='Log to file instead of console')
     
     args = parser.parse_args()
     
-    # Handle legacy style arguments
-    if hasattr(args, 'configFile') and args.configFile and not args.command:
-        # Convert to new style
-        args.command = 'process'
-        args.config = args.configFile
-        args.image = args.imageFile
-        args.ncpus = args.nCPUs
-        args.gpu = args.computeType == 'GPU'
-        args.threshold = args.overrideThresh
-        
+    # Additional validation
+    if args.command == 'config' and args.output and args.validate:
+        parser.error("Cannot use both -o/--output and -v/--validate together")
+    
+    if args.command == 'config' and not (args.output or args.validate):
+        parser.error("Config command requires either -o/--output or -v/--validate")
+    
     # Validate arguments
     if not args.command:
         parser.print_help()
         sys.exit(1)
         
     return args
-
 
 def process_images(args):
     """
