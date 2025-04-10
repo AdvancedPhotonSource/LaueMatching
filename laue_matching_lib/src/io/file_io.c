@@ -163,17 +163,7 @@ int file_read_parameters(const char *filename, MatchingConfig *config) {
         str = "ForwardFile";
         lowNr = strncmp(aline, str, strlen(str));
         if (lowNr == 0) {
-            char tempPath[1024] = {0}; // Temporary buffer
-            
-            // Use a safer method to extract the path
-            if (sscanf(aline, "%s %1023s", dummy, tempPath) == 2) {
-                // Safely copy to config structure with explicit length
-                memset(config->forwardSimulationFile, 0, sizeof(config->forwardSimulationFile));
-                strncpy(config->forwardSimulationFile, tempPath, sizeof(config->forwardSimulationFile) - 1);
-                printf("While reading parameter: ForwardFile = '%s'\n", config->forwardSimulationFile);
-            } else {
-                fprintf(stderr, "WARNING: Failed to parse ForwardFile parameter: %s\n", aline);
-            }
+            sscanf(aline, "%s %s", dummy, config->forwardSimulationFile);
             continue;
         }
         
@@ -197,7 +187,45 @@ int file_read_parameters(const char *filename, MatchingConfig *config) {
             config->latticeParamTol[i] = 0.0;
         }
     }
-    printf("After reading %s\n",config->forwardSimulationFile);
+    
+    // Print all parameter values after reading
+    printf("After reading from file %s:\n", filename);
+    printf("  Lattice Parameters: a=%.4f, b=%.4f, c=%.4f\n", 
+           config->lattice.a, config->lattice.b, config->lattice.c);
+    printf("  Lattice Angles: alpha=%.2f, beta=%.2f, gamma=%.2f\n", 
+           config->lattice.alpha, config->lattice.beta, config->lattice.gamma);
+    printf("  Lattice Parameter Tolerances: %.4f, %.4f, %.4f, %.4f, %.4f, %.4f\n",
+           config->latticeParamTol[0], config->latticeParamTol[1], config->latticeParamTol[2],
+           config->latticeParamTol[3], config->latticeParamTol[4], config->latticeParamTol[5]);
+    printf("  C/A Tolerance: %.4f\n", config->cOverATol);
+    printf("  Space Group: %d\n", config->spaceGroup);
+    printf("  Max Number of Spots: %d\n", config->maxNumSpots);
+    printf("  Min Number of Spots: %d\n", config->minNumSpots);
+    printf("  Min Intensity: %.2f\n", config->minIntensity);
+    printf("  Max Angle: %.2f\n", config->maxAngle);
+    printf("  Perform Forward Simulation: %d\n", config->performForwardSimulation);
+    printf("  Forward Simulation File: %s\n", config->forwardSimulationFile);
+    printf("  Number of Threads: %d\n", config->numThreads);
+    
+    // Print detector parameters if they're set
+    printf("  Detector Position: [%.4f, %.4f, %.4f]\n",
+           config->detectorParams.position[0],
+           config->detectorParams.position[1],
+           config->detectorParams.position[2]);
+    printf("  Detector Rotation: [%.4f, %.4f, %.4f]\n",
+           config->detectorParams.rotation[0],
+           config->detectorParams.rotation[1],
+           config->detectorParams.rotation[2]);
+    printf("  Pixel Size: [%.4f, %.4f]\n",
+           config->detectorParams.pixelSize[0],
+           config->detectorParams.pixelSize[1]);
+    printf("  Number of Pixels: [%d, %d]\n",
+           config->detectorParams.numPixels[0],
+           config->detectorParams.numPixels[1]);
+    printf("  Energy Range: [%.2f, %.2f]\n",
+           config->detectorParams.energyRange[0],
+           config->detectorParams.energyRange[1]);
+    
     return LAUE_SUCCESS;
 }
 
