@@ -18,7 +18,7 @@ def build_cmake():
     subprocess.check_call(['cmake', '..'], cwd=build_dir)
     
     # Build with make
-    cores = max(1, os.cpu_count() - 1) if os.cpu_count() else 1
+    cores = 1
     subprocess.check_call(['make', f'-j{cores}'], cwd=build_dir)
     
     # Check for orientation file and download if needed
