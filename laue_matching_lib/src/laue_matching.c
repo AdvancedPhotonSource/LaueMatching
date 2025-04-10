@@ -309,6 +309,7 @@
      // Track number of matched patterns
      int numResults = 0;
      int anyThreadError = 0; // Flag to track if any thread encountered an error
+     printf("%s\n",config->forwardSimulationFile);
      
      #pragma omp parallel num_threads(numThreads) reduction(+:numResults) shared(anyThreadError)
      {
