@@ -27,7 +27,19 @@ endif()
 # NLopt is handled in parent
 
 # Collect source files
-file(GLOB_RECURSE SOURCES "src/*.c")
+file(GLOB_RECURSE C_SOURCES "src/*.c")
+
+# If building with CUDA
+if(USE_CUDA)
+  # Collect CUDA source files
+  file(GLOB_RECURSE CUDA_SOURCES "src/*.cu")
+  set(SOURCES ${C_SOURCES} ${CUDA_SOURCES})
+  
+  # Add CUDA compile definitions
+  add_compile_definitions(USE_CUDA)
+else()
+  set(SOURCES ${C_SOURCES})
+endif()
 
 # If the parent wants to build a library
 if(BUILD_LIBRARY)
@@ -49,12 +61,18 @@ if(BUILD_LIBRARY)
     # Link dependencies - Use parent-provided NLopt
     target_link_libraries(laue_matching PRIVATE OpenMP::OpenMP_C ${NLOPT_LIBRARIES} m)
     
-    # Set compiler flags
+    # Set compiler flags for C and CUDA
     target_compile_options(laue_matching PRIVATE 
-        -Wall 
-        -Wextra
-        -O3
+        $<$<COMPILE_LANGUAGE:C>:-Wall -Wextra -O3>
+        $<$<COMPILE_LANGUAGE:CUDA>:-O3 -G -g -w>
     )
+    
+    # If we're using CUDA, add CUDA-specific settings
+    if(USE_CUDA)
+        set_target_properties(laue_matching PROPERTIES 
+            CUDA_SEPARABLE_COMPILATION ON
+        )
+    endif()
     
     # Let the parent handle installation
 endif()

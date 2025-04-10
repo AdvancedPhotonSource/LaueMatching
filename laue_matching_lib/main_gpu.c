@@ -1,9 +1,9 @@
 /**
- * @file main.c
- * @brief Main application for Laue pattern matching
+ * @file main_gpu.c
+ * @brief Main application for GPU-accelerated Laue pattern matching
  * 
- * This provides the same interface as the original LaueMatchingCPU program
- * but uses the improved library code internally.
+ * This provides the same interface as the original LaueMatchingGPU program
+ * but uses the improved library code internally with GPU acceleration.
  * 
  * @author Hemant Sharma
  * @date 2025-04-09
@@ -20,12 +20,13 @@
 #include "src/core/diffraction.h"
 #include "src/core/optimization.h"
 #include "src/io/file_io.h"
+#include "src/laue_matching_gpu.h" // Include GPU-specific header
 
 /**
  * @brief Print usage information
  */
 static void print_usage(void) {
-    puts("LaueMatching on the CPU\n"
+    puts("LaueMatching on the GPU\n"
          "Contact hsharma@anl.gov\n"
          "Arguments: \n"
          "* \tparameterFile (text)\n"
@@ -61,6 +62,39 @@ static void print_usage(void) {
 }
 
 /**
+ * @brief Print GPU device information
+ */
+static void print_gpu_info(void) {
+    int deviceCount = 0;
+    cudaError_t err = cudaGetDeviceCount(&deviceCount);
+    
+    if (err != cudaSuccess) {
+        printf("Failed to get CUDA device count: %s\n", cudaGetErrorString(err));
+        return;
+    }
+    
+    printf("Found %d CUDA device(s):\n", deviceCount);
+    
+    for (int i = 0; i < deviceCount; i++) {
+        cudaDeviceProp deviceProp;
+        cudaGetDeviceProperties(&deviceProp, i);
+        
+        printf("Device %d: %s\n", i, deviceProp.name);
+        printf("  Compute capability: %d.%d\n", deviceProp.major, deviceProp.minor);
+        printf("  Total global memory: %.2f GB\n", 
+              deviceProp.totalGlobalMem / (1024.0 * 1024.0 * 1024.0));
+        printf("  Multiprocessors: %d\n", deviceProp.multiProcessorCount);
+        printf("  Clock rate: %.2f GHz\n", deviceProp.clockRate / 1000000.0);
+        printf("  Max threads per block: %d\n", deviceProp.maxThreadsPerBlock);
+        printf("  Max threads dimensions: [%d, %d, %d]\n", 
+               deviceProp.maxThreadsDim[0], deviceProp.maxThreadsDim[1], deviceProp.maxThreadsDim[2]);
+        printf("  Max grid dimensions: [%d, %d, %d]\n", 
+               deviceProp.maxGridSize[0], deviceProp.maxGridSize[1], deviceProp.maxGridSize[2]);
+        printf("\n");
+    }
+}
+
+/**
  * @brief Main function
  */
 int main(int argc, char *argv[]) {
@@ -75,11 +109,22 @@ int main(int argc, char *argv[]) {
     char *imageFile = argv[4];
     int numThreads = atoi(argv[5]);
     
+    // Initialize GPU
+    int ret = laue_gpu_init();
+    if (ret != LAUE_SUCCESS) {
+        fprintf(stderr, "ERROR: Failed to initialize GPU. Check if CUDA devices are available.\n");
+        return 1;
+    }
+    
+    // Print GPU information for user
+    print_gpu_info();
+    
     // Read configuration from parameter file
     MatchingConfig config;
-    int ret = file_read_parameters(paramFile, &config);
+    ret = file_read_parameters(paramFile, &config);
     if (ret != LAUE_SUCCESS) {
         fprintf(stderr, "ERROR: Failed to read parameter file\n");
+        laue_gpu_cleanup();
         return 1;
     }
     
@@ -90,24 +135,48 @@ int main(int argc, char *argv[]) {
     ret = laue_init();
     if (ret != LAUE_SUCCESS) {
         fprintf(stderr, "ERROR: Failed to initialize library\n");
+        laue_gpu_cleanup();
         return 1;
     }
     
-    // Perform matching
+    // Measure execution time
+    double startTime = omp_get_wtime();
+    
+    // Perform GPU-accelerated matching
     MatchingResults results;
-    ret = laue_perform_matching(&config, orientFile, hklFile, imageFile, &results);
+    ret = laue_gpu_perform_matching(&config, orientFile, hklFile, imageFile, &results);
     if (ret != LAUE_SUCCESS) {
-        fprintf(stderr, "ERROR: Failed to perform matching (error code: %d)\n", ret);
+        fprintf(stderr, "ERROR: Failed to perform GPU matching (error code: %d)\n", ret);
         laue_cleanup();
+        laue_gpu_cleanup();
         return 1;
     }
+    
+    double endTime = omp_get_wtime();
     
     // Print summary
     printf("Found %d grains\n", results.numGrains);
+    printf("Total execution time: %.2f seconds\n", endTime - startTime);
+    
+    // Print orientation information for each grain
+    printf("\nGrain information:\n");
+    printf("--------------------------------------------------\n");
+    printf("Grain\tNumSols\tNumSpots\tIntensity\n");
+    printf("--------------------------------------------------\n");
+    
+    for (int i = 0; i < results.numGrains; i++) {
+        printf("%d\t%d\t%d\t%.2f\n", 
+               i+1, 
+               results.numSolutions[i], 
+               results.numSpots[i], 
+               results.intensities[i]);
+    }
+    printf("--------------------------------------------------\n");
     
     // Clean up
     laue_free_results(&results);
     laue_cleanup();
+    laue_gpu_cleanup();
     
     return 0;
 }

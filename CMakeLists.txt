@@ -55,9 +55,11 @@ if(USE_CUDA)
   endif()
   
   # Set CUDA flags
-  set(CUDA_NVCC_FLAGS "${CUDA_NVCC_FLAGS} -lgomp -O3 -G -g -w \
-     -gencode=arch=compute_90,code=sm_90 \
-     -lm -rdc=true")
+  set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -O3 -G -g -w \
+     -gencode=arch=compute_90,code=sm_90")
+
+  # Enable separable compilation
+  set(CMAKE_CUDA_SEPARABLE_COMPILATION ON)
 endif()
 
 # NLopt handling
@@ -127,7 +129,7 @@ endif()
 
 # CUDA executable
 if(USE_CUDA)
-  cuda_add_executable(LaueMatchingGPU src/LaueMatchingGPU.cu)
+  add_executable(LaueMatchingGPU src/LaueMatchingGPU.cu)
   target_include_directories(LaueMatchingGPU PRIVATE 
       ${NLOPT_INCLUDE_DIRS}
       ${CMAKE_CURRENT_SOURCE_DIR}/laue_matching_lib/include
@@ -141,6 +143,7 @@ if(USE_CUDA)
   if(BUILD_LIBRARY)
       target_link_libraries(LaueMatchingGPU laue_matching)
   endif()
+  target_compile_options(LaueMatchingGPU PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-O3 -G -g -w>)
   if(NOT USE_SYSTEM_NLOPT)
     add_dependencies(LaueMatchingGPU nlopt_external)
   endif()

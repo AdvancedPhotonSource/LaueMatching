@@ -965,9 +965,9 @@ class EnhancedImageProcessor:
             
         # Choose the appropriate executable
         if compute_type == 'CPU':
-            executable = f'{file_path}/bin/LaueMatchingCPU'
+            executable = f'{file_path}/build/LaueMatchingCPU'
         else:
-            executable = f'{file_path}/bin/LaueMatchingGPU'
+            executable = f'{file_path}/build/LaueMatchingGPU'
             
         # Run the indexing command
         indexing_cmd = f'{executable} {config_file} {orient_file} {hkl_file} {output_path}.bin {ncpus}'
