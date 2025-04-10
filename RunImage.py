@@ -143,6 +143,20 @@ class VisualizationConfig:
     generate_report: bool = True
     report_template: str = "default"
     show_hkl_labels: bool = False
+    enable_visualization: bool = True  # Added parameter to make visualization optional
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary."""
+        return {k: v for k, v in self.__dict__.items()}
+
+
+@dataclass
+class SimulationConfig:
+    """Configuration parameters for diffraction simulation."""
+    enable_simulation: bool = True
+    skip_percentage: float = 30.0
+    orientation_file: str = "orientations.txt"
+    energies: str = "10 100"  # Energy range in keV (Elo Ehi)
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
@@ -184,6 +198,7 @@ class LaueConfig:
     # Enhanced configuration sections
     image_processing: ImageProcessingConfig = field(default_factory=ImageProcessingConfig)
     visualization: VisualizationConfig = field(default_factory=VisualizationConfig)
+    simulation: SimulationConfig = field(default_factory=SimulationConfig)  # Added simulation config
     
     # Additional parameters
     log_level: LogLevel = LogLevel.INFO
@@ -192,10 +207,11 @@ class LaueConfig:
     def to_dict(self) -> Dict[str, Any]:
         """Convert the configuration to dictionary format."""
         config_dict = {k: v for k, v in self.__dict__.items() 
-                      if not isinstance(v, (ImageProcessingConfig, VisualizationConfig))}
+                      if not isinstance(v, (ImageProcessingConfig, VisualizationConfig, SimulationConfig))}
         
         config_dict["image_processing"] = self.image_processing.to_dict()
         config_dict["visualization"] = self.visualization.to_dict()
+        config_dict["simulation"] = self.simulation.to_dict()
         
         # Handle enum conversion
         if "log_level" in config_dict:
@@ -212,6 +228,7 @@ class LaueConfig:
         # Handle nested configurations
         img_config = config.pop("image_processing", {})
         vis_config = config.pop("visualization", {})
+        sim_config = config.pop("simulation", {})
         
         # Handle enum conversion
         if "log_level" in config:
@@ -225,6 +242,8 @@ class LaueConfig:
             instance.image_processing = ImageProcessingConfig(**img_config)
         if vis_config:
             instance.visualization = VisualizationConfig(**vis_config)
+        if sim_config:
+            instance.simulation = SimulationConfig(**sim_config)
             
         return instance
 
@@ -345,6 +364,14 @@ class ConfigurationManager:
             self.config.forward_file = line.split()[1]
         elif line.startswith('DoFwd'):
             self.config.do_forward = bool(int(line.split()[1]))
+        elif line.startswith('EnableVisualization'):
+            self.config.visualization.enable_visualization = bool(int(line.split()[1]))
+        elif line.startswith('EnableSimulation'):
+            self.config.simulation.enable_simulation = bool(int(line.split()[1]))
+        elif line.startswith('SkipPercentage'):
+            self.config.simulation.skip_percentage = float(line.split()[1])
+        elif line.startswith('SimulationEnergies'):
+            self.config.simulation.energies = ' '.join(line.split()[1:3])
             
     def write_config(self) -> None:
         """Write current configuration to file."""
@@ -400,6 +427,10 @@ class ConfigurationManager:
             f.write(f"BackgroundFile {self.config.background_file}\n")
             f.write(f"ForwardFile {self.config.forward_file}\n")
             f.write(f"DoFwd {int(self.config.do_forward)}\n")
+            f.write(f"EnableVisualization {int(self.config.visualization.enable_visualization)}\n")
+            f.write(f"EnableSimulation {int(self.config.simulation.enable_simulation)}\n")
+            f.write(f"SkipPercentage {self.config.simulation.skip_percentage}\n")
+            f.write(f"SimulationEnergies {self.config.simulation.energies}\n")
             
     def get(self, key: str, default=None):
         """Get a configuration parameter value."""
@@ -806,7 +837,7 @@ class EnhancedImageProcessor:
         os.makedirs(result_dir, exist_ok=True)
         
         # Initialize progress reporter
-        progress = ProgressReporter(7, f"Processing {os.path.basename(image_path)}")
+        progress = ProgressReporter(8, f"Processing {os.path.basename(image_path)}")
         
         # Step 1: Load the image
         try:
@@ -845,6 +876,7 @@ class EnhancedImageProcessor:
             
             hf_out.create_dataset('/entry/data/cleaned_data_threshold_filtered', data=filtered_image)
             hf_out.create_dataset('/entry/data/cleaned_data_threshold_filtered_labels', data=filtered_labels)
+            hf_out.create_dataset('/entry/data/component_centers', data=np.array(centers, dtype=object))
             progress.update(1, "Small components filtered")
             
             # Step 5: Calculate Gaussian blur width
@@ -871,6 +903,7 @@ class EnhancedImageProcessor:
                 final_labels = watershed_labels
                 max_labels = np.max(watershed_labels)
                 logger.info(f'Watershed segmentation found {max_labels} regions')
+                hf_out.create_dataset('/entry/data/watershed_labels', data=watershed_labels)
             else:
                 final_labels = filtered_labels
                 max_labels = nlabels
@@ -886,6 +919,29 @@ class EnhancedImageProcessor:
             if "success" in indexing_results and not indexing_results["success"]:
                 progress.complete("Failed at indexing stage")
                 return indexing_results
+            
+            # Step 8: Run simulation if enabled
+            if self.config.get("simulation").enable_simulation and "orientations" in indexing_results:
+                simulation_results = self._run_simulation(
+                    output_path, indexing_results["orientations"], centers, filtered_image
+                )
+                
+                if "success" in simulation_results:
+                    # Store simulation results in H5 file
+                    if "simulated_spots" in simulation_results:
+                        hf_out.create_dataset('/entry/simulation/simulated_spots', 
+                                              data=simulation_results["simulated_spots"])
+                    
+                    if "simulated_images" in simulation_results:
+                        for img_name, img_data in simulation_results["simulated_images"].items():
+                            hf_out.create_dataset(f'/entry/simulation/{img_name}', data=img_data)
+                    
+                progress.update(1, "Simulation completed")
+            else:
+                progress.update(1, "Simulation skipped")
+                
+            # Store file contents from txt files in H5
+            self._store_txt_files_in_h5(output_path, hf_out)
                 
             progress.complete("Processing completed")
             
@@ -900,7 +956,34 @@ class EnhancedImageProcessor:
                 "indexing_results": indexing_results,
                 "processing_time": time.time() - start_time
             }
-            
+    
+    def _store_txt_files_in_h5(self, output_path: str, h5_file) -> None:
+        """
+        Store the contents of all generated txt files in the H5 file.
+        
+        Args:
+            output_path: Base path for txt files
+            h5_file: Open H5 file handle to store data
+        """
+        # List of expected txt files
+        txt_files = [
+            {'file': f"{output_path}.bin.solutions.txt", 'dataset': '/entry/results/solutions_text'},
+            {'file': f"{output_path}.bin.spots.txt", 'dataset': '/entry/results/spots_text'},
+            {'file': f"{output_path}.bin.LaueMatching_stdout.txt", 'dataset': '/entry/logs/stdout'},
+            {'file': f"{output_path}.bin.LaueMatching_stderr.txt", 'dataset': '/entry/logs/stderr'},
+        ]
+        
+        # Read and store each text file
+        for txt_file in txt_files:
+            try:
+                if os.path.exists(txt_file['file']):
+                    with open(txt_file['file'], 'r') as f:
+                        content = f.read()
+                    h5_file.create_dataset(txt_file['dataset'], data=np.string_(content))
+                    logger.debug(f"Stored {txt_file['file']} in H5 dataset {txt_file['dataset']}")
+            except Exception as e:
+                logger.warning(f"Error storing {txt_file['file']} in H5: {str(e)}")
+                
     def _run_indexing(
         self, 
         output_path: str, 
@@ -991,7 +1074,342 @@ class EnhancedImageProcessor:
                 
         # Process indexing results
         return self._process_indexing_results(output_path, labels, nlabels, filtered_image)
+
+    def _run_simulation(
+        self,
+        output_path: str,
+        orientations: np.ndarray,
+        centers: List,
+        filtered_image: np.ndarray
+    ) -> Dict[str, Any]:
+        """
+        Run diffraction simulation for the indexed orientations.
         
+        Args:
+            output_path: Path to the output files
+            orientations: Orientation matrices
+            centers: List of center points
+            filtered_image: Filtered image
+            
+        Returns:
+            Dictionary with simulation results
+        """
+        logger.info("Running diffraction simulation")
+        
+        # Create temporary configuration file for simulation
+        sim_config_path = f"{output_path}.sim_config.txt"
+        try:
+            with open(sim_config_path, 'w') as f:
+                f.write(f"SpaceGroup {self.config.get('space_group')}\n")
+                f.write(f"Symmetry {self.config.get('symmetry')}\n")
+                f.write(f"LatticeParameter {self.config.get('lattice_parameter')}\n")
+                f.write(f"R_Array {self.config.get('r_array')}\n")
+                f.write(f"P_Array {self.config.get('p_array')}\n")
+                f.write(f"PxX {self.config.get('px_x')}\n")
+                f.write(f"PxY {self.config.get('px_y')}\n")
+                f.write(f"NrPxX {self.config.get('nr_px_x')}\n")
+                f.write(f"NrPxY {self.config.get('nr_px_y')}\n")
+                
+                # Split energy range
+                energies = self.config.get("simulation").energies.split()
+                if len(energies) >= 2:
+                    f.write(f"Elo {energies[0]}\n")
+                    f.write(f"Ehi {energies[1]}\n")
+                else:
+                    f.write(f"Elo 10\n")
+                    f.write(f"Ehi 100\n")
+                
+                f.write(f"SimulationSmoothingWidth 5\n")
+                f.write(f"HKLFile {self.config.get('hkl_file')}\n")
+            
+            # Create orientation file for simulation
+            orientation_output = f"{output_path}.indexed_orientations.txt"
+            with open(orientation_output, 'w') as f:
+                # Write orientations in correct format for simulator
+                if len(orientations.shape) == 1:
+                    # Single orientation
+                    f.write(f"{orientations[22]} {orientations[23]} {orientations[24]} "
+                            f"{orientations[25]} {orientations[26]} {orientations[27]} "
+                            f"{orientations[28]} {orientations[29]} {orientations[30]}\n")
+                else:
+                    # Multiple orientations
+                    for orient in orientations:
+                        # Extract orientation matrix (columns 22-30 contain the orientation matrix)
+                        f.write(f"{orient[22]} {orient[23]} {orient[24]} "
+                                f"{orient[25]} {orient[26]} {orient[27]} "
+                                f"{orient[28]} {orient[29]} {orient[30]}\n")
+            
+            # Run simulation command
+            sim_output = f"{output_path}.simulation"
+            skip_percentage = self.config.get("simulation").skip_percentage
+            
+            sim_cmd = (f"{PYTHON_PATH} {INSTALL_PATH}/GenerateSimulation.py "
+                      f"-configFile {sim_config_path} "
+                      f"-orientationFile {orientation_output} "
+                      f"-outputFile {sim_output} "
+                      f"-skipPercentage {skip_percentage}")
+            
+            logger.info(f"Running simulation command: {sim_cmd}")
+            
+            result = subprocess.run(
+                sim_cmd,
+                shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                check=True,
+                text=True
+            )
+            
+            # Save simulation stdout to file
+            with open(f'{output_path}.simulation_stdout.txt', 'w') as stdout_file:
+                stdout_file.write(result.stdout)
+            
+            logger.info("Simulation completed successfully")
+            
+            # Load simulated spots from H5 file
+            simulation_results = {}
+            try:
+                with h5py.File(f"{sim_output}", 'r') as h5f:
+                    simulated_spots = np.array(h5f['/entry1/spots'][()])
+                    simulated_image = np.array(h5f['/entry1/data/data'][()])
+                    recips = np.array(h5f['/entry1/recips'][()])
+                    
+                    simulation_results["simulated_spots"] = simulated_spots
+                    simulation_results["simulated_images"] = {
+                        "simulated_image": simulated_image
+                    }
+                    simulation_results["recips"] = recips
+                    
+                # If visualization is enabled, create comparison visualization
+                if self.config.get("visualization").enable_visualization:
+                    self._create_simulation_comparison_visualization(
+                        output_path, orientations, simulated_spots, simulated_image, filtered_image
+                    )
+                
+                simulation_results["success"] = True
+                return simulation_results
+                
+            except Exception as e:
+                logger.error(f"Error loading simulation results: {str(e)}")
+                return {"success": False, "error": f"Failed to load simulation results: {str(e)}"}
+            
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Error running simulation command: {e}")
+            logger.error(f"Command output: {e.stdout}")
+            return {"success": False, "error": f"Simulation command failed with code {e.returncode}"}
+        
+        except Exception as e:
+            logger.error(f"Error in simulation process: {str(e)}")
+            return {"success": False, "error": str(e)}
+        
+    def _create_simulation_comparison_visualization(
+        self,
+        output_path: str,
+        indexed_orientations: np.ndarray,
+        simulated_spots: np.ndarray,
+        simulated_image: np.ndarray,
+        filtered_image: np.ndarray
+    ) -> None:
+        """
+        Create visualization comparing simulated and matched spots.
+        
+        Args:
+            output_path: Path to output files
+            indexed_orientations: Indexed orientation matrices
+            simulated_spots: Simulated diffraction spots
+            simulated_image: Simulated diffraction image
+            filtered_image: Filtered experimental image
+        """
+        logger.info("Creating simulation comparison visualization")
+        
+        # Load experimental spots
+        try:
+            spots = np.genfromtxt(f'{output_path}.bin.spots.txt', skip_header=1)
+        except Exception as e:
+            logger.error(f"Error loading experimental spots: {str(e)}")
+            return
+        
+        # Create figure with 3 subplots (experimental, simulated, overlay)
+        fig = make_subplots(
+            rows=1, cols=3,
+            subplot_titles=["Experimental Diffraction", "Simulated Diffraction", "Overlay Comparison"],
+            horizontal_spacing=0.05
+        )
+        
+        # Prepare experimental image
+        display_img = filtered_image.copy()
+        display_img[display_img == 0] = 1  # Avoid log(0)
+        log_img = np.log(display_img)
+        
+        # Add experimental image to first subplot
+        fig.add_trace(
+            go.Heatmap(
+                z=log_img,
+                colorscale='Greens',
+                showscale=False,
+            ),
+            row=1, col=1
+        )
+        
+        # Add simulated image to second subplot
+        fig.add_trace(
+            go.Heatmap(
+                z=simulated_image,
+                colorscale='Reds',
+                showscale=False,
+            ),
+            row=1, col=2
+        )
+        
+        # Create overlay for third subplot - combine experimental and simulated
+        overlay_img = np.zeros((filtered_image.shape[0], filtered_image.shape[1], 3))
+        
+        # Normalize images for RGB overlay
+        if np.max(log_img) > 0:
+            log_img_norm = log_img / np.max(log_img)
+            overlay_img[:,:,1] = log_img_norm  # Green channel for experimental
+        
+        if np.max(simulated_image) > 0:
+            sim_img_norm = simulated_image / np.max(simulated_image)
+            overlay_img[:,:,0] = sim_img_norm  # Red channel for simulated
+        
+        # Add overlay image to third subplot
+        fig.add_trace(
+            go.Image(z=overlay_img),
+            row=1, col=3
+        )
+        
+        # Create traces for spots
+        # Get colormap
+        orientation_colors = px.colors.qualitative.Dark24
+        
+        # Plot experimental spots
+        if len(indexed_orientations.shape) == 1:
+            indexed_orientations = np.expand_dims(indexed_orientations, axis=0)
+            
+        # Dictionary to track how many unique spots each orientation has
+        orientation_unique_spots = {}
+            
+        # Plot spots for each orientation
+        for i, orientation in enumerate(indexed_orientations):
+            orientation_id = int(orientation[0])
+            color = orientation_colors[i % len(orientation_colors)]
+            
+            # Get spots for this orientation
+            orientation_spots = spots[spots[:, 0] == orientation_id]
+            
+            # Count unique spots for this orientation
+            if orientation_id not in orientation_unique_spots:
+                orientation_unique_spots[orientation_id] = set()
+                
+            for spot in orientation_spots:
+                # Use spot position as a unique identifier
+                spot_id = (int(spot[5]), int(spot[6]))
+                orientation_unique_spots[orientation_id].add(spot_id)
+            
+            # Skip if no spots
+            if len(orientation_spots) == 0:
+                continue
+                
+            # Create scatter trace for experimental spots
+            name = f"Exp ID {i}"
+            trace = go.Scatter(
+                x=orientation_spots[:, 5],
+                y=orientation_spots[:, 6],
+                mode='markers',
+                marker=dict(
+                    color=color,
+                    size=8,
+                    line=dict(width=1, color='black'),
+                    symbol='circle',
+                ),
+                name=name,
+                legendgroup=f'orientation_{i}',
+                hovertext=[
+                    f"Orientation: {i}<br>"
+                    f"HKL: {int(spot[2])},{int(spot[3])},{int(spot[4])}<br>"
+                    f"Position: ({spot[5]:.1f}, {spot[6]:.1f})"
+                    for spot in orientation_spots
+                ],
+                hoverinfo="text"
+            )
+            
+            fig.add_trace(trace, row=1, col=1)
+            fig.add_trace(trace, row=1, col=3)
+            
+            # Filter simulated spots for this orientation grain number
+            sim_orientation_spots = simulated_spots[simulated_spots[:, 2] == i]
+            
+            # Create scatter trace for simulated spots
+            if len(sim_orientation_spots) > 0:
+                sim_trace = go.Scatter(
+                    x=sim_orientation_spots[:, 0],
+                    y=sim_orientation_spots[:, 1],
+                    mode='markers',
+                    marker=dict(
+                        color=color,
+                        size=8,
+                        line=dict(width=1, color='black'),
+                        symbol='x',
+                    ),
+                    name=f"Sim ID {i}",
+                    legendgroup=f'orientation_{i}',
+                    hovertext=[
+                        f"Orientation: {i}<br>"
+                        f"Position: ({spot[0]:.1f}, {spot[1]:.1f})<br>"
+                        f"Status: {'Matched' if spot[3] == 1 else 'Unmatched'}"
+                        for spot in sim_orientation_spots
+                    ],
+                    hoverinfo="text"
+                )
+                
+                fig.add_trace(sim_trace, row=1, col=2)
+                
+                # Add modified version to overlay
+                sim_trace.update(
+                    marker=dict(
+                        color=color,
+                        size=10,
+                        line=dict(width=1, color='black'),
+                        symbol='circle-open',
+                    )
+                )
+                fig.add_trace(sim_trace, row=1, col=3)
+        
+        # Update layout
+        fig.update_layout(
+            title="Experimental vs. Simulated Diffraction Comparison",
+            height=800,
+            width=1800,
+            showlegend=True,
+            legend=dict(
+                yanchor="top",
+                y=0.99,
+                xanchor="left",
+                x=0.01,
+                itemsizing='constant'
+            )
+        )
+        
+        # Update axes
+        for col in range(1, 4):
+            fig.update_xaxes(title_text="X Position (pixels)", row=1, col=col)
+            fig.update_yaxes(title_text="Y Position (pixels)", row=1, col=col)
+        
+        # Save as HTML
+        fig.write_html(f"{output_path}.bin.simulation_comparison.html")
+        logger.info(f"Simulation comparison visualization saved to {output_path}.bin.simulation_comparison.html")
+        
+        # Store orientation unique spot counts
+        unique_counts = {orient_id: len(spots) for orient_id, spots in orientation_unique_spots.items()}
+        orientation_unique_counts_file = f"{output_path}.bin.unique_spot_counts.txt"
+        with open(orientation_unique_counts_file, 'w') as f:
+            f.write("Orientation_ID\tUnique_Spots\n")
+            for orient_id, count in unique_counts.items():
+                f.write(f"{orient_id}\t{count}\n")
+        
+        logger.info(f"Orientation unique spot counts saved to {orientation_unique_counts_file}")
+            
     def _generate_hkl_file(self) -> Dict[str, Any]:
         """
         Generate HKL file using the GenerateHKLs.py script.
@@ -1067,30 +1485,207 @@ class EnhancedImageProcessor:
             
             logger.info(f"Read indexing results: {orientations.shape[0] if len(orientations.shape) > 1 else 1} orientations")
             
+            # Calculate unique spot counts for each orientation and create orientation quality score
+            orientation_unique_spots = self._calculate_unique_spots_per_orientation(orientations, spots, labels)
+            
+            # Sort orientations by quality score (NMatches*sqrt(intensity))
+            orientations = self._sort_orientations_by_quality(orientations, orientation_unique_spots)
+            
+            # Save updated sorted orientations
+            np.savetxt(f'{output_path}.bin.solutions_sorted.txt', orientations, 
+                      header=header_gr.strip(), comments='')
+            
+            # Create h5 file with orientation and spot data
+            self._create_h5_output(output_path, orientations, spots, orientation_unique_spots)
+            
         except Exception as e:
             logger.error(f"Error reading indexing results: {str(e)}")
             return {"success": False, "error": f"Failed to read indexing results: {str(e)}"}
             
-        # Create visualization
-        visualization_results = self._visualize_results(
-            output_path, orientations, spots, labels, filtered_image
-        )
-        
-        if not visualization_results["success"]:
-            return visualization_results
+        # Create visualization if enabled
+        if self.config.get("visualization").enable_visualization:
+            visualization_results = self._visualize_results(
+                output_path, orientations, spots, labels, filtered_image, orientation_unique_spots
+            )
+            
+            if not visualization_results["success"]:
+                logger.warning(f"Visualization failed: {visualization_results.get('error', 'Unknown error')}")
+        else:
+            logger.info("Visualization disabled, skipping")
+            visualization_results = {"success": True, "message": "Visualization disabled"}
             
         # Return results
         return {
             "success": True,
             "orientations": orientations,
             "spots": spots,
+            "unique_spots_per_orientation": orientation_unique_spots,
             "visualization": visualization_results
         }
         
-
-###########################################
-# 9. Visualization Improvements Implementation #
-###########################################
+    def _calculate_unique_spots_per_orientation(
+        self,
+        orientations: np.ndarray,
+        spots: np.ndarray,
+        labels: np.ndarray
+    ) -> Dict[int, Dict]:
+        """
+        Calculate the number of unique spots for each orientation.
+        
+        Args:
+            orientations: Orientation data array
+            spots: Spot data array
+            labels: Label image from segmentation
+            
+        Returns:
+            Dictionary with orientation ID as key and unique spot data as value
+        """
+        # Ensure orientations is 2D
+        if len(orientations.shape) == 1:
+            orientations = np.expand_dims(orientations, axis=0)
+            
+        unique_spots = {}
+        
+        # Process spots for each orientation
+        for orientation in orientations:
+            orientation_id = int(orientation[0])
+            
+            # Find all spots for this orientation
+            orientation_spots = spots[spots[:, 0] == orientation_id]
+            
+            # Skip if no spots
+            if len(orientation_spots) == 0:
+                unique_spots[orientation_id] = {
+                    "spots": set(),
+                    "count": 0,
+                    "total_intensity": 0.0,
+                    "unique_labels": set(),
+                }
+                continue
+                
+            # Track unique spots and their intensities
+            spot_positions = set()
+            unique_labels = set()
+            total_intensity = 0.0
+            
+            for spot in orientation_spots:
+                # Get spot position as tuple for set operations
+                x, y = int(spot[5]), int(spot[6])
+                spot_positions.add((x, y))
+                
+                # Get label from the label image
+                if 0 <= y < labels.shape[0] and 0 <= x < labels.shape[1]:
+                    label = labels[y, x]
+                    if label > 0:
+                        unique_labels.add(int(label))
+                        
+                # Add intensity (column 7 often contains intensity)
+                total_intensity += float(spot[7]) if len(spot) > 7 else 1.0
+                
+            # Store results
+            unique_spots[orientation_id] = {
+                "spots": spot_positions,
+                "count": len(spot_positions),
+                "total_intensity": total_intensity,
+                "unique_labels": unique_labels,
+                "unique_label_count": len(unique_labels)
+            }
+            
+        logger.info(f"Calculated unique spots for {len(unique_spots)} orientations")
+        return unique_spots
+    
+    def _sort_orientations_by_quality(
+        self,
+        orientations: np.ndarray,
+        orientation_unique_spots: Dict[int, Dict]
+    ) -> np.ndarray:
+        """
+        Sort orientations by quality score (NMatches*sqrt(intensity)).
+        
+        Args:
+            orientations: Orientation data array
+            orientation_unique_spots: Dictionary of unique spots per orientation
+            
+        Returns:
+            Sorted orientation data array
+        """
+        if len(orientations.shape) == 1:
+            return orientations
+            
+        # Calculate quality scores
+        quality_scores = []
+        for i, orientation in enumerate(orientations):
+            orientation_id = int(orientation[0])
+            
+            # Get unique spot data
+            spot_data = orientation_unique_spots.get(orientation_id, {})
+            n_matches = spot_data.get("count", 0)
+            intensity = spot_data.get("total_intensity", 0.0)
+            
+            # Calculate quality score: NMatches * sqrt(intensity)
+            quality_score = n_matches * np.sqrt(intensity) if intensity > 0 else 0
+            quality_scores.append((i, quality_score))
+            
+        # Sort by quality score in descending order
+        sorted_indices = [idx for idx, score in sorted(quality_scores, key=lambda x: x[1], reverse=True)]
+        
+        # Reorder orientations
+        sorted_orientations = orientations[sorted_indices]
+        
+        # Update orientation IDs to match new order
+        for i, orientation in enumerate(sorted_orientations):
+            sorted_orientations[i, 0] = i
+            
+        logger.info(f"Sorted {len(sorted_orientations)} orientations by quality score")
+        return sorted_orientations
+    
+    def _create_h5_output(
+        self,
+        output_path: str,
+        orientations: np.ndarray,
+        spots: np.ndarray,
+        orientation_unique_spots: Dict[int, Dict]
+    ) -> None:
+        """
+        Create HDF5 file with orientation and spot data.
+        
+        Args:
+            output_path: Path to output files
+            orientations: Orientation data array
+            spots: Spot data array
+            orientation_unique_spots: Dictionary of unique spots per orientation
+        """
+        output_h5 = f"{output_path}.bin.output.h5"
+        
+        # Create unique spot count array
+        unique_counts = np.zeros((len(orientation_unique_spots), 2))
+        for i, (orient_id, data) in enumerate(orientation_unique_spots.items()):
+            unique_counts[i, 0] = orient_id
+            unique_counts[i, 1] = data["unique_label_count"]
+            
+        try:
+            with h5py.File(output_h5, 'a') as hf:
+                # Create results group if it doesn't exist
+                if '/entry/results' not in hf:
+                    hf.create_group('/entry/results')
+                    
+                # Store orientation data
+                if len(orientations.shape) == 1:
+                    orientations = np.expand_dims(orientations, axis=0)
+                    
+                # Store orientation and spot data
+                hf.create_dataset('/entry/results/orientations', data=orientations)
+                hf.create_dataset('/entry/results/filtered_orientations', data=orientations)
+                hf.create_dataset('/entry/results/spots', data=spots)
+                hf.create_dataset('/entry/results/filtered_spots', data=spots)
+                
+                # Store unique spot counts
+                hf.create_dataset('/entry/results/unique_spots_per_orientation', data=unique_counts)
+                
+                logger.info(f"Stored orientation and spot data in {output_h5}")
+                
+        except Exception as e:
+            logger.error(f"Error creating H5 output: {str(e)}")
 
     def _visualize_results(
         self, 
@@ -1098,7 +1693,8 @@ class EnhancedImageProcessor:
         orientations: np.ndarray, 
         spots: np.ndarray, 
         labels: np.ndarray,
-        filtered_image: np.ndarray
+        filtered_image: np.ndarray,
+        orientation_unique_spots: Dict[int, Dict] = None
     ) -> Dict[str, Any]:
         """
         Visualize the indexing results with enhanced plotting options.
@@ -1109,6 +1705,7 @@ class EnhancedImageProcessor:
             spots: Spot data array
             labels: Final labels array
             filtered_image: Filtered image
+            orientation_unique_spots: Dictionary of unique spots per orientation
             
         Returns:
             Dictionary with visualization results
@@ -1118,7 +1715,7 @@ class EnhancedImageProcessor:
         
         # Create standard static visualization for H5 output
         static_result = self._create_static_visualization(
-            output_path, orientations, spots, labels, filtered_image
+            output_path, orientations, spots, labels, filtered_image, orientation_unique_spots
         )
         
         if not static_result["success"]:
@@ -1127,7 +1724,7 @@ class EnhancedImageProcessor:
         # Create interactive visualization if requested
         if plot_type in ["interactive", "both"]:
             interactive_result = self._create_interactive_visualization(
-                output_path, orientations, spots, labels, filtered_image
+                output_path, orientations, spots, labels, filtered_image, orientation_unique_spots
             )
             
             if not interactive_result["success"]:
@@ -1146,7 +1743,7 @@ class EnhancedImageProcessor:
             try:
                 logger.info("Generating analysis report")
                 self._create_analysis_report(
-                    output_path, orientations, spots, labels, filtered_image
+                    output_path, orientations, spots, labels, filtered_image, orientation_unique_spots
                 )
             except Exception as e:
                 logger.warning(f"Failed to create analysis report: {str(e)}")
@@ -1159,7 +1756,8 @@ class EnhancedImageProcessor:
         orientations: np.ndarray, 
         spots: np.ndarray, 
         labels: np.ndarray,
-        filtered_image: np.ndarray
+        filtered_image: np.ndarray,
+        orientation_unique_spots: Dict[int, Dict] = None
     ) -> Dict[str, Any]:
         """
         Create static visualizations of the indexing results.
@@ -1170,6 +1768,7 @@ class EnhancedImageProcessor:
             spots: Spot data array
             labels: Final labels array
             filtered_image: Filtered image
+            orientation_unique_spots: Dictionary of unique spots per orientation
             
         Returns:
             Dictionary with visualization results
@@ -1206,7 +1805,7 @@ class EnhancedImageProcessor:
             logger.info(f"Static visualization saved to {output_path}.bin.LabeledImage.tif and {output_path}.bin.LabeledImage.png")
             
             # Create additional visualization: Orientation quality map
-            self._create_quality_map(output_path, orientations, spots, filtered_image)
+            self._create_quality_map(output_path, orientations, spots, filtered_image, orientation_unique_spots)
             
             return {"success": True}
             
@@ -1219,7 +1818,8 @@ class EnhancedImageProcessor:
         output_path: str, 
         orientations: np.ndarray, 
         spots: np.ndarray, 
-        filtered_image: np.ndarray
+        filtered_image: np.ndarray,
+        orientation_unique_spots: Dict[int, Dict] = None
     ) -> None:
         """
         Create a quality map visualization showing the confidence of orientation indexing.
@@ -1229,6 +1829,7 @@ class EnhancedImageProcessor:
             orientations: Orientation data array
             spots: Spot data array
             filtered_image: Filtered image
+            orientation_unique_spots: Dictionary of unique spots per orientation
         """
         # Skip if no orientations
         if orientations.size == 0:
@@ -1247,10 +1848,16 @@ class EnhancedImageProcessor:
             
         for orientation in orientations:
             # Get orientation quality score
+            orientation_id = int(orientation[0])
             quality_score = orientation[4]  # Assuming column 4 is the quality score
             
+            # Enhance with unique spot count if available
+            if orientation_unique_spots and orientation_id in orientation_unique_spots:
+                unique_count = orientation_unique_spots[orientation_id]["unique_label_count"]
+                quality_score = quality_score * (1.0 + 0.1 * unique_count)  # Boost score based on unique spots
+            
             # Get spots for this orientation
-            orientation_spots = spots[spots[:, 0] == orientation[0]]
+            orientation_spots = spots[spots[:, 0] == orientation_id]
             
             # Add quality score to map at spot locations
             for spot in orientation_spots:
@@ -1279,7 +1886,8 @@ class EnhancedImageProcessor:
         orientations: np.ndarray, 
         spots: np.ndarray, 
         labels: np.ndarray,
-        filtered_image: np.ndarray
+        filtered_image: np.ndarray,
+        orientation_unique_spots: Dict[int, Dict] = None
     ) -> Dict[str, Any]:
         """
         Create interactive visualization using Plotly.
@@ -1290,6 +1898,7 @@ class EnhancedImageProcessor:
             spots: Spot data array
             labels: Final labels array
             filtered_image: Filtered image
+            orientation_unique_spots: Dictionary of unique spots per orientation
             
         Returns:
             Dictionary with visualization results
@@ -1339,6 +1948,11 @@ class EnhancedImageProcessor:
                 # Get orientation quality score
                 quality_score = orientation[4]
                 
+                # Get unique spot count if available
+                unique_count = 0
+                if orientation_unique_spots and orientation_id in orientation_unique_spots:
+                    unique_count = orientation_unique_spots[orientation_id]["unique_label_count"]
+                
                 # Get spots for this orientation
                 orientation_spots = spots[spots[:, 0] == orientation_id]
                 
@@ -1351,7 +1965,7 @@ class EnhancedImageProcessor:
                 y_coords = orientation_spots[:, 6]
                 
                 # Add trace for this orientation
-                name = f"ID {i}"
+                name = f"ID {i} ({unique_count} unique)"
                 trace = go.Scatter(
                     x=x_coords,
                     y=y_coords,
@@ -1365,7 +1979,8 @@ class EnhancedImageProcessor:
                     hovertext=[
                         f"Orientation: {i}<br>"
                         f"HKL: {int(spot[2])},{int(spot[3])},{int(spot[4])}<br>"
-                        f"Position: ({spot[5]:.1f}, {spot[6]:.1f})"
+                        f"Position: ({spot[5]:.1f}, {spot[6]:.1f})<br>"
+                        f"Unique Spots: {unique_count}"
                         for spot in orientation_spots
                     ],
                     hoverinfo="text"
@@ -1377,7 +1992,9 @@ class EnhancedImageProcessor:
                 for spot in orientation_spots:
                     x, y = int(spot[5]), int(spot[6])
                     if 0 <= x < quality_map.shape[1] and 0 <= y < quality_map.shape[0]:
-                        quality_map[y, x] = max(quality_map[y, x], quality_score)
+                        # Enhance quality score with unique spot count
+                        enhanced_quality = quality_score * (1.0 + 0.1 * unique_count)
+                        quality_map[y, x] = max(quality_map[y, x], enhanced_quality)
                         
             # Smooth quality map and add to second subplot
             quality_map = ndimg.gaussian_filter(quality_map, 3)
@@ -1524,7 +2141,8 @@ class EnhancedImageProcessor:
         orientations: np.ndarray, 
         spots: np.ndarray, 
         labels: np.ndarray,
-        filtered_image: np.ndarray
+        filtered_image: np.ndarray,
+        orientation_unique_spots: Dict[int, Dict] = None
     ) -> None:
         """
         Create comprehensive HTML analysis report.
@@ -1535,6 +2153,7 @@ class EnhancedImageProcessor:
             spots: Spot data array
             labels: Final labels array
             filtered_image: Filtered image
+            orientation_unique_spots: Dictionary of unique spots per orientation
         """
         # Skip if no orientations
         if orientations.size == 0:
@@ -1604,7 +2223,7 @@ class EnhancedImageProcessor:
                 </div>
         """)
         
-        # Add orientation summary table - MODIFIED: removed Euler angles column
+        # Add orientation summary table with unique spots column
         html_content.append("""
                 <h2>Orientation Summary</h2>
                 <table>
@@ -1612,25 +2231,32 @@ class EnhancedImageProcessor:
                         <th>ID</th>
                         <th>Quality</th>
                         <th>Spots</th>
+                        <th>Unique Spots</th>
                         <th>Quaternion (w,x,y,z)</th>
                     </tr>
         """)
         
         for i, orientation in enumerate(orientations):
-            # Extract orientation parameters (adjust column indices as needed)
+            # Extract orientation parameters
             orientation_id = int(orientation[0])
             quality = orientation[4]
             num_spots = orientation[5]
             
-            # Extract quaternion components (assuming w,x,y,z format)
+            # Get unique spot count if available
+            unique_spots = 0
+            if orientation_unique_spots and orientation_id in orientation_unique_spots:
+                unique_spots = orientation_unique_spots[orientation_id]["unique_label_count"]
+            
+            # Extract quaternion components
             qw, qx, qy, qz = orientation[7:11]
             
-            # Add table row - MODIFIED: removed Euler angles
+            # Add table row with unique spots column
             html_content.append(f"""
                     <tr>
                         <td>{i}</td>
                         <td>{quality:.4f}</td>
                         <td>{int(num_spots)}</td>
+                        <td>{unique_spots}</td>
                         <td>{qw:.4f}, {qx:.4f}, {qy:.4f}, {qz:.4f}</td>
                     </tr>
             """)
@@ -1639,11 +2265,17 @@ class EnhancedImageProcessor:
         
         # Add spot distribution visualization (simple histogram of spots per orientation)
         spots_per_orientation = {}
-        for spot in spots:
-            orientation_id = int(spot[0])
-            if orientation_id not in spots_per_orientation:
-                spots_per_orientation[orientation_id] = 0
-            spots_per_orientation[orientation_id] += 1
+        unique_spots_per_orientation = {}
+        for orient_id in range(len(orientations)):
+            # Count spots
+            orientation_spots = spots[spots[:, 0] == orient_id]
+            spots_per_orientation[orient_id] = len(orientation_spots)
+            
+            # Get unique spots
+            if orientation_unique_spots and orient_id in orientation_unique_spots:
+                unique_spots_per_orientation[orient_id] = orientation_unique_spots[orient_id]["unique_label_count"]
+            else:
+                unique_spots_per_orientation[orient_id] = 0
             
         html_content.append("""
                 <h2>Spot Distribution</h2>
@@ -1658,10 +2290,17 @@ class EnhancedImageProcessor:
                         data: {
                             labels: [""" + ", ".join([f"'{i}'" for i in range(len(orientations))]) + """],
                             datasets: [{
-                                label: 'Spots per Orientation',
-                                data: [""" + ", ".join([str(spots_per_orientation.get(int(orientation[0]), 0)) for orientation in orientations]) + """],
+                                label: 'Total Spots',
+                                data: [""" + ", ".join([str(spots_per_orientation.get(i, 0)) for i in range(len(orientations))]) + """],
                                 backgroundColor: 'rgba(54, 162, 235, 0.5)',
                                 borderColor: 'rgba(54, 162, 235, 1)',
+                                borderWidth: 1
+                            },
+                            {
+                                label: 'Unique Spots',
+                                data: [""" + ", ".join([str(unique_spots_per_orientation.get(i, 0)) for i in range(len(orientations))]) + """],
+                                backgroundColor: 'rgba(255, 99, 132, 0.5)',
+                                borderColor: 'rgba(255, 99, 132, 1)',
                                 borderWidth: 1
                             }]
                         },
@@ -1696,6 +2335,12 @@ class EnhancedImageProcessor:
                     <li><a href=""" + f'"{os.path.basename(output_path)}.bin.interactive.html"' + """ target="_blank">Interactive Diffraction Pattern</a></li>
         """)
         
+        # Add simulation comparison link if it exists
+        if os.path.exists(f"{output_path}.bin.simulation_comparison.html"):
+            html_content.append(f"""
+                    <li><a href="{os.path.basename(output_path)}.bin.simulation_comparison.html" target="_blank">Simulation Comparison</a></li>
+            """)
+        
         if self.config.get("visualization").generate_3d:
             html_content.append(f"""
                     <li><a href="{os.path.basename(output_path)}.bin.3D.html" target="_blank">3D Orientation Visualization</a></li>
@@ -1728,7 +2373,9 @@ class EnhancedImageProcessor:
             ("Min Good Spots", self.config.get("min_good_spots")),
             ("Watershed Enabled", "Yes" if self.config.get("image_processing").watershed_enabled else "No"),
             ("Processing Type", self.config.get("processing_type")),
-            ("CPUs Used", self.config.get("num_cpus"))
+            ("CPUs Used", self.config.get("num_cpus")),
+            ("Simulation Enabled", "Yes" if self.config.get("simulation").enable_simulation else "No"),
+            ("Skip Percentage", f"{self.config.get('simulation').skip_percentage}%"),
         ]
         
         for param, value in parameters:
@@ -1837,7 +2484,7 @@ class EnhancedImageProcessor:
                 ms=3, 
                 markeredgecolor=colors(i),
                 markeredgewidth=0.3,
-                label=f'ID {i}'
+                label=f'ID {i} ({len(good_spot_indices)} unique)'
             )
             
             # Optionally add HKL labels
@@ -1883,7 +2530,7 @@ Examples:
 Command Summary:
   process - Process Laue diffraction images
     Required: -c/--config, -i/--image
-    Optional: -n/--ncpus, -g/--gpu, -t/--threshold, -o/--output, --dry-run
+    Optional: -n/--ncpus, -g/--gpu, -t/--threshold, -o/--output, --dry-run, --no-viz, --no-sim
     
   config  - Generate or validate configuration files
     Required: -o/--output (for generation), -v/--validate (for validation)
@@ -1917,6 +2564,12 @@ Examples:
   Process multiple files with 8 CPU cores:
     python RunImage.py process -c config.txt -i "data/*.h5" -n 8
     
+  Process without visualization (H5 output only):
+    python RunImage.py process -c config.txt -i image_001.h5 --no-viz
+    
+  Process without simulation:
+    python RunImage.py process -c config.txt -i image_001.h5 --no-sim
+    
   Test configuration without processing:
     python RunImage.py process -c config.txt -i image_001.h5 --dry-run
         """
@@ -1933,6 +2586,10 @@ Examples:
                               help='Output directory (overrides config; default: results/)')
     process_parser.add_argument('--dry-run', action='store_true', 
                               help='Validate configuration without processing images')
+    process_parser.add_argument('--no-viz', action='store_true',
+                               help='Disable visualization (H5 output only)')
+    process_parser.add_argument('--no-sim', action='store_true',
+                               help='Disable diffraction simulation')
     
     # Config command
     config_parser = subparsers.add_parser('config', 
@@ -2033,6 +2690,10 @@ def process_images(args):
     config_manager.set("num_cpus", args.ncpus)
     if args.output:
         config_manager.set("result_dir", args.output)
+    if args.no_viz:
+        config_manager.config.visualization.enable_visualization = False
+    if args.no_sim:
+        config_manager.config.simulation.enable_simulation = False
         
     # Create result directory
     result_dir = config_manager.get("result_dir")
@@ -2187,10 +2848,26 @@ def view_results(args):
             orientations = np.array(h5_file['/entry/results/filtered_orientations'])
             spots = np.array(h5_file['/entry/results/filtered_spots'])
             
+            # Load unique spot counts if available
+            orientation_unique_spots = None
+            if '/entry/results/unique_spots_per_orientation' in h5_file:
+                unique_spots_array = np.array(h5_file['/entry/results/unique_spots_per_orientation'])
+                orientation_unique_spots = {}
+                for i in range(unique_spots_array.shape[0]):
+                    orient_id = int(unique_spots_array[i, 0])
+                    unique_count = int(unique_spots_array[i, 1])
+                    orientation_unique_spots[orient_id] = {
+                        "unique_label_count": unique_count,
+                        "spots": set(),  # Empty placeholder
+                        "unique_labels": set(),  # Empty placeholder
+                        "count": 0,  # Placeholder
+                        "total_intensity": 0  # Placeholder
+                    }
+            
         # Generate interactive visualization
         output_path = os.path.splitext(args.input)[0]
         processor._create_interactive_visualization(
-            output_path, orientations, spots, labels, filtered_image
+            output_path, orientations, spots, labels, filtered_image, orientation_unique_spots
         )
         
         # Open the interactive HTML (platform-dependent)
@@ -2254,6 +2931,22 @@ def generate_report(args):
             orientations = np.array(h5_file['/entry/results/filtered_orientations'])
             spots = np.array(h5_file['/entry/results/filtered_spots'])
             
+            # Load unique spot counts if available
+            orientation_unique_spots = None
+            if '/entry/results/unique_spots_per_orientation' in h5_file:
+                unique_spots_array = np.array(h5_file['/entry/results/unique_spots_per_orientation'])
+                orientation_unique_spots = {}
+                for i in range(unique_spots_array.shape[0]):
+                    orient_id = int(unique_spots_array[i, 0])
+                    unique_count = int(unique_spots_array[i, 1])
+                    orientation_unique_spots[orient_id] = {
+                        "unique_label_count": unique_count,
+                        "spots": set(),  # Empty placeholder
+                        "unique_labels": set(),  # Empty placeholder
+                        "count": 0,  # Placeholder
+                        "total_intensity": 0  # Placeholder
+                    }
+            
         # Determine output path
         if args.output:
             output_path = os.path.splitext(args.output)[0]
@@ -2262,7 +2955,7 @@ def generate_report(args):
             
         # Generate report
         processor._create_analysis_report(
-            output_path, orientations, spots, labels, filtered_image
+            output_path, orientations, spots, labels, filtered_image, orientation_unique_spots
         )
         
         logger.info(f"Report generated: {output_path}.report.html")
