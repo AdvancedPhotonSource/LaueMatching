@@ -1105,11 +1105,14 @@ class EnhancedImageProcessor:
                 return result
             
         # Choose the appropriate executable
-        if compute_type == 'CPU':
+        do_forward = self.config.get("do_forward")
+        if compute_type == 'CPU' or (do_forward and compute_type != 'CPU'):
             executable = f'{file_path}/build/LaueMatchingCPU'
+            if do_forward and compute_type != 'CPU':
+                logger.warning("Switching to CPU implementation because forward simulation is enabled")
         else:
-            executable = f'{file_path}/build/LaueMatchingGPU'
-            
+            executable = f'{file_path}/build/LaueMatchingGPU'            
+        
         # Run the indexing command
         indexing_cmd = f'{executable} {config_file} {orient_file} {hkl_file} {output_path}.bin {ncpus}'
         logger.info(f'Running indexing command: {indexing_cmd}')
@@ -3049,7 +3052,11 @@ def process_images(args):
     
     # Override configuration from command line arguments
     if args.gpu:
-        config_manager.set("processing_type", "GPU")
+        # Don't use GPU if do_forward is enabled
+        if config_manager.get("do_forward"):
+            logger.warning("GPU option specified but do_forward is enabled in configuration. Using CPU instead.")
+        else:
+            config_manager.set("processing_type", "GPU")
     config_manager.set("num_cpus", args.ncpus)
     if args.output:
         config_manager.set("result_dir", args.output)
