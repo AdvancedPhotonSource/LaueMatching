@@ -1,9 +1,15 @@
 cmake_minimum_required(VERSION 3.15)
 
-# Set CUDA architecture before project declaration
-set(CMAKE_CUDA_ARCHITECTURES 90)
+# Define options first, before the project command
+option(USE_CUDA "Build with CUDA support" ON)
 
-project(LaueMatching LANGUAGES C CUDA)
+# Only include CUDA language if needed
+if(USE_CUDA)
+  project(LaueMatching LANGUAGES C CUDA)
+  set(CMAKE_CUDA_ARCHITECTURES 90)
+else()
+  project(LaueMatching LANGUAGES C)
+endif()
 
 # Set C standard
 set(CMAKE_C_STANDARD 99)
@@ -17,8 +23,7 @@ endif()
 # Add our CMake module path
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
-# Options
-option(USE_CUDA "Build with CUDA support" ON)
+# Options (continued)
 option(DOWNLOAD_ORIENTATION_FILE "Download 100MilOrients.bin file" ON)
 option(USE_SYSTEM_NLOPT "Use system-installed NLopt library" OFF)
 option(BUILD_LIBRARY "Build shared library" ON)
@@ -29,9 +34,27 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 # Find OpenMP
 find_package(OpenMP REQUIRED)
 
-# Check for CUDA
+# Handle CUDA
 if(USE_CUDA)
-  find_package(CUDA REQUIRED)
+  if(NOT CMAKE_CUDA_COMPILER)
+    # Custom CUDA finder logic
+    find_program(CMAKE_CUDA_COMPILER
+      NAMES nvcc
+      PATHS
+        /usr/local/cuda/bin
+        /opt/cuda/bin
+        ~/opt/localcuda/bin
+        $ENV{CUDA_PATH}/bin
+        ${CUDA_BIN_PATH}
+      DOC "NVIDIA CUDA Compiler"
+    )
+    
+    if(NOT CMAKE_CUDA_COMPILER)
+      message(FATAL_ERROR "CUDA compiler not found. Set CUDA_BIN_PATH or CMAKE_CUDA_COMPILER to the directory containing nvcc.")
+    endif()
+  endif()
+  
+  # Set CUDA flags
   set(CUDA_NVCC_FLAGS "${CUDA_NVCC_FLAGS} -lgomp -O3 -G -g -w \
      -gencode=arch=compute_90,code=sm_90 \
      -lm -rdc=true")
