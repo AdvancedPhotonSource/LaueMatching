@@ -371,6 +371,7 @@
                  double totalIntensity = 0.0;
                  
                  if (doForwardSimulation) {
+                    printf("%s\n",config->forwardSimulationFile);
                      // Generate forward simulation
                      // Extract orientation matrix
                      double orientMatrix[3][3];
