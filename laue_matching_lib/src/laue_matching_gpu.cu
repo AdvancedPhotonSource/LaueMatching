@@ -397,7 +397,7 @@ void laue_free_results(MatchingResults *results) {
      // Determine kernel launch parameters
      int threadsPerBlock = 256;
      int numBlocks = (numOrientations + threadsPerBlock - 1) / threadsPerBlock;
-     
+     printf("We are here!!!!");
      // Launch kernel
      matchSpots_kernel<<<numBlocks, threadsPerBlock>>>(
          d_outArray,
@@ -425,6 +425,7 @@ void laue_free_results(MatchingResults *results) {
      
      time_checkpoint = omp_get_wtime();
      laue_log(1, "GPU pattern matching completed in %.2f seconds", time_checkpoint - start_time);
+     printf("We are here!!!!");
      
      // Count initial matches
      int numResults = 0;
