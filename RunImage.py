@@ -1656,7 +1656,9 @@ class EnhancedImageProcessor:
         labels: np.ndarray
     ) -> Dict[int, Dict]:
         """
-        Calculate the number of unique spots for each orientation.
+        Calculate the number of unique spots for each orientation,
+        ensuring spots already assigned to better orientations
+        are not double-counted.
         
         Args:
             orientations: Orientation data array
@@ -1669,27 +1671,36 @@ class EnhancedImageProcessor:
         # Ensure orientations is 2D
         if len(orientations.shape) == 1:
             orientations = np.expand_dims(orientations, axis=0)
-            
-        unique_spots = {}
         
-        # Process spots for each orientation
-        for orientation in orientations:
-            orientation_id = int(orientation[0])
+        # Sort orientations by quality score (column 4) to process best matches first
+        orient_with_quality = [(i, orient, orient[4]) for i, orient in enumerate(orientations)]
+        # Sort in descending order by quality score
+        orient_with_quality.sort(key=lambda x: x[2], reverse=True)
+        
+        unique_spots = {}
+        # Keep track of labels and positions already assigned
+        labels_found = set()
+        positions_found = set()
+        
+        # Process spots for each orientation in quality order
+        for idx, orientation, quality in orient_with_quality:
+            grain_nr = int(orientation[0])
             
             # Find all spots for this orientation
-            orientation_spots = spots[spots[:, 0] == orientation_id]
+            orientation_spots = spots[spots[:, 0] == grain_nr]
             
             # Skip if no spots
             if len(orientation_spots) == 0:
-                unique_spots[orientation_id] = {
+                unique_spots[grain_nr] = {
                     "spots": set(),
                     "count": 0,
                     "total_intensity": 0.0,
                     "unique_labels": set(),
+                    "unique_label_count": 0
                 }
                 continue
                 
-            # Track unique spots and their intensities
+            # Track unique spots and their intensities for this orientation
             spot_positions = set()
             unique_labels = set()
             total_intensity = 0.0
@@ -1697,19 +1708,34 @@ class EnhancedImageProcessor:
             for spot in orientation_spots:
                 # Get spot position as tuple for set operations
                 x, y = int(spot[5]), int(spot[6])
-                spot_positions.add((x, y))
+                pos_tuple = (x, y)
                 
+                # Skip positions already assigned to better orientations
+                if pos_tuple in positions_found:
+                    continue
+                    
                 # Get label from the label image
-                if 0 <= y < labels.shape[0] and 0 <= x < labels.shape[1]:
+                valid_position = 0 <= y < labels.shape[0] and 0 <= x < labels.shape[1]
+                if valid_position:
                     label = labels[y, x]
+                    # Skip labels already assigned to better orientations
+                    if label > 0 and label in labels_found:
+                        continue
+                        
+                    # Add new unique label
                     if label > 0:
                         unique_labels.add(int(label))
-                        
+                        labels_found.add(label)
+                
+                # Add position to unique spots for this orientation
+                spot_positions.add(pos_tuple)
+                positions_found.add(pos_tuple)
+                    
                 # Add intensity (column 7 often contains intensity)
                 total_intensity += float(spot[7]) if len(spot) > 7 else 1.0
                 
             # Store results
-            unique_spots[orientation_id] = {
+            unique_spots[grain_nr] = {
                 "spots": spot_positions,
                 "count": len(spot_positions),
                 "total_intensity": total_intensity,
@@ -2593,19 +2619,26 @@ class EnhancedImageProcessor:
             colors: Color map
             ax: Matplotlib axis
         """
-        # Sort orientations by quality score (column 4)
+        # First, sort orientations by quality score (column 4)
         if len(orientations.shape) == 2:
-            orientations = orientations[np.argsort(-orientations[:, 4])]
+            # Create list with index and orientation
+            orient_with_idx = [(i, orientation) for i, orientation in enumerate(orientations)]
+            # Sort by quality score in descending order
+            orient_with_idx.sort(key=lambda x: x[1][4], reverse=True)
         else:
             orientations = np.expand_dims(orientations, axis=0)
+            orient_with_idx = [(0, orientations[0])]
             
         # Track which labels have been found
-        labels_found = []
+        labels_found = set()
         
-        # Process each orientation
-        for i, orientation in enumerate(orientations):
+        # Process each orientation in quality order
+        for i, orientation in orient_with_idx:
+            # Get grain number
+            grain_nr = int(orientation[0])
+            
             # Get spots for this orientation
-            orientation_spots = spots[spots[:, 0] == orientation[0]]
+            orientation_spots = spots[spots[:, 0] == grain_nr]
             
             # Keep only spots with intensity in filtered image
             good_spots = []
@@ -2634,7 +2667,7 @@ class EnhancedImageProcessor:
                     label = labels[y, x]
                     if label > 0 and label not in labels_found:
                         good_spot_indices.append(j)
-                        labels_found.append(label)
+                        labels_found.add(label)  # Changed from append to add for set operations
                         
             if len(good_spot_indices) < min_good_spots:
                 continue
@@ -2649,7 +2682,7 @@ class EnhancedImageProcessor:
                 ms=3, 
                 markeredgecolor=colors(i),
                 markeredgewidth=0.3,
-                label=f'ID {i} ({len(good_spot_indices)} unique)'
+                label=f'Grain {grain_nr} ({len(good_spot_indices)} unique)'  # Changed ID to Grain
             )
             
             # Optionally add HKL labels
