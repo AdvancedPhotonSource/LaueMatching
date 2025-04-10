@@ -1208,13 +1208,7 @@ class EnhancedImageProcessor:
         except Exception as e:
             logger.error(f"Error loading experimental spots: {str(e)}")
             return
-            
-        # Debug: Log some sample spots from both sources
-        if len(spots) > 0:
-            logger.info(f"Sample experimental spot: ({spots[0][5]:.1f}, {spots[0][6]:.1f})")
-        if len(simulated_spots) > 0:
-            logger.info(f"Sample simulated spot: ({simulated_spots[0][1]:.1f}, {simulated_spots[0][0]:.1f})")
-        
+                    
         # Create figure with 3 subplots (experimental, simulated, missing spots)
         fig = make_subplots(
             rows=1, cols=3,
@@ -1467,11 +1461,15 @@ class EnhancedImageProcessor:
             height=800,
             width=1800,
             showlegend=True,
+            # Position legend outside and to the right of the plot
             legend=dict(
+                orientation="v",  # vertical legend
                 yanchor="top",
-                y=0.99,
+                y=1,
                 xanchor="left",
-                x=0.01,
+                x=1.01,  # Position just outside the right edge
+                bordercolor="Black",
+                borderwidth=1,
                 itemsizing='constant'
             )
         )
@@ -2156,11 +2154,15 @@ class EnhancedImageProcessor:
                 height=800,
                 width=1600,
                 showlegend=True,
+                # Position legend outside and to the right of the plot
                 legend=dict(
+                    orientation="v",  # vertical legend
                     yanchor="top",
-                    y=0.99,
+                    y=1,
                     xanchor="left",
-                    x=0.01
+                    x=1.02,  # Position just outside the right edge
+                    bordercolor="Black",
+                    borderwidth=1
                 )
             )
             
