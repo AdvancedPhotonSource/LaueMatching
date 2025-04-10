@@ -30,7 +30,8 @@ int file_read_parameters(const char *filename, MatchingConfig *config) {
     config->minIntensity = 1000.0;
     config->maxAngle = 2.0;
     config->performForwardSimulation = 1;
-    // strcpy(config->forwardSimulationFile, "forward_sim.bin");
+    strncpy(config->forwardSimulationFile, "forward_sim.bin", sizeof(config->forwardSimulationFile)-1);
+    config->forwardSimulationFile[sizeof(config->forwardSimulationFile)-1] = '\0';
     config->numThreads = omp_get_max_threads();
     
     fileParam = fopen(filename, "r");
