@@ -27,20 +27,23 @@ endif()
 # NLopt is handled in parent
 
 # Collect source files
-file(GLOB_RECURSE C_SOURCES "src/*.c")
-message(STATUS "Found C sources: ${C_SOURCES}")
+file(GLOB_RECURSE COMMON_C_SOURCES "src/*.c")
 
 # If building with CUDA
 if(USE_CUDA)
+  # Exclude laue_matching.c when building with CUDA
+  list(FILTER COMMON_C_SOURCES EXCLUDE REGEX ".*laue_matching.c$")
+  
   # Collect CUDA source files
   file(GLOB_RECURSE CUDA_SOURCES "src/*.cu")
-  set(SOURCES ${C_SOURCES} ${CUDA_SOURCES})
+  set(SOURCES ${COMMON_C_SOURCES} ${CUDA_SOURCES})
   message(STATUS "Found CUDA sources: ${CUDA_SOURCES}")
+  message(STATUS "Building with CUDA, excluded laue_matching.c")
   
   # Add CUDA compile definitions
   add_compile_definitions(USE_CUDA)
 else()
-  set(SOURCES ${C_SOURCES})
+  set(SOURCES ${COMMON_C_SOURCES})
 endif()
 
 # If the parent wants to build a library
@@ -60,6 +63,11 @@ if(BUILD_LIBRARY)
             ${CMAKE_CURRENT_SOURCE_DIR}/src
             ${CMAKE_CURRENT_SOURCE_DIR}
     )
+    
+    # Conditionally exclude laue_matching.h from includes when using CUDA
+    if(USE_CUDA)
+        target_compile_definitions(laue_matching PRIVATE EXCLUDE_LAUE_MATCHING_H)
+    endif()
     
     # Link dependencies - Use parent-provided NLopt
     target_link_libraries(laue_matching PRIVATE OpenMP::OpenMP_C ${NLOPT_LIBRARIES} m)

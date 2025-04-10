@@ -17,8 +17,9 @@
  extern "C" {
  #endif
  
+ #ifndef EXCLUDE_LAUE_MATCHING_H
  #include "laue_matching.h"
- 
+ #endif 
  /**
   * @brief Initialize GPU resources for Laue pattern matching
   * 
