@@ -1626,6 +1626,10 @@ class EnhancedImageProcessor:
             # Convert quaternion to Euler angles (ZXZ convention)
             # This is a simplified conversion - adjust as needed based on your convention
             try:
+                # Clamp the arcsin input value to the valid range [-1, 1]
+                arcsin_input = 2*(qw*qy - qz*qx)
+                arcsin_input = max(-1.0, min(1.0, arcsin_input))
+
                 # Convert quaternion to Euler angles (in degrees)
                 euler_z1 = np.degrees(np.arctan2(2*(qw*qz + qx*qy), 1 - 2*(qy*qy + qz*qz)))
                 euler_x = np.degrees(np.arcsin(2*(qw*qy - qz*qx)))
