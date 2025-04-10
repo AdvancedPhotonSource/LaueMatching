@@ -148,7 +148,7 @@
      const char *imageFile,
      MatchingResults *results
  ) {
-    printf("Starting matching with forward file: %s\n", config->forwardSimulationFile);
+
     int ret;
      double start_time, time_checkpoint;
      double *image = NULL;
@@ -291,7 +291,6 @@
      
      // Create forward simulation file if needed
      int doForwardSimulation = config->performForwardSimulation;
-     printf("%s\n",config->forwardSimulationFile);
      if (doForwardSimulation == 0) {
          // Check if forward simulation file exists
          int result = open(config->forwardSimulationFile, O_RDONLY, S_IRUSR | S_IWUSR);
@@ -311,7 +310,6 @@
      // Track number of matched patterns
      int numResults = 0;
      int anyThreadError = 0; // Flag to track if any thread encountered an error
-     printf("%s\n",config->forwardSimulationFile);
      
      #pragma omp parallel num_threads(numThreads) reduction(+:numResults) shared(anyThreadError)
      {
@@ -374,7 +372,6 @@
                  double totalIntensity = 0.0;
                  
                  if (doForwardSimulation) {
-                    // printf("%s\n",config->forwardSimulationFile);
                      // Generate forward simulation
                      // Extract orientation matrix
                      double orientMatrix[3][3];
@@ -552,7 +549,6 @@
              
              // Write forward simulation data if needed
              if (doForwardSimulation) {
-                // printf("%s\n",config->forwardSimulationFile);
                  int ret = file_write_forward_simulation(
                      config->forwardSimulationFile,
                      outArray,
