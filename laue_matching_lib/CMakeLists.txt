@@ -28,12 +28,14 @@ endif()
 
 # Collect source files
 file(GLOB_RECURSE C_SOURCES "src/*.c")
+message(STATUS "Found C sources: ${C_SOURCES}")
 
 # If building with CUDA
 if(USE_CUDA)
   # Collect CUDA source files
   file(GLOB_RECURSE CUDA_SOURCES "src/*.cu")
   set(SOURCES ${C_SOURCES} ${CUDA_SOURCES})
+  message(STATUS "Found CUDA sources: ${CUDA_SOURCES}")
   
   # Add CUDA compile definitions
   add_compile_definitions(USE_CUDA)
