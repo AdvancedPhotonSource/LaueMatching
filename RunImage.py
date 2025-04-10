@@ -149,7 +149,7 @@ class SimulationConfig:
     enable_simulation: bool = True
     skip_percentage: float = 0.0  # Default to 0 (no skipping)
     orientation_file: str = "orientations.txt"
-    energies: str = "10 100"  # Energy range in keV (Elo Ehi)
+    energies: str = "5 30"  # Energy range in keV (Elo Ehi)
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
