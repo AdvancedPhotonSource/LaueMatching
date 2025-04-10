@@ -2075,6 +2075,7 @@ class EnhancedImageProcessor:
                 orientations = np.expand_dims(orientations, axis=0)
                 
             # Create colormap
+            min_good_spots = self.config.get("min_good_spots")
             orientation_colors = px.colors.qualitative.Dark24
             
             # Dictionary to store traces by orientation
@@ -2082,8 +2083,8 @@ class EnhancedImageProcessor:
             
             # Plot spots for each orientation
             for i, orientation in enumerate(orientations):
-                grain_nr = int(orientation[0])  # Use actual grain number
-                color = orientation_colors[i % len(orientation_colors)]  # Color still based on position
+                grain_nr = int(orientation[0])  # Use actual grain number, not index
+                color = orientation_colors[i % len(orientation_colors)]
                 
                 # Get orientation quality score
                 quality_score = orientation[4]
@@ -2100,12 +2101,12 @@ class EnhancedImageProcessor:
                 if len(orientation_spots) == 0:
                     continue
                     
-                # Create scatter trace for spots - use grain_nr in name instead of i
+                # Create scatter trace for spots
                 x_coords = orientation_spots[:, 5]
                 y_coords = orientation_spots[:, 6]
                 
                 # Add trace for this orientation
-                name = f"Grain {grain_nr} ({unique_count} unique)"  # Changed "ID" to "Grain"
+                name = f"Grain {grain_nr} ({unique_count} unique)"  # Changed from "ID" to "Grain"
                 trace = go.Scatter(
                     x=x_coords,
                     y=y_coords,
@@ -2117,7 +2118,7 @@ class EnhancedImageProcessor:
                     ),
                     name=name,
                     hovertext=[
-                        f"Grain: {grain_nr}<br>"  # Changed "Orientation" to "Grain"
+                        f"Grain: {grain_nr}<br>"  # Changed from "Orientation" to "Grain"
                         f"HKL: {int(spot[2])},{int(spot[3])},{int(spot[4])}<br>"
                         f"Position: ({spot[5]:.1f}, {spot[6]:.1f})<br>"
                         f"Unique Spots: {unique_count}"
@@ -2139,31 +2140,44 @@ class EnhancedImageProcessor:
             # Smooth quality map and add to second subplot
             quality_map = ndimg.gaussian_filter(quality_map, 3)
             
+            # Add quality map with colorbar positioned to not overlap with legend
             fig.add_trace(
                 go.Heatmap(
                     z=quality_map,
                     colorscale='Plasma',
-                    colorbar=dict(title="Quality"),
+                    colorbar=dict(
+                        title="Quality",
+                        x=0.455,     # Position the colorbar at 45.5% of the width
+                        y=0.5,       # Center vertically
+                        len=0.9,     # 90% of the height
+                        thickness=15 # Thinner colorbar
+                    ),
                 ),
                 row=1, col=2
             )
             
-            # Update layout
+            # Update layout with improved legend positioning
             fig.update_layout(
                 title="Laue Diffraction Analysis",
                 height=800,
-                width=1600,
+                # Increase width slightly to accommodate legend
+                width=1700,
                 showlegend=True,
                 # Position legend outside and to the right of the plot
                 legend=dict(
-                    orientation="v",  # vertical legend
+                    orientation="v",    # vertical legend
                     yanchor="top",
-                    y=1,
+                    y=1.0,
                     xanchor="left",
-                    x=1.02,  # Position just outside the right edge
+                    x=1.05,            # Position further to the right to avoid overlap
                     bordercolor="Black",
-                    borderwidth=1
-                )
+                    borderwidth=1,
+                    # Adjust font size and title to make legend more compact
+                    font=dict(size=10),
+                    title=dict(text="Grains", font=dict(size=12))
+                ),
+                # Add margin on the right to make room for legend
+                margin=dict(r=150)
             )
             
             # Update axes with same range to ensure synchronized zooming
