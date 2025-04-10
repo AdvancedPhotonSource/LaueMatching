@@ -32,7 +32,7 @@
  #endif
  
  /* Project headers - for library build only */
-#include "include/laue_matching.h"
+#include "laue_matching.h"
  
  /* Constants */
  #define LAUE_DEG2RAD 0.0174532925199433
