@@ -134,8 +134,8 @@ add_custom_target(make_dirs ALL
 # Add the library subdirectory
 add_subdirectory(laue_matching_lib)
 
-# CPU executable from parent
-add_executable(LaueMatchingCPU src/LaueMatchingCPU.c)
+# CPU executable from parent - now uses laue_matching_lib/main.c as entry point
+add_executable(LaueMatchingCPU laue_matching_lib/main.c)
 target_include_directories(LaueMatchingCPU PRIVATE 
     ${NLOPT_INCLUDE_DIRS}
     ${CMAKE_CURRENT_SOURCE_DIR}/laue_matching_lib/include
@@ -154,9 +154,9 @@ if(NOT USE_SYSTEM_NLOPT)
   add_dependencies(LaueMatchingCPU nlopt_external)
 endif()
 
-# CUDA executable
+# CUDA executable - now uses laue_matching_lib/main_gpu.c as entry point
 if(USE_CUDA)
-  add_executable(LaueMatchingGPU src/LaueMatchingGPU.cu)
+  add_executable(LaueMatchingGPU laue_matching_lib/main_gpu.c)
   target_include_directories(LaueMatchingGPU PRIVATE 
       ${NLOPT_INCLUDE_DIRS}
       ${CMAKE_CURRENT_SOURCE_DIR}/laue_matching_lib/include
@@ -168,7 +168,7 @@ if(USE_CUDA)
       OpenMP::OpenMP_C
   )
   if(BUILD_LIBRARY)
-      target_link_libraries(LaueMatchingGPU laue_matching)
+      target_link_libraries(LaueMatchingGPU laue_matching_gpu)
   endif()
   target_compile_options(LaueMatchingGPU PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-O3 -G -g -w>)
   if(NOT USE_SYSTEM_NLOPT)
@@ -258,4 +258,12 @@ if(BUILD_LIBRARY)
       DESTINATION include/laue_matching
       FILES_MATCHING PATTERN "*.h"
   )
+  
+  # If CUDA is used, install the CUDA library too
+  if(USE_CUDA)
+    install(TARGETS laue_matching_gpu
+        LIBRARY DESTINATION lib
+        ARCHIVE DESTINATION lib
+    )
+  endif()
 endif()
