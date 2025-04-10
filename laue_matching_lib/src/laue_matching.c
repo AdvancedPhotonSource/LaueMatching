@@ -148,7 +148,7 @@
      const char *imageFile,
      MatchingResults *results
  ) {
-    printf("FWD: %s\n",config->forwardSimulationFile);
+    printf("Starting matching with forward file: %s\n", config->forwardSimulationFile);
     int ret;
      double start_time, time_checkpoint;
      double *image = NULL;
