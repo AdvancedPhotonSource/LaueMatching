@@ -446,7 +446,7 @@ int file_read_forward_simulation(
         
         close(result);
     }
-    
+    printf("%s\n",filename);
     return LAUE_SUCCESS;
 }
 
