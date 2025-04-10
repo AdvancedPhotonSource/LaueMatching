@@ -154,9 +154,9 @@ class VisualizationConfig:
 class SimulationConfig:
     """Configuration parameters for diffraction simulation."""
     enable_simulation: bool = True
-    skip_percentage: float = 30.0
+    skip_percentage: float = 0.0
     orientation_file: str = "orientations.txt"
-    energies: str = "10 100"  # Energy range in keV (Elo Ehi)
+    energies: str = "5 30"  # Energy range in keV (Elo Ehi)
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
