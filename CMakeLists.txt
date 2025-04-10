@@ -138,6 +138,7 @@ add_subdirectory(laue_matching_lib)
 add_executable(LaueMatchingCPU laue_matching_lib/main.c)
 target_include_directories(LaueMatchingCPU PRIVATE 
     ${NLOPT_INCLUDE_DIRS}
+    ${CMAKE_CURRENT_SOURCE_DIR}/laue_matching_lib
     ${CMAKE_CURRENT_SOURCE_DIR}/laue_matching_lib/include
 )
 target_link_libraries(LaueMatchingCPU 
@@ -159,6 +160,7 @@ if(USE_CUDA)
   add_executable(LaueMatchingGPU laue_matching_lib/main_gpu.c)
   target_include_directories(LaueMatchingGPU PRIVATE 
       ${NLOPT_INCLUDE_DIRS}
+      ${CMAKE_CURRENT_SOURCE_DIR}/laue_matching_lib
       ${CMAKE_CURRENT_SOURCE_DIR}/laue_matching_lib/include
   )
   target_link_libraries(LaueMatchingGPU 
