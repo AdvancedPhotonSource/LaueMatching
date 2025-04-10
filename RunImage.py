@@ -1119,6 +1119,28 @@ class EnhancedImageProcessor:
                 f.write(f"NrPxX {self.config.get('nr_px_x')}\n")
                 f.write(f"NrPxY {self.config.get('nr_px_y')}\n")
                 
+                # Add AStar parameter (critical for simulation)
+                # Check if AStar is defined in original config, otherwise use default calculation
+                astar = -1.0
+                with open(self.config.config_file, 'r') as orig_f:
+                    for line in orig_f:
+                        if line.startswith('AStar'):
+                            astar = float(line.split()[1])
+                            break
+                
+                if astar > 0:
+                    f.write(f"AStar {astar}\n")
+                else:
+                    # If AStar wasn't found, calculate from first lattice parameter as default
+                    lat_params = self.config.get('lattice_parameter').split()
+                    if len(lat_params) > 0:
+                        try:
+                            first_lat_param = float(lat_params[0])
+                            astar = 2 * np.pi / first_lat_param
+                            f.write(f"AStar {astar}\n")
+                        except (ValueError, IndexError):
+                            f.write(f"AStar 17.83\n")  # Default fallback value
+                
                 # Split energy range
                 energies = self.config.get("simulation").energies.split()
                 if len(energies) >= 2:
@@ -1238,11 +1260,13 @@ class EnhancedImageProcessor:
             logger.error(f"Error loading experimental spots: {str(e)}")
             return
         
-        # Create figure with 3 subplots (experimental, simulated, overlay)
+        # Create figure with 3 subplots (experimental, simulated, missing spots)
         fig = make_subplots(
             rows=1, cols=3,
-            subplot_titles=["Experimental Diffraction", "Simulated Diffraction", "Overlay Comparison"],
-            horizontal_spacing=0.05
+            subplot_titles=["Experimental Diffraction", "Simulated Diffraction", "Missing Spots"],
+            horizontal_spacing=0.05,
+            specs=[[{"type": "xy"}, {"type": "xy"}, {"type": "xy"}]],
+            shared_xaxes=True, shared_yaxes=True  # Share axes to synchronize zoom
         )
         
         # Prepare experimental image
@@ -1270,21 +1294,14 @@ class EnhancedImageProcessor:
             row=1, col=2
         )
         
-        # Create overlay for third subplot - combine experimental and simulated
-        overlay_img = np.zeros((filtered_image.shape[0], filtered_image.shape[1], 3))
-        
-        # Normalize images for RGB overlay
-        if np.max(log_img) > 0:
-            log_img_norm = log_img / np.max(log_img)
-            overlay_img[:,:,1] = log_img_norm  # Green channel for experimental
-        
-        if np.max(simulated_image) > 0:
-            sim_img_norm = simulated_image / np.max(simulated_image)
-            overlay_img[:,:,0] = sim_img_norm  # Red channel for simulated
-        
-        # Add overlay image to third subplot
+        # Create overlay for third subplot - background only
         fig.add_trace(
-            go.Image(z=overlay_img),
+            go.Heatmap(
+                z=log_img,
+                colorscale='gray',
+                opacity=0.3,
+                showscale=False,
+            ),
             row=1, col=3
         )
         
@@ -1298,6 +1315,10 @@ class EnhancedImageProcessor:
             
         # Dictionary to track how many unique spots each orientation has
         orientation_unique_spots = {}
+        
+        # Dictionary to track missing spots
+        missing_spots = {}
+        matched_spots = {}
             
         # Plot spots for each orientation
         for i, orientation in enumerate(indexed_orientations):
@@ -1344,11 +1365,22 @@ class EnhancedImageProcessor:
             )
             
             fig.add_trace(trace, row=1, col=1)
-            fig.add_trace(trace, row=1, col=3)
+            
+            # Add experimental spot positions to matched spots set
+            if i not in matched_spots:
+                matched_spots[i] = set()
+                
+            for spot in orientation_spots:
+                spot_pos = (round(float(spot[5])), round(float(spot[6])))
+                matched_spots[i].add(spot_pos)
             
             # Filter simulated spots for this orientation grain number
             sim_orientation_spots = simulated_spots[simulated_spots[:, 2] == i]
             
+            # Initialize missing spots for this orientation
+            if i not in missing_spots:
+                missing_spots[i] = []
+                
             # Create scatter trace for simulated spots
             if len(sim_orientation_spots) > 0:
                 sim_trace = go.Scatter(
@@ -1374,16 +1406,42 @@ class EnhancedImageProcessor:
                 
                 fig.add_trace(sim_trace, row=1, col=2)
                 
-                # Add modified version to overlay
-                sim_trace.update(
-                    marker=dict(
-                        color=color,
-                        size=10,
-                        line=dict(width=1, color='black'),
-                        symbol='circle-open',
-                    )
-                )
-                fig.add_trace(sim_trace, row=1, col=3)
+                # Find missing spots (in simulation but not in experimental data)
+                for spot in sim_orientation_spots:
+                    spot_pos = (round(float(spot[0])), round(float(spot[1])))
+                    if spot[3] == 0 or spot_pos not in matched_spots.get(i, set()):
+                        missing_spots[i].append(spot)
+        
+        # Add missing spots to third subplot
+        for i, spots_list in missing_spots.items():
+            if not spots_list:
+                continue
+                
+            spots_array = np.array(spots_list)
+            color = orientation_colors[i % len(orientation_colors)]
+            
+            missing_trace = go.Scatter(
+                x=spots_array[:, 0],
+                y=spots_array[:, 1],
+                mode='markers',
+                marker=dict(
+                    color=color,
+                    size=10,
+                    line=dict(width=1, color='black'),
+                    symbol='diamond',
+                ),
+                name=f"Missing ID {i}",
+                legendgroup=f'orientation_{i}',
+                hovertext=[
+                    f"Orientation: {i}<br>"
+                    f"Position: ({spot[0]:.1f}, {spot[1]:.1f})<br>"
+                    f"Missing spot"
+                    for spot in spots_array
+                ],
+                hoverinfo="text"
+            )
+            
+            fig.add_trace(missing_trace, row=1, col=3)
         
         # Update layout
         fig.update_layout(
@@ -1400,10 +1458,37 @@ class EnhancedImageProcessor:
             )
         )
         
-        # Update axes
+        # Update axes with same range to ensure synchronized zooming
+        x_min, x_max = 0, filtered_image.shape[1]
+        y_min, y_max = 0, filtered_image.shape[0]
+        
         for col in range(1, 4):
-            fig.update_xaxes(title_text="X Position (pixels)", row=1, col=col)
-            fig.update_yaxes(title_text="Y Position (pixels)", row=1, col=col)
+            fig.update_xaxes(
+                title_text="X Position (pixels)", 
+                row=1, 
+                col=col,
+                range=[x_min, x_max],
+                scaleanchor="y",
+                scaleratio=1,
+                constrain="domain"
+            )
+            
+            fig.update_yaxes(
+                title_text="Y Position (pixels)", 
+                row=1, 
+                col=col,
+                range=[y_min, y_max],
+                scaleanchor="x",
+                scaleratio=1,
+                constrain="domain"
+            )
+        
+        # Configure layout for synchronized zooming
+        fig.update_layout(
+            dragmode='zoom',
+            hovermode='closest',
+            clickmode='event+select'
+        )
         
         # Save as HTML
         fig.write_html(f"{output_path}.bin.simulation_comparison.html")
@@ -1917,7 +2002,9 @@ class EnhancedImageProcessor:
             fig = make_subplots(
                 rows=1, cols=2,
                 subplot_titles=["Indexed Diffraction Pattern", "Orientation Quality"],
-                horizontal_spacing=0.1
+                horizontal_spacing=0.1,
+                specs=[[{"type": "xy"}, {"type": "xy"}]],
+                shared_xaxes=True, shared_yaxes=True  # Share axes to synchronize zoom
             )
             
             # Display background image (log of intensity)
@@ -2031,14 +2118,52 @@ class EnhancedImageProcessor:
                 )
             )
             
+            # Update axes with same range to ensure synchronized zooming
+            x_min, x_max = 0, filtered_image.shape[1]
+            y_min, y_max = 0, filtered_image.shape[0]
+            
             # Update axes
-            fig.update_xaxes(title_text="X Position (pixels)", row=1, col=1)
-            fig.update_yaxes(title_text="Y Position (pixels)", row=1, col=1)
-            fig.update_xaxes(title_text="X Position (pixels)", row=1, col=2)
-            fig.update_yaxes(title_text="Y Position (pixels)", row=1, col=2)
-            # Preserve aspect ratio for both subplots
-            fig.update_xaxes(scaleanchor="x", scaleratio=1, row=1, col=1)
-            fig.update_xaxes(scaleanchor="x", scaleratio=1, row=1, col=2)
+            fig.update_xaxes(
+                title_text="X Position (pixels)", 
+                row=1, col=1,
+                range=[x_min, x_max],
+                scaleanchor="y",
+                scaleratio=1,
+                constrain="domain"
+            )
+            fig.update_yaxes(
+                title_text="Y Position (pixels)", 
+                row=1, col=1,
+                range=[y_min, y_max],
+                scaleanchor="x",
+                scaleratio=1,
+                constrain="domain"
+            )
+            
+            fig.update_xaxes(
+                title_text="X Position (pixels)", 
+                row=1, col=2,
+                range=[x_min, x_max],
+                scaleanchor="y",
+                scaleratio=1,
+                constrain="domain"
+            )
+            fig.update_yaxes(
+                title_text="Y Position (pixels)", 
+                row=1, col=2,
+                range=[y_min, y_max],
+                scaleanchor="x",
+                scaleratio=1,
+                constrain="domain"
+            )
+            
+            # Configure layout for synchronized zooming
+            fig.update_layout(
+                dragmode='zoom',
+                hovermode='closest',
+                clickmode='event+select'
+            )
+            
             # Save as HTML
             fig.write_html(f"{output_path}.bin.interactive.html")
             logger.info(f"Interactive visualization saved to {output_path}.bin.interactive.html")
