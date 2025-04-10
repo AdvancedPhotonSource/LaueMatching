@@ -108,8 +108,8 @@
   * @brief Internal structure for optimization data
   */
  typedef struct {
-     double *image;
-     int *hkls;
+     const double *image;
+     const int *hkls;
      int nhkls;
      int nrPxX;
      int nrPxY;
