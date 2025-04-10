@@ -333,7 +333,7 @@
          if (outArray == NULL) {
              laue_log(0, "ERROR: Failed to allocate memory for forward simulation array in thread %d", threadId);
              threadError = 1;
-             #pragma omp atomic
+             #pragma omp atomic write
              anyThreadError = 1;
          }
          
@@ -342,7 +342,7 @@
              if (pixelMask == NULL) {
                  laue_log(0, "ERROR: Failed to allocate memory for pixel mask in thread %d", threadId);
                  threadError = 1;
-                 #pragma omp atomic
+                 #pragma omp atomic write
                  anyThreadError = 1;
              }
          } else if (!threadError) {
@@ -357,7 +357,7 @@
              if (ret != LAUE_SUCCESS) {
                  laue_log(0, "ERROR: Failed to read forward simulation data in thread %d", threadId);
                  threadError = 1;
-                 #pragma omp atomic
+                 #pragma omp atomic write
                  anyThreadError = 1;
              }
          }
