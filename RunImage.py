@@ -1200,9 +1200,10 @@ class EnhancedImageProcessor:
             # Save figure at specified DPI
             dpi = self.config.get("visualization").output_dpi
             plt.savefig(f'{output_path}.bin.LabeledImage.tif', dpi=dpi)
+            plt.savefig(f'{output_path}.bin.LabeledImage.png', dpi=dpi)
             plt.close()
             
-            logger.info(f"Static visualization saved to {output_path}.bin.LabeledImage.tif")
+            logger.info(f"Static visualization saved to {output_path}.bin.LabeledImage.tif and {output_path}.bin.LabeledImage.png")
             
             # Create additional visualization: Orientation quality map
             self._create_quality_map(output_path, orientations, spots, filtered_image)
@@ -1409,7 +1410,9 @@ class EnhancedImageProcessor:
             fig.update_yaxes(title_text="Y Position (pixels)", row=1, col=1)
             fig.update_xaxes(title_text="X Position (pixels)", row=1, col=2)
             fig.update_yaxes(title_text="Y Position (pixels)", row=1, col=2)
-            
+            # Preserve aspect ratio for both subplots
+            fig.update_xaxes(scaleanchor="y", scaleratio=1, row=1, col=1)
+            fig.update_xaxes(scaleanchor="y", scaleratio=1, row=1, col=2)
             # Save as HTML
             fig.write_html(f"{output_path}.bin.interactive.html")
             logger.info(f"Interactive visualization saved to {output_path}.bin.interactive.html")
@@ -1593,7 +1596,7 @@ class EnhancedImageProcessor:
                 <h2>Diffraction Images</h2>
                 <div class="image-container">
                     <h3>Indexed Diffraction Pattern</h3>
-                    <img src=""" + f'"{os.path.basename(output_path)}.bin.LabeledImage.tif"' + """ alt="Indexed Diffraction Pattern">
+                    <img src=""" + f'"{os.path.basename(output_path)}.bin.LabeledImage.png"' + """ alt="Indexed Diffraction Pattern">
                 </div>
                 <div class="image-container">
                     <h3>Orientation Quality Map</h3>
