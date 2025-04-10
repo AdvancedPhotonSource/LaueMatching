@@ -2265,55 +2265,108 @@ class EnhancedImageProcessor:
         # Define colors
         colors = px.colors.qualitative.Plotly
         
-        # Extract quaternions or rotation matrices
-        # Assuming columns 7-10 are quaternion components (w,x,y,z)
+        # For each orientation, use the orientation matrix which is in columns 22-30
         for i, orientation in enumerate(orientations):
-            # Extract quaternion (assuming columns 7-10 are quaternion components)
-            q_w, q_x, q_y, q_z = orientation[7:11]
+            grain_nr = int(orientation[0])  # Get grain number for labeling
             
-            # Convert quaternion to rotation matrix for visualization
-            # Simplified here - actual implementation would depend on the data format
+            # Extract orientation matrix (columns 22-30)
+            # Each row of the orientation matrix represents one of the crystal axes
+            # in the lab reference frame
+            r11, r12, r13 = orientation[22], orientation[23], orientation[24]  # First row (x axis)
+            r21, r22, r23 = orientation[25], orientation[26], orientation[27]  # Second row (y axis)
+            r31, r32, r33 = orientation[28], orientation[29], orientation[30]  # Third row (z axis)
             
-            # Create coordinate system visualization (3 axes)
+            # Set origin at (0,0,0)
+            origin = [0, 0, 0]
+            
+            # Set axis scale (for visualization)
+            scale = 1.0
+            
+            # Color for this grain's orientation
             color = colors[i % len(colors)]
             
             # Create x-axis
-            x_axis_x = [0, 1]
-            x_axis_y = [0, 0]
-            x_axis_z = [0, 0]
+            x_axis_x = [origin[0], origin[0] + scale * r11]
+            x_axis_y = [origin[1], origin[1] + scale * r12]
+            x_axis_z = [origin[2], origin[2] + scale * r13]
             
             # Create y-axis
-            y_axis_x = [0, 0]
-            y_axis_y = [0, 1]
-            y_axis_z = [0, 0]
+            y_axis_x = [origin[0], origin[0] + scale * r21]
+            y_axis_y = [origin[1], origin[1] + scale * r22]
+            y_axis_z = [origin[2], origin[2] + scale * r23]
             
             # Create z-axis
-            z_axis_x = [0, 0]
-            z_axis_y = [0, 0]
-            z_axis_z = [0, 1]
+            z_axis_x = [origin[0], origin[0] + scale * r31]
+            z_axis_y = [origin[1], origin[1] + scale * r32]
+            z_axis_z = [origin[2], origin[2] + scale * r33]
             
-            # Add traces
+            # Add traces for each crystal axis
             fig.add_trace(go.Scatter3d(
                 x=x_axis_x, y=x_axis_y, z=x_axis_z,
-                mode='lines',
+                mode='lines+markers',
                 line=dict(color='red', width=5),
-                name=f"Orientation {i} X-axis"
+                marker=dict(size=3, color='red'),
+                name=f"Grain {grain_nr} X-axis"
             ))
             
             fig.add_trace(go.Scatter3d(
                 x=y_axis_x, y=y_axis_y, z=y_axis_z,
-                mode='lines',
+                mode='lines+markers',
                 line=dict(color='green', width=5),
-                name=f"Orientation {i} Y-axis"
+                marker=dict(size=3, color='green'),
+                name=f"Grain {grain_nr} Y-axis"
             ))
             
             fig.add_trace(go.Scatter3d(
                 x=z_axis_x, y=z_axis_y, z=z_axis_z,
-                mode='lines',
+                mode='lines+markers',
                 line=dict(color='blue', width=5),
-                name=f"Orientation {i} Z-axis"
+                marker=dict(size=3, color='blue'),
+                name=f"Grain {grain_nr} Z-axis"
             ))
             
+            # Create a small unit cell visualization at the origin
+            # Add cube edges for unit cell visualization
+            cube_lines = []
+            
+            # Define unit vectors along crystal axes
+            x_vec = np.array([r11, r12, r13]) * scale * 0.3
+            y_vec = np.array([r21, r22, r23]) * scale * 0.3
+            z_vec = np.array([r31, r32, r33]) * scale * 0.3
+            
+            # Create points for a unit cube
+            points = [
+                np.array([0, 0, 0]),  # Origin
+                x_vec,                # X corner
+                y_vec,                # Y corner
+                z_vec,                # Z corner
+                x_vec + y_vec,        # XY corner
+                x_vec + z_vec,        # XZ corner
+                y_vec + z_vec,        # YZ corner
+                x_vec + y_vec + z_vec  # XYZ corner
+            ]
+            
+            # Define edges of the cube
+            edges = [
+                (0, 1), (0, 2), (0, 3),  # Edges from origin
+                (1, 4), (1, 5),          # Edges from X corner
+                (2, 4), (2, 6),          # Edges from Y corner
+                (3, 5), (3, 6),          # Edges from Z corner
+                (4, 7), (5, 7), (6, 7)   # Edges to XYZ corner
+            ]
+            
+            # Add each edge as a separate line trace
+            for edge in edges:
+                p1, p2 = points[edge[0]], points[edge[1]]
+                fig.add_trace(go.Scatter3d(
+                    x=[p1[0], p2[0]],
+                    y=[p1[1], p2[1]],
+                    z=[p1[2], p2[2]],
+                    mode='lines',
+                    line=dict(color=color, width=2),
+                    showlegend=False
+                ))
+        
         # Update layout
         fig.update_layout(
             title="3D Visualization of Crystal Orientations",
@@ -2323,8 +2376,24 @@ class EnhancedImageProcessor:
                 zaxis_title="Z",
                 aspectmode='cube'
             ),
+            scene_camera=dict(
+                eye=dict(x=1.5, y=1.5, z=1.5)
+            ),
             width=800,
-            height=800
+            height=800,
+            legend=dict(
+                x=1.05,
+                y=0.5,
+                traceorder="normal",
+                font=dict(
+                    family="sans-serif",
+                    size=10,
+                    color="black"
+                ),
+                bordercolor="Black",
+                borderwidth=1
+            ),
+            margin=dict(l=0, r=0, b=0, t=30)
         )
         
         # Save as HTML
@@ -2419,7 +2488,7 @@ class EnhancedImageProcessor:
                 </div>
         """)
         
-        # Add orientation summary table with unique spots column
+        # Add orientation summary table with correct orientation matrix information
         html_content.append("""
                 <h2>Orientation Summary</h2>
                 <table>
@@ -2428,10 +2497,10 @@ class EnhancedImageProcessor:
                         <th>Quality</th>
                         <th>Spots</th>
                         <th>Unique Spots</th>
-                        <th>Quaternion (w,x,y,z)</th>
+                        <th>Orientation Matrix</th>
                     </tr>
         """)
-        
+
         for i, orientation in enumerate(orientations):
             # Extract orientation parameters
             grain_nr = int(orientation[0])  # Use the actual grain number
@@ -2443,20 +2512,37 @@ class EnhancedImageProcessor:
             if orientation_unique_spots and grain_nr in orientation_unique_spots:
                 unique_spots = orientation_unique_spots[grain_nr]["unique_label_count"]
             
-            # Extract quaternion components
-            qw, qx, qy, qz = orientation[7:11]
+            # Extract orientation matrix components (columns 22-30)
+            r11, r12, r13 = orientation[22], orientation[23], orientation[24]  # First row (x axis)
+            r21, r22, r23 = orientation[25], orientation[26], orientation[27]  # Second row (y axis)
+            r31, r32, r33 = orientation[28], orientation[29], orientation[30]  # Third row (z axis)
             
-            # Add table row with unique spots column - use grain_nr instead of i
+            # Format orientation matrix for display
+            matrix_html = f"""
+            <table style="border:none; font-size:0.8em;">
+                <tr>
+                    <td>{r11:.4f}</td><td>{r12:.4f}</td><td>{r13:.4f}</td>
+                </tr>
+                <tr>
+                    <td>{r21:.4f}</td><td>{r22:.4f}</td><td>{r23:.4f}</td>
+                </tr>
+                <tr>
+                    <td>{r31:.4f}</td><td>{r32:.4f}</td><td>{r33:.4f}</td>
+                </tr>
+            </table>
+            """
+            
+            # Add table row with orientation matrix instead of quaternion
             html_content.append(f"""
                     <tr>
                         <td>{grain_nr}</td>
                         <td>{quality:.4f}</td>
                         <td>{int(num_spots)}</td>
                         <td>{unique_spots}</td>
-                        <td>{qw:.4f}, {qx:.4f}, {qy:.4f}, {qz:.4f}</td>
+                        <td>{matrix_html}</td>
                     </tr>
             """)
-        
+
         html_content.append("</table>")
         
         # Add spot distribution visualization
