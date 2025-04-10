@@ -18,7 +18,9 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <stdarg.h>
- 
+
+int laue_initialized = 0;
+
  /* Error checking macro */
  #define CUDA_CHECK(call) \
  do { \
