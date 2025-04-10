@@ -157,6 +157,8 @@
      size_t numOrientations;
      int numHkls, nonZeroPixels;
      int nrPxX, nrPxY;
+     printf("MinIntensity: %lf, MinNrSpots: %d, MaxAngle: %lf\n",
+            config->minIntensity, config->minNumSpots, config->maxAngle);
      
      // Initialize result structure
      memset(results, 0, sizeof(MatchingResults));
