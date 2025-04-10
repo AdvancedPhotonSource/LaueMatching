@@ -162,11 +162,11 @@ class LaueConfig:
     # Core parameters
     space_group: int = 225
     symmetry: str = "F"
-    lattice_parameter: str = "3.615 3.615 3.615 90 90 90"
-    r_array: str = "4 6 2.0"
-    p_array: str = "130 130 100"
-    min_good_spots: int = 10
-    max_laue_spots: int = 100
+    lattice_parameter: str = "0.3615 0.3615 0.3615 90 90 90"
+    r_array: str = "-1.2 -1.2 -1.2"
+    p_array: str = "0.02 0.002 0.513"
+    min_good_spots: int = 5
+    max_laue_spots: int = 7
     
     # File paths
     result_dir: str = "results"
@@ -180,13 +180,13 @@ class LaueConfig:
     px_y: float = 0.2
     nr_px_x: int = 2048
     nr_px_y: int = 2048
-    orientation_spacing: float = 0.5
-    distance: float = 100.0
+    orientation_spacing: float = 0.4
+    distance: float = 0.513
     
     # Processing parameters
     do_forward: bool = True
     processing_type: str = "CPU"
-    num_cpus: int = 4
+    num_cpus: int = 60
     
     # Enhanced configuration sections
     image_processing: ImageProcessingConfig = field(default_factory=ImageProcessingConfig)
