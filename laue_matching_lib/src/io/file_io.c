@@ -30,8 +30,7 @@ int file_read_parameters(const char *filename, MatchingConfig *config) {
     config->minIntensity = 1000.0;
     config->maxAngle = 2.0;
     config->performForwardSimulation = 1;
-    strncpy(config->forwardSimulationFile, "forward_sim.bin", sizeof(config->forwardSimulationFile)-1);
-    config->forwardSimulationFile[sizeof(config->forwardSimulationFile)-1] = '\0';
+    // strcpy(config->forwardSimulationFile, "forward_sim.bin");
     config->numThreads = omp_get_max_threads();
     
     fileParam = fopen(filename, "r");
@@ -164,37 +163,7 @@ int file_read_parameters(const char *filename, MatchingConfig *config) {
         str = "ForwardFile";
         lowNr = strncmp(aline, str, strlen(str));
         if (lowNr == 0) {
-            // Fixed approach for handling the ForwardFile parameter
-            
-            // Get pointer to the start of the value (after "ForwardFile" and any spaces)
-            char *valueStart = aline + strlen(str);
-            while (*valueStart && (*valueStart == ' ' || *valueStart == '\t')) {
-                valueStart++;
-            }
-            
-            // Remove trailing whitespace and newlines
-            size_t len = strlen(valueStart);
-            while (len > 0 && (valueStart[len-1] == '\n' || valueStart[len-1] == '\r' || 
-                  valueStart[len-1] == ' ' || valueStart[len-1] == '\t')) {
-                valueStart[--len] = '\0';
-            }
-            
-            // Only update if we have a valid, non-empty string
-            if (len > 0) {
-                // Clear the destination buffer
-                memset(config->forwardSimulationFile, 0, sizeof(config->forwardSimulationFile));
-                
-                // Copy with bounds checking
-                strncpy(config->forwardSimulationFile, valueStart, 
-                        sizeof(config->forwardSimulationFile)-1);
-                
-                // Ensure null termination
-                config->forwardSimulationFile[sizeof(config->forwardSimulationFile)-1] = '\0';
-                
-                printf("While reading: '%s'\n", config->forwardSimulationFile);
-            } else {
-                fprintf(stderr, "WARNING: Empty ForwardFile parameter\n");
-            }
+            sscanf(aline, "%s %s %s", dummy, config->forwardSimulationFile,dummy);
             continue;
         }
         
@@ -256,15 +225,6 @@ int file_read_parameters(const char *filename, MatchingConfig *config) {
     printf("  Energy Range: [%.2f, %.2f]\n",
            config->detectorParams.energyRange[0],
            config->detectorParams.energyRange[1]);
-
-        if (config->forwardSimulationFile[0] == '\0') {
-        fprintf(stderr, "WARNING: Forward simulation filename is empty, using default\n");
-        strncpy(config->forwardSimulationFile, "forward_sim.bin", 
-                sizeof(config->forwardSimulationFile)-1);
-        config->forwardSimulationFile[sizeof(config->forwardSimulationFile)-1] = '\0';
-    }
-    
-    printf("After reading: '%s'\n", config->forwardSimulationFile);
     
     return LAUE_SUCCESS;
 }
