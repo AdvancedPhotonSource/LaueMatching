@@ -51,11 +51,6 @@ plt.rcParams['font.size'] = 3
 INSTALL_PATH = os.path.dirname(os.path.abspath(__file__))
 PYTHON_PATH = sys.executable
 
-
-#######################################
-# 2. Logging Framework Implementation #
-#######################################
-
 class LogLevel(Enum):
     """Log level enum for configuration."""
     DEBUG = logging.DEBUG
@@ -116,11 +111,6 @@ def setup_logger(
 
 # Create global logger
 logger = setup_logger()
-
-
-#########################################
-# 3. Configuration System Implementation #
-#########################################
 
 @dataclass
 class ImageProcessingConfig:
@@ -445,11 +435,6 @@ class ConfigurationManager:
                         setattr(self.config, config_key, float(value))
                     else:
                         setattr(self.config, config_key, value)
-
-
-#######################################
-# 4. Progress Reporting Implementation #
-#######################################
 
 class ProgressReporter:
     """Reports progress of multi-step operations."""
@@ -1951,6 +1936,8 @@ Examples:
     process_parser.add_argument('-g', '--gpu', action='store_true', help='Use GPU for processing if available')
     process_parser.add_argument('-t', '--threshold', type=int, default=0, 
                               help='Override threshold value from configuration (default: 0, no override)')
+    process_parser.add_argument('-a', '--nfiles', type=int, default=1, 
+                              help='Number of files to process (default: 1, process one file only)')
     process_parser.add_argument('-o', '--output', type=str, 
                               help='Output directory (overrides config; default: results/)')
     process_parser.add_argument('--dry-run', action='store_true', 
@@ -2071,9 +2058,9 @@ def process_images(args):
             sys.exit(1)
     else:
         # Check if this is a single file or a pattern like FILESTEM_XX.h5
-        if args.nFiles > 1:
+        if args.nfiles > 1:
             # Legacy multi-file handling
-            image_files = get_image_files(args.image, args.nFiles)
+            image_files = get_image_files(args.image, args.nfiles)
         else:
             image_files = [args.image]
             
