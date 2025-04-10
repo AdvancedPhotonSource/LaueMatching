@@ -154,7 +154,7 @@ class VisualizationConfig:
 class SimulationConfig:
     """Configuration parameters for diffraction simulation."""
     enable_simulation: bool = True
-    skip_percentage: float = 30.0
+    skip_percentage: float = 0.0  # Default to 0 (no skipping)
     orientation_file: str = "orientations.txt"
     energies: str = "10 100"  # Energy range in keV (Elo Ehi)
     
@@ -1215,6 +1215,12 @@ class EnhancedImageProcessor:
         except Exception as e:
             logger.error(f"Error loading experimental spots: {str(e)}")
             return
+            
+        # Debug: Log some sample spots from both sources
+        if len(spots) > 0:
+            logger.info(f"Sample experimental spot: ({spots[0][5]:.1f}, {spots[0][6]:.1f})")
+        if len(simulated_spots) > 0:
+            logger.info(f"Sample simulated spot: ({simulated_spots[0][1]:.1f}, {simulated_spots[0][0]:.1f})")
         
         # Create figure with 3 subplots (experimental, simulated, missing spots)
         fig = make_subplots(
@@ -1275,6 +1281,9 @@ class EnhancedImageProcessor:
         # Dictionary to track missing spots
         missing_spots = {}
         matched_spots = {}
+        
+        # Track unique simulation spots to remove duplicates
+        unique_sim_positions = {}
             
         # Plot spots for each orientation
         for i, orientation in enumerate(indexed_orientations):
@@ -1337,12 +1346,28 @@ class EnhancedImageProcessor:
             if i not in missing_spots:
                 missing_spots[i] = []
                 
-            # Create scatter trace for simulated spots - NOTE: Swap x and y coordinates
-            if len(sim_orientation_spots) > 0:
-                # Flip x and y coordinates for simulated spots (y is first column, x is second)
+            # Remove duplicate simulated spots (same position)
+            if i not in unique_sim_positions:
+                unique_sim_positions[i] = {}
+                
+            unique_spots = []
+            
+            for spot in sim_orientation_spots:
+                # Use rounded position as key to remove duplicates at the same position
+                pos_key = (round(float(spot[1])), round(float(spot[0])))
+                
+                # Only keep the first spot at this position
+                if pos_key not in unique_sim_positions[i]:
+                    unique_sim_positions[i][pos_key] = spot
+                    unique_spots.append(spot)
+                    
+            if len(unique_spots) > 0:
+                unique_spots_array = np.array(unique_spots)
+                
+                # Create scatter trace for simulated spots - with flipped x and y coordinates
                 sim_trace = go.Scatter(
-                    x=sim_orientation_spots[:, 1],  # Use column 1 for x (was y)
-                    y=sim_orientation_spots[:, 0],  # Use column 0 for y (was x)
+                    x=unique_spots_array[:, 1],  # Use column 1 for x (was y)
+                    y=unique_spots_array[:, 0],  # Use column 0 for y (was x)
                     mode='markers',
                     marker=dict(
                         color=color,
@@ -1354,9 +1379,9 @@ class EnhancedImageProcessor:
                     legendgroup=f'orientation_{i}',
                     hovertext=[
                         f"Orientation: {i}<br>"
-                        f"Position: ({spot[1]:.1f}, {spot[0]:.1f})<br>"  # Swap in hover text too
+                        f"Position: ({spot[1]:.1f}, {spot[0]:.1f})<br>"
                         f"Status: {'Matched' if spot[3] == 1 else 'Unmatched'}"
-                        for spot in sim_orientation_spots
+                        for spot in unique_spots_array
                     ],
                     hoverinfo="text"
                 )
@@ -1364,10 +1389,25 @@ class EnhancedImageProcessor:
                 fig.add_trace(sim_trace, row=1, col=2)
                 
                 # Find missing spots (in simulation but not in experimental data)
-                for spot in sim_orientation_spots:
-                    # Create spot position with flipped x and y
-                    spot_pos = (round(float(spot[1])), round(float(spot[0])))
-                    if spot[3] == 0 or spot_pos not in matched_spots.get(i, set()):
+                # Use a proximity threshold for matching
+                proximity_threshold = 2.0  # Distance in pixels for considering spots matched
+                
+                for spot in unique_spots_array:
+                    spot_pos_sim = (float(spot[1]), float(spot[0]))  # Flipped coordinates
+                    
+                    # Check if this spot is close to any experimental spot
+                    is_matched = False
+                    for exp_spot_pos in matched_spots.get(i, set()):
+                        # Calculate distance between simulated and experimental spot
+                        dist = np.sqrt((spot_pos_sim[0] - exp_spot_pos[0])**2 + 
+                                      (spot_pos_sim[1] - exp_spot_pos[1])**2)
+                        
+                        if dist <= proximity_threshold:
+                            is_matched = True
+                            break
+                            
+                    # If not matched, add to missing spots
+                    if not is_matched:
                         missing_spots[i].append(spot)
         
         # Add missing spots to third subplot
@@ -1393,7 +1433,7 @@ class EnhancedImageProcessor:
                 legendgroup=f'orientation_{i}',
                 hovertext=[
                     f"Orientation: {i}<br>"
-                    f"Position: ({spot[1]:.1f}, {spot[0]:.1f})<br>"  # Swap in hover text too
+                    f"Position: ({spot[1]:.1f}, {spot[0]:.1f})<br>"
                     f"Missing spot"
                     for spot in spots_array
                 ],
@@ -1401,6 +1441,9 @@ class EnhancedImageProcessor:
             )
             
             fig.add_trace(missing_trace, row=1, col=3)
+            
+            # Log number of missing spots for this orientation
+            logger.info(f"Orientation {i}: {len(spots_list)} missing spots")
         
         # Update layout
         fig.update_layout(
@@ -1452,6 +1495,13 @@ class EnhancedImageProcessor:
         # Save as HTML
         fig.write_html(f"{output_path}.bin.simulation_comparison.html")
         logger.info(f"Simulation comparison visualization saved to {output_path}.bin.simulation_comparison.html")
+        
+        # Also save as a self-contained HTML file (all JavaScript included)
+        try:
+            fig.write_html(f"{output_path}.bin.simulation_comparison_standalone.html", include_plotlyjs='cdn')
+            logger.info(f"Standalone visualization saved to {output_path}.bin.simulation_comparison_standalone.html")
+        except Exception as e:
+            logger.warning(f"Could not save standalone visualization: {str(e)}")
         
         # Store orientation unique spot counts
         unique_counts = {orient_id: len(spots) for orient_id, spots in orientation_unique_spots.items()}
