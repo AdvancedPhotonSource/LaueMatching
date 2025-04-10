@@ -18,31 +18,24 @@ import glob
 import logging
 import json
 import yaml
-from typing import List, Dict, Tuple, Optional, Union, Any
-from pathlib import Path
+from typing import List, Dict, Tuple, Optional, Any
 from dataclasses import dataclass, field
 from enum import Enum
-import threading
 from datetime import datetime
 import concurrent.futures
 from tqdm import tqdm
 
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.figure import Figure
-from matplotlib.colors import LinearSegmentedColormap
 import h5py
 import cv2
 import scipy.ndimage as ndimg
 import diplib as dip
 import skimage.segmentation
-from skimage import exposure, filters, morphology, feature
-from PIL import Image
+from skimage import exposure, filters
 import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
-import ipywidgets as widgets
-from IPython.display import display, HTML
 
 # Configure matplotlib
 plt.rcParams['font.size'] = 3
