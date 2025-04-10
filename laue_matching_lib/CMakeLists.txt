@@ -26,48 +26,20 @@ endif()
 
 # NLopt is handled in parent
 
-# Collect all C source files first
-file(GLOB_RECURSE ALL_C_SOURCES "src/*.c")
-message(STATUS "All C sources found initially: ${ALL_C_SOURCES}")
-
-# Make a copy for filtering
-set(COMMON_C_SOURCES ${ALL_C_SOURCES})
-
-# Apply appropriate exclusions based on build type
-if(USE_CUDA)
-  # Exclude laue_matching.c and main.c when building with CUDA
-  list(FILTER COMMON_C_SOURCES EXCLUDE REGEX ".*laue_matching.c$")
-  list(FILTER COMMON_C_SOURCES EXCLUDE REGEX ".*main.c$")
-  
-  # Collect CUDA source files
-  file(GLOB_RECURSE CUDA_SOURCES "src/*.cu")
-  set(SOURCES ${COMMON_C_SOURCES} ${CUDA_SOURCES})
-  
-  # Add CUDA compile definitions
-  add_compile_definitions(USE_CUDA)
-  
-  message(STATUS "Building with CUDA")
-  message(STATUS "Excluded files: laue_matching.c, main.c")
-  message(STATUS "CUDA sources: ${CUDA_SOURCES}")
-else()
-  # Exclude main_gpu.c when not building with CUDA
-  list(FILTER COMMON_C_SOURCES EXCLUDE REGEX ".*main_gpu.c$")
-  set(SOURCES ${COMMON_C_SOURCES})
-  
-  message(STATUS "Building without CUDA")
-  message(STATUS "Excluded files: main_gpu.c")
-endif()
-
-# Print final list of source files
-message(STATUS "Final source files for compilation:")
-foreach(SOURCE_FILE ${SOURCES})
-  message(STATUS "  - ${SOURCE_FILE}")
-endforeach()
+# Define source files for CPU version - excluding main.c as it's used directly by the CPU executable
+set(CPU_SOURCES
+  src/laue_matching.c
+  src/core/crystallography.c
+  src/core/diffraction.c
+  src/core/geometry.c
+  src/core/optimization.c
+  src/io/file_io.c
+)
 
 # If the parent wants to build a library
 if(BUILD_LIBRARY)
-    # Create shared library
-    add_library(laue_matching SHARED ${SOURCES})
+    # Create shared library for CPU version
+    add_library(laue_matching SHARED ${CPU_SOURCES})
     
     # Add library build definition
     target_compile_definitions(laue_matching PRIVATE BUILD_LIBRARY)
@@ -82,25 +54,53 @@ if(BUILD_LIBRARY)
             ${CMAKE_CURRENT_SOURCE_DIR}
     )
     
-    # Conditionally add compile definitions based on build type
-    if(USE_CUDA)
-        target_compile_definitions(laue_matching PRIVATE EXCLUDE_LAUE_MATCHING_H EXCLUDE_MAIN_H)
-    else()
-        target_compile_definitions(laue_matching PRIVATE EXCLUDE_MAIN_GPU_H)
-    endif()
-    
     # Link dependencies - Use parent-provided NLopt
     target_link_libraries(laue_matching PRIVATE OpenMP::OpenMP_C ${NLOPT_LIBRARIES} m)
     
-    # Set compiler flags for C and CUDA
+    # Set compiler flags for C
     target_compile_options(laue_matching PRIVATE 
         $<$<COMPILE_LANGUAGE:C>:-Wall -Wextra -O3>
-        $<$<COMPILE_LANGUAGE:CUDA>:-O3 -G -g -w>
     )
     
-    # If we're using CUDA, add CUDA-specific settings
+    # If CUDA is enabled, build the GPU library
     if(USE_CUDA)
-        set_target_properties(laue_matching PROPERTIES 
+        # Define source files for GPU version - shared core files plus GPU-specific code
+        set(GPU_SOURCES
+          src/laue_matching_gpu.cu
+          src/core/crystallography.c
+          src/core/diffraction.c
+          src/core/geometry.c
+          src/core/optimization.c
+          src/io/file_io.c
+        )
+        
+        # Create shared library for GPU version
+        add_library(laue_matching_gpu SHARED ${GPU_SOURCES})
+        
+        # Add library build definition
+        target_compile_definitions(laue_matching_gpu PRIVATE BUILD_LIBRARY USE_CUDA)
+        
+        # Include directories
+        target_include_directories(laue_matching_gpu 
+            PUBLIC 
+                $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+                $<INSTALL_INTERFACE:include>
+            PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR}/src
+                ${CMAKE_CURRENT_SOURCE_DIR}
+        )
+        
+        # Link dependencies - Use parent-provided NLopt
+        target_link_libraries(laue_matching_gpu PRIVATE OpenMP::OpenMP_C ${NLOPT_LIBRARIES} m)
+        
+        # Set compiler flags for C and CUDA
+        target_compile_options(laue_matching_gpu PRIVATE 
+            $<$<COMPILE_LANGUAGE:C>:-Wall -Wextra -O3>
+            $<$<COMPILE_LANGUAGE:CUDA>:-O3 -G -g -w>
+        )
+        
+        # CUDA-specific settings
+        set_target_properties(laue_matching_gpu PROPERTIES 
             CUDA_SEPARABLE_COMPILATION ON
         )
     endif()
