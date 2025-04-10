@@ -1,0 +1,22 @@
+version: '3'
+
+services:
+  lauematching:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: lauematching:latest
+    container_name: lauematching
+    volumes:
+      - ./data:/data
+      - /dev/shm:/dev/shm
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    command: bash
+    stdin_open: true
+    tty: true

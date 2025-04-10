@@ -1,0 +1,380 @@
+The system is: Darwin - 23.6.0 - arm64
+Compiling the C compiler identification source file "CMakeCCompilerId.c" succeeded.
+Compiler: /Users/hsharma/opt/homebrew/bin/gcc-14 
+Build flags: -isysroot;/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk;-I/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include;-I/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include
+Id flags:  
+
+The output was:
+0
+
+
+Compilation of the C compiler identification source "CMakeCCompilerId.c" produced "a.out"
+
+The C compiler identification is GNU, found in "/Users/hsharma/opt/LaueMatching/laue_matching_lib/build/CMakeFiles/3.25.1/CompilerIdC/a.out"
+
+Detecting C compiler ABI info compiled with the following output:
+Change Dir: /Users/hsharma/opt/LaueMatching/laue_matching_lib/build/CMakeFiles/CMakeScratch/TryCompile-zd1X8r
+
+Run Build Command(s):/Users/hsharma/opt/homebrew/bin/gmake -f Makefile cmTC_9f577/fast && /Users/hsharma/opt/homebrew/bin/gmake  -f CMakeFiles/cmTC_9f577.dir/build.make CMakeFiles/cmTC_9f577.dir/build
+gmake[1]: Entering directory '/Users/hsharma/opt/LaueMatching/laue_matching_lib/build/CMakeFiles/CMakeScratch/TryCompile-zd1X8r'
+Building C object CMakeFiles/cmTC_9f577.dir/CMakeCCompilerABI.c.o
+/Users/hsharma/opt/homebrew/bin/gcc-14   -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk -I/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include -I/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include  -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk -mmacosx-version-min=14.7   -v -Wl,-v -o CMakeFiles/cmTC_9f577.dir/CMakeCCompilerABI.c.o -c /Applications/CMake.app/Contents/share/cmake-3.25/Modules/CMakeCCompilerABI.c
+Using built-in specs.
+COLLECT_GCC=/Users/hsharma/opt/homebrew/bin/gcc-14
+Target: aarch64-apple-darwin23
+Configured with: ../configure --prefix=/Users/hsharma/opt/homebrew/opt/gcc --libdir=/Users/hsharma/opt/homebrew/opt/gcc/lib/gcc/current --disable-nls --enable-checking=release --with-gcc-major-version-only --enable-languages=c,c++,objc,obj-c++,fortran,m2 --program-suffix=-14 --with-gmp=/Users/hsharma/opt/homebrew/opt/gmp --with-mpfr=/Users/hsharma/opt/homebrew/opt/mpfr --with-mpc=/Users/hsharma/opt/homebrew/opt/libmpc --with-isl=/Users/hsharma/opt/homebrew/opt/isl --with-zstd=/Users/hsharma/opt/homebrew/opt/zstd --with-pkgversion='Homebrew GCC 14.2.0_1' --with-bugurl=https://github.com/Homebrew/homebrew-core/issues --with-system-zlib --build=aarch64-apple-darwin23 --with-sysroot=/Library/Developer/CommandLineTools/SDKs/MacOSX14.sdk
+Thread model: posix
+Supported LTO compression algorithms: zlib zstd
+gcc version 14.2.0 (Homebrew GCC 14.2.0_1) 
+COLLECT_GCC_OPTIONS='-isysroot' '/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk' '-I' '/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include' '-I' '/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include' '-isysroot' '/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk' '-v' '-o' 'CMakeFiles/cmTC_9f577.dir/CMakeCCompilerABI.c.o' '-c' '-mmacosx-version-min=14.7' '-asm_macosx_version_min=14.7' '-nodefaultexport' '-mcpu=apple-m1' '-mlittle-endian' '-mabi=lp64' '-dumpdir' 'CMakeFiles/cmTC_9f577.dir/'
+ /Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../libexec/gcc/aarch64-apple-darwin23/14/cc1 -quiet -v -I /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include -I /Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include -iprefix /Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin23/14/ -D__DYNAMIC__ -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk /Applications/CMake.app/Contents/share/cmake-3.25/Modules/CMakeCCompilerABI.c -fPIC -quiet -dumpdir CMakeFiles/cmTC_9f577.dir/ -dumpbase CMakeCCompilerABI.c.c -dumpbase-ext .c -mmacosx-version-min=14.7 -mcpu=apple-m1 -mlittle-endian -mabi=lp64 -version -o /var/folders/qw/k6gzh2ws7w397493kq4vnl_w0001pb/T//ccaZ5enK.s
+GNU C17 (Homebrew GCC 14.2.0_1) version 14.2.0 (aarch64-apple-darwin23)
+	compiled by GNU C version 14.2.0, GMP version 6.3.0, MPFR version 4.2.2, MPC version 1.3.1, isl version isl-0.27-GMP
+
+GGC heuristics: --param ggc-min-expand=100 --param ggc-min-heapsize=131072
+ignoring nonexistent directory "/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin23/14/../../../../../../aarch64-apple-darwin23/include"
+ignoring duplicate directory "/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../lib/gcc/current/gcc/../../../../lib/gcc/current/gcc/aarch64-apple-darwin23/14/include"
+ignoring nonexistent directory "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk/usr/local/include"
+ignoring duplicate directory "/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../lib/gcc/current/gcc/../../../../lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed"
+ignoring nonexistent directory "/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../lib/gcc/current/gcc/../../../../lib/gcc/current/gcc/aarch64-apple-darwin23/14/../../../../../../aarch64-apple-darwin23/include"
+ignoring nonexistent directory "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk/Library/Frameworks"
+ignoring duplicate directory "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include"
+  as it is a non-system directory that duplicates a system directory
+ignoring duplicate directory "/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include"
+  as it is a non-system directory that duplicates a system directory
+ignoring duplicate directory "/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed"
+  as it is a non-system directory that duplicates a system directory
+ignoring duplicate directory "/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include"
+  as it is a non-system directory that duplicates a system directory
+#include "..." search starts here:
+#include <...> search starts here:
+ /Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin23/14/include
+ /Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed
+ /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk/usr/include
+ /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk/System/Library/Frameworks
+End of search list.
+Compiler executable checksum: 52bb9802718003dfb9dfbcb0c74591a6
+COLLECT_GCC_OPTIONS='-isysroot' '/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk' '-I' '/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include' '-I' '/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include' '-isysroot' '/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk' '-v' '-o' 'CMakeFiles/cmTC_9f577.dir/CMakeCCompilerABI.c.o' '-c' '-mmacosx-version-min=14.7'  '-nodefaultexport' '-mcpu=apple-m1' '-mlittle-endian' '-mabi=lp64' '-dumpdir' 'CMakeFiles/cmTC_9f577.dir/'
+ as -arch arm64 -v -I /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include -I /Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include -mmacosx-version-min=14.7 -o CMakeFiles/cmTC_9f577.dir/CMakeCCompilerABI.c.o /var/folders/qw/k6gzh2ws7w397493kq4vnl_w0001pb/T//ccaZ5enK.s
+Apple clang version 16.0.0 (clang-1600.0.26.6)
+Target: arm64-apple-darwin23.6.0
+Thread model: posix
+InstalledDir: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin
+ "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang" -cc1as -triple arm64-apple-macosx14.7.0 -target-sdk-version=15.2 -filetype obj -main-file-name ccaZ5enK.s -target-cpu apple-m1 -target-feature +v8.5a -target-feature +aes -target-feature +crc -target-feature +dotprod -target-feature +fp-armv8 -target-feature +fp16fml -target-feature +lse -target-feature +ras -target-feature +rcpc -target-feature +rdm -target-feature +sha2 -target-feature +sha3 -target-feature +neon -target-feature +zcm -target-feature +zcz -target-feature +fullfp16 -I /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include -I /Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include -fdebug-compilation-dir=/Users/hsharma/opt/LaueMatching/laue_matching_lib/build/CMakeFiles/CMakeScratch/TryCompile-zd1X8r -dwarf-debug-producer "Apple clang version 16.0.0 (clang-1600.0.26.6)" -I /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include -I /Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include -dwarf-version=4 -mrelocation-model pic -o CMakeFiles/cmTC_9f577.dir/CMakeCCompilerABI.c.o /var/folders/qw/k6gzh2ws7w397493kq4vnl_w0001pb/T//ccaZ5enK.s
+COMPILER_PATH=/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../libexec/gcc/aarch64-apple-darwin23/14/:/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../libexec/gcc/
+LIBRARY_PATH=/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin23/14/:/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../lib/gcc/current/gcc/:/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin23/14/../../../
+COLLECT_GCC_OPTIONS='-isysroot' '/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk' '-I' '/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include' '-I' '/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include' '-isysroot' '/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk' '-v' '-o' 'CMakeFiles/cmTC_9f577.dir/CMakeCCompilerABI.c.o' '-c' '-mmacosx-version-min=14.7'  '-nodefaultexport' '-mcpu=apple-m1' '-mlittle-endian' '-mabi=lp64' '-dumpdir' 'CMakeFiles/cmTC_9f577.dir/CMakeCCompilerABI.c.'
+Linking C executable cmTC_9f577
+/Applications/CMake.app/Contents/bin/cmake -E cmake_link_script CMakeFiles/cmTC_9f577.dir/link.txt --verbose=1
+/Users/hsharma/opt/homebrew/bin/gcc-14 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk -I/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include -I/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include  -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk -mmacosx-version-min=14.7 -Wl,-search_paths_first -Wl,-headerpad_max_install_names  -v -Wl,-v CMakeFiles/cmTC_9f577.dir/CMakeCCompilerABI.c.o -o cmTC_9f577 
+Using built-in specs.
+COLLECT_GCC=/Users/hsharma/opt/homebrew/bin/gcc-14
+COLLECT_LTO_WRAPPER=/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../libexec/gcc/aarch64-apple-darwin23/14/lto-wrapper
+Target: aarch64-apple-darwin23
+Configured with: ../configure --prefix=/Users/hsharma/opt/homebrew/opt/gcc --libdir=/Users/hsharma/opt/homebrew/opt/gcc/lib/gcc/current --disable-nls --enable-checking=release --with-gcc-major-version-only --enable-languages=c,c++,objc,obj-c++,fortran,m2 --program-suffix=-14 --with-gmp=/Users/hsharma/opt/homebrew/opt/gmp --with-mpfr=/Users/hsharma/opt/homebrew/opt/mpfr --with-mpc=/Users/hsharma/opt/homebrew/opt/libmpc --with-isl=/Users/hsharma/opt/homebrew/opt/isl --with-zstd=/Users/hsharma/opt/homebrew/opt/zstd --with-pkgversion='Homebrew GCC 14.2.0_1' --with-bugurl=https://github.com/Homebrew/homebrew-core/issues --with-system-zlib --build=aarch64-apple-darwin23 --with-sysroot=/Library/Developer/CommandLineTools/SDKs/MacOSX14.sdk
+Thread model: posix
+Supported LTO compression algorithms: zlib zstd
+gcc version 14.2.0 (Homebrew GCC 14.2.0_1) 
+COMPILER_PATH=/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../libexec/gcc/aarch64-apple-darwin23/14/:/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../libexec/gcc/
+LIBRARY_PATH=/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin23/14/:/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../lib/gcc/current/gcc/:/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin23/14/../../../
+COLLECT_GCC_OPTIONS='-isysroot' '/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk' '-I' '/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include' '-I' '/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include' '-isysroot' '/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk' '-v' '-o' 'cmTC_9f577' '-mmacosx-version-min=14.7' '-asm_macosx_version_min=14.7' '-nodefaultexport' '-mcpu=apple-m1' '-mlittle-endian' '-mabi=lp64' '-dumpdir' 'cmTC_9f577.'
+ /Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../libexec/gcc/aarch64-apple-darwin23/14/collect2 -demangle -dynamic -arch arm64 -syslibroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk -syslibroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk -platform_version macos 14.7 0.0 -o cmTC_9f577 -L/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin23/14 -L/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../lib/gcc/current/gcc -L/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin23/14/../../.. -lemutls_w -lheapt_w -search_paths_first -headerpad_max_install_names -v CMakeFiles/cmTC_9f577.dir/CMakeCCompilerABI.c.o -lgcc -lSystem -no_compact_unwind -rpath @loader_path -rpath /Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14 -rpath /Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc -rpath /Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current
+collect2 version 14.2.0
+/Users/hsharma/anaconda3_new/anaconda3/bin/ld -demangle -dynamic -arch arm64 -syslibroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk -syslibroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk -platform_version macos 14.7 0.0 -o cmTC_9f577 -L/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin23/14 -L/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../lib/gcc/current/gcc -L/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin23/14/../../.. -lemutls_w -lheapt_w -search_paths_first -headerpad_max_install_names -v CMakeFiles/cmTC_9f577.dir/CMakeCCompilerABI.c.o -lgcc -lSystem -no_compact_unwind -rpath @loader_path -rpath /Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14 -rpath /Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc -rpath /Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current
+@(#)PROGRAM:ld  PROJECT:ld64-530
+BUILD 07:38:32 Sep  7 2022
+configured to support archs: armv6 armv7 armv7s arm64 arm64e arm64_32 i386 x86_64 x86_64h armv6m armv7k armv7m armv7em (tvOS)
+Library search paths:
+	/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14
+	/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc
+	/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current
+	/usr/local/lib
+	/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/lib
+	/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk/usr/lib
+Framework search paths:
+	/Library/Frameworks/
+	/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/System/Library/Frameworks/
+	/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk/System/Library/Frameworks/
+gmake[1]: Leaving directory '/Users/hsharma/opt/LaueMatching/laue_matching_lib/build/CMakeFiles/CMakeScratch/TryCompile-zd1X8r'
+
+
+
+Parsed C implicit include dir info from above output: rv=done
+  found start of include info
+  found start of implicit include info
+    add: [/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin23/14/include]
+    add: [/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed]
+    add: [/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk/usr/include]
+    add: [/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk/System/Library/Frameworks]
+  end of search list found
+  collapse include dir [/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin23/14/include] ==> [/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include]
+  collapse include dir [/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed] ==> [/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed]
+  collapse include dir [/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk/usr/include] ==> [/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk/usr/include]
+  collapse include dir [/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk/System/Library/Frameworks] ==> [/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk/System/Library/Frameworks]
+  implicit include dirs: [/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include;/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed;/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk/usr/include;/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk/System/Library/Frameworks]
+
+
+Parsed C implicit link information from above output:
+  link line regex: [^( *|.*[/\])(ld|CMAKE_LINK_STARTFILE-NOTFOUND|([^/\]+-)?ld|collect2)[^/\]*( |$)]
+  ignore line: [Change Dir: /Users/hsharma/opt/LaueMatching/laue_matching_lib/build/CMakeFiles/CMakeScratch/TryCompile-zd1X8r]
+  ignore line: []
+  ignore line: [Run Build Command(s):/Users/hsharma/opt/homebrew/bin/gmake -f Makefile cmTC_9f577/fast && /Users/hsharma/opt/homebrew/bin/gmake  -f CMakeFiles/cmTC_9f577.dir/build.make CMakeFiles/cmTC_9f577.dir/build]
+  ignore line: [gmake[1]: Entering directory '/Users/hsharma/opt/LaueMatching/laue_matching_lib/build/CMakeFiles/CMakeScratch/TryCompile-zd1X8r']
+  ignore line: [Building C object CMakeFiles/cmTC_9f577.dir/CMakeCCompilerABI.c.o]
+  ignore line: [/Users/hsharma/opt/homebrew/bin/gcc-14   -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk -I/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include -I/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include  -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk -mmacosx-version-min=14.7   -v -Wl -v -o CMakeFiles/cmTC_9f577.dir/CMakeCCompilerABI.c.o -c /Applications/CMake.app/Contents/share/cmake-3.25/Modules/CMakeCCompilerABI.c]
+  ignore line: [Using built-in specs.]
+  ignore line: [COLLECT_GCC=/Users/hsharma/opt/homebrew/bin/gcc-14]
+  ignore line: [Target: aarch64-apple-darwin23]
+  ignore line: [Configured with: ../configure --prefix=/Users/hsharma/opt/homebrew/opt/gcc --libdir=/Users/hsharma/opt/homebrew/opt/gcc/lib/gcc/current --disable-nls --enable-checking=release --with-gcc-major-version-only --enable-languages=c c++ objc obj-c++ fortran m2 --program-suffix=-14 --with-gmp=/Users/hsharma/opt/homebrew/opt/gmp --with-mpfr=/Users/hsharma/opt/homebrew/opt/mpfr --with-mpc=/Users/hsharma/opt/homebrew/opt/libmpc --with-isl=/Users/hsharma/opt/homebrew/opt/isl --with-zstd=/Users/hsharma/opt/homebrew/opt/zstd --with-pkgversion='Homebrew GCC 14.2.0_1' --with-bugurl=https://github.com/Homebrew/homebrew-core/issues --with-system-zlib --build=aarch64-apple-darwin23 --with-sysroot=/Library/Developer/CommandLineTools/SDKs/MacOSX14.sdk]
+  ignore line: [Thread model: posix]
+  ignore line: [Supported LTO compression algorithms: zlib zstd]
+  ignore line: [gcc version 14.2.0 (Homebrew GCC 14.2.0_1) ]
+  ignore line: [COLLECT_GCC_OPTIONS='-isysroot' '/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk' '-I' '/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include' '-I' '/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include' '-isysroot' '/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk' '-v' '-o' 'CMakeFiles/cmTC_9f577.dir/CMakeCCompilerABI.c.o' '-c' '-mmacosx-version-min=14.7' '-asm_macosx_version_min=14.7' '-nodefaultexport' '-mcpu=apple-m1' '-mlittle-endian' '-mabi=lp64' '-dumpdir' 'CMakeFiles/cmTC_9f577.dir/']
+  ignore line: [ /Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../libexec/gcc/aarch64-apple-darwin23/14/cc1 -quiet -v -I /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include -I /Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include -iprefix /Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin23/14/ -D__DYNAMIC__ -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk /Applications/CMake.app/Contents/share/cmake-3.25/Modules/CMakeCCompilerABI.c -fPIC -quiet -dumpdir CMakeFiles/cmTC_9f577.dir/ -dumpbase CMakeCCompilerABI.c.c -dumpbase-ext .c -mmacosx-version-min=14.7 -mcpu=apple-m1 -mlittle-endian -mabi=lp64 -version -o /var/folders/qw/k6gzh2ws7w397493kq4vnl_w0001pb/T//ccaZ5enK.s]
+  ignore line: [GNU C17 (Homebrew GCC 14.2.0_1) version 14.2.0 (aarch64-apple-darwin23)]
+  ignore line: [	compiled by GNU C version 14.2.0  GMP version 6.3.0  MPFR version 4.2.2  MPC version 1.3.1  isl version isl-0.27-GMP]
+  ignore line: []
+  ignore line: [GGC heuristics: --param ggc-min-expand=100 --param ggc-min-heapsize=131072]
+  ignore line: [ignoring nonexistent directory "/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin23/14/../../../../../../aarch64-apple-darwin23/include"]
+  ignore line: [ignoring duplicate directory "/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../lib/gcc/current/gcc/../../../../lib/gcc/current/gcc/aarch64-apple-darwin23/14/include"]
+  ignore line: [ignoring nonexistent directory "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk/usr/local/include"]
+  ignore line: [ignoring duplicate directory "/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../lib/gcc/current/gcc/../../../../lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed"]
+  ignore line: [ignoring nonexistent directory "/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../lib/gcc/current/gcc/../../../../lib/gcc/current/gcc/aarch64-apple-darwin23/14/../../../../../../aarch64-apple-darwin23/include"]
+  ignore line: [ignoring nonexistent directory "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk/Library/Frameworks"]
+  ignore line: [ignoring duplicate directory "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include"]
+  ignore line: [  as it is a non-system directory that duplicates a system directory]
+  ignore line: [ignoring duplicate directory "/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include"]
+  ignore line: [  as it is a non-system directory that duplicates a system directory]
+  ignore line: [ignoring duplicate directory "/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed"]
+  ignore line: [  as it is a non-system directory that duplicates a system directory]
+  ignore line: [ignoring duplicate directory "/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include"]
+  ignore line: [  as it is a non-system directory that duplicates a system directory]
+  ignore line: [#include "..." search starts here:]
+  ignore line: [#include <...> search starts here:]
+  ignore line: [ /Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin23/14/include]
+  ignore line: [ /Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed]
+  ignore line: [ /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk/usr/include]
+  ignore line: [ /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk/System/Library/Frameworks]
+  ignore line: [End of search list.]
+  ignore line: [Compiler executable checksum: 52bb9802718003dfb9dfbcb0c74591a6]
+  ignore line: [COLLECT_GCC_OPTIONS='-isysroot' '/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk' '-I' '/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include' '-I' '/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include' '-isysroot' '/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk' '-v' '-o' 'CMakeFiles/cmTC_9f577.dir/CMakeCCompilerABI.c.o' '-c' '-mmacosx-version-min=14.7'  '-nodefaultexport' '-mcpu=apple-m1' '-mlittle-endian' '-mabi=lp64' '-dumpdir' 'CMakeFiles/cmTC_9f577.dir/']
+  ignore line: [ as -arch arm64 -v -I /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include -I /Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include -mmacosx-version-min=14.7 -o CMakeFiles/cmTC_9f577.dir/CMakeCCompilerABI.c.o /var/folders/qw/k6gzh2ws7w397493kq4vnl_w0001pb/T//ccaZ5enK.s]
+  ignore line: [Apple clang version 16.0.0 (clang-1600.0.26.6)]
+  ignore line: [Target: arm64-apple-darwin23.6.0]
+  ignore line: [Thread model: posix]
+  ignore line: [InstalledDir: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin]
+  ignore line: [ "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang" -cc1as -triple arm64-apple-macosx14.7.0 -target-sdk-version=15.2 -filetype obj -main-file-name ccaZ5enK.s -target-cpu apple-m1 -target-feature +v8.5a -target-feature +aes -target-feature +crc -target-feature +dotprod -target-feature +fp-armv8 -target-feature +fp16fml -target-feature +lse -target-feature +ras -target-feature +rcpc -target-feature +rdm -target-feature +sha2 -target-feature +sha3 -target-feature +neon -target-feature +zcm -target-feature +zcz -target-feature +fullfp16 -I /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include -I /Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include -fdebug-compilation-dir=/Users/hsharma/opt/LaueMatching/laue_matching_lib/build/CMakeFiles/CMakeScratch/TryCompile-zd1X8r -dwarf-debug-producer "Apple clang version 16.0.0 (clang-1600.0.26.6)" -I /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include -I /Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include -dwarf-version=4 -mrelocation-model pic -o CMakeFiles/cmTC_9f577.dir/CMakeCCompilerABI.c.o /var/folders/qw/k6gzh2ws7w397493kq4vnl_w0001pb/T//ccaZ5enK.s]
+  ignore line: [COMPILER_PATH=/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../libexec/gcc/aarch64-apple-darwin23/14/:/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../libexec/gcc/]
+  ignore line: [LIBRARY_PATH=/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin23/14/:/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../lib/gcc/current/gcc/:/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin23/14/../../../]
+  ignore line: [COLLECT_GCC_OPTIONS='-isysroot' '/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk' '-I' '/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include' '-I' '/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include' '-isysroot' '/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk' '-v' '-o' 'CMakeFiles/cmTC_9f577.dir/CMakeCCompilerABI.c.o' '-c' '-mmacosx-version-min=14.7'  '-nodefaultexport' '-mcpu=apple-m1' '-mlittle-endian' '-mabi=lp64' '-dumpdir' 'CMakeFiles/cmTC_9f577.dir/CMakeCCompilerABI.c.']
+  ignore line: [Linking C executable cmTC_9f577]
+  ignore line: [/Applications/CMake.app/Contents/bin/cmake -E cmake_link_script CMakeFiles/cmTC_9f577.dir/link.txt --verbose=1]
+  ignore line: [/Users/hsharma/opt/homebrew/bin/gcc-14 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk -I/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include -I/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include  -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk -mmacosx-version-min=14.7 -Wl -search_paths_first -Wl -headerpad_max_install_names  -v -Wl -v CMakeFiles/cmTC_9f577.dir/CMakeCCompilerABI.c.o -o cmTC_9f577 ]
+  ignore line: [Using built-in specs.]
+  ignore line: [COLLECT_GCC=/Users/hsharma/opt/homebrew/bin/gcc-14]
+  ignore line: [COLLECT_LTO_WRAPPER=/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../libexec/gcc/aarch64-apple-darwin23/14/lto-wrapper]
+  ignore line: [Target: aarch64-apple-darwin23]
+  ignore line: [Configured with: ../configure --prefix=/Users/hsharma/opt/homebrew/opt/gcc --libdir=/Users/hsharma/opt/homebrew/opt/gcc/lib/gcc/current --disable-nls --enable-checking=release --with-gcc-major-version-only --enable-languages=c c++ objc obj-c++ fortran m2 --program-suffix=-14 --with-gmp=/Users/hsharma/opt/homebrew/opt/gmp --with-mpfr=/Users/hsharma/opt/homebrew/opt/mpfr --with-mpc=/Users/hsharma/opt/homebrew/opt/libmpc --with-isl=/Users/hsharma/opt/homebrew/opt/isl --with-zstd=/Users/hsharma/opt/homebrew/opt/zstd --with-pkgversion='Homebrew GCC 14.2.0_1' --with-bugurl=https://github.com/Homebrew/homebrew-core/issues --with-system-zlib --build=aarch64-apple-darwin23 --with-sysroot=/Library/Developer/CommandLineTools/SDKs/MacOSX14.sdk]
+  ignore line: [Thread model: posix]
+  ignore line: [Supported LTO compression algorithms: zlib zstd]
+  ignore line: [gcc version 14.2.0 (Homebrew GCC 14.2.0_1) ]
+  ignore line: [COMPILER_PATH=/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../libexec/gcc/aarch64-apple-darwin23/14/:/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../libexec/gcc/]
+  ignore line: [LIBRARY_PATH=/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin23/14/:/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../lib/gcc/current/gcc/:/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin23/14/../../../]
+  ignore line: [COLLECT_GCC_OPTIONS='-isysroot' '/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk' '-I' '/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include' '-I' '/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include' '-isysroot' '/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk' '-v' '-o' 'cmTC_9f577' '-mmacosx-version-min=14.7' '-asm_macosx_version_min=14.7' '-nodefaultexport' '-mcpu=apple-m1' '-mlittle-endian' '-mabi=lp64' '-dumpdir' 'cmTC_9f577.']
+  link line: [ /Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../libexec/gcc/aarch64-apple-darwin23/14/collect2 -demangle -dynamic -arch arm64 -syslibroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk -syslibroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk -platform_version macos 14.7 0.0 -o cmTC_9f577 -L/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin23/14 -L/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../lib/gcc/current/gcc -L/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin23/14/../../.. -lemutls_w -lheapt_w -search_paths_first -headerpad_max_install_names -v CMakeFiles/cmTC_9f577.dir/CMakeCCompilerABI.c.o -lgcc -lSystem -no_compact_unwind -rpath @loader_path -rpath /Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14 -rpath /Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc -rpath /Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current]
+    arg [/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../libexec/gcc/aarch64-apple-darwin23/14/collect2] ==> ignore
+    arg [-demangle] ==> ignore
+    arg [-dynamic] ==> ignore
+    arg [-arch] ==> ignore
+    arg [arm64] ==> ignore
+    arg [-syslibroot] ==> ignore
+    arg [/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk] ==> ignore
+    arg [-syslibroot] ==> ignore
+    arg [/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk] ==> ignore
+    arg [-platform_version] ==> ignore
+    arg [macos] ==> ignore
+    arg [14.7] ==> ignore
+    arg [0.0] ==> ignore
+    arg [-o] ==> ignore
+    arg [cmTC_9f577] ==> ignore
+    arg [-L/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin23/14] ==> dir [/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin23/14]
+    arg [-L/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../lib/gcc/current/gcc] ==> dir [/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../lib/gcc/current/gcc]
+    arg [-L/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin23/14/../../..] ==> dir [/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin23/14/../../..]
+    arg [-lemutls_w] ==> lib [emutls_w]
+    arg [-lheapt_w] ==> lib [heapt_w]
+    arg [-search_paths_first] ==> ignore
+    arg [-headerpad_max_install_names] ==> ignore
+    arg [-v] ==> ignore
+    arg [CMakeFiles/cmTC_9f577.dir/CMakeCCompilerABI.c.o] ==> ignore
+    arg [-lgcc] ==> lib [gcc]
+    arg [-lSystem] ==> lib [System]
+    arg [-no_compact_unwind] ==> ignore
+    arg [-rpath] ==> ignore
+    arg [@loader_path] ==> ignore
+    arg [-rpath] ==> ignore
+    arg [/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14] ==> ignore
+    arg [-rpath] ==> ignore
+    arg [/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc] ==> ignore
+    arg [-rpath] ==> ignore
+    arg [/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current] ==> ignore
+  Library search paths: [;/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14;/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc;/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current;/usr/local/lib;/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/lib;/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk/usr/lib]
+  Framework search paths: [;/Library/Frameworks/;/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/System/Library/Frameworks/;/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk/System/Library/Frameworks/]
+  remove lib [System]
+  collapse library dir [/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin23/14] ==> [/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14]
+  collapse library dir [/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../lib/gcc/current/gcc] ==> [/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc]
+  collapse library dir [/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin23/14/../../..] ==> [/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current]
+  collapse library dir [/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14] ==> [/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14]
+  collapse library dir [/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc] ==> [/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc]
+  collapse library dir [/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current] ==> [/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current]
+  collapse library dir [/usr/local/lib] ==> [/usr/local/lib]
+  collapse library dir [/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/lib] ==> [/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/lib]
+  collapse library dir [/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk/usr/lib] ==> [/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk/usr/lib]
+  collapse framework dir [/Library/Frameworks/] ==> [/Library/Frameworks]
+  collapse framework dir [/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/System/Library/Frameworks/] ==> [/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/System/Library/Frameworks]
+  collapse framework dir [/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk/System/Library/Frameworks/] ==> [/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk/System/Library/Frameworks]
+  implicit libs: [emutls_w;heapt_w;gcc]
+  implicit objs: []
+  implicit dirs: [/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14;/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc;/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current;/usr/local/lib;/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/lib;/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk/usr/lib]
+  implicit fwks: [/Library/Frameworks;/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/System/Library/Frameworks;/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk/System/Library/Frameworks]
+
+
+Determining if the include file stdlib.h exists passed with the following output:
+Change Dir: /Users/hsharma/opt/LaueMatching/laue_matching_lib/build/CMakeFiles/CMakeScratch/TryCompile-64cW9r
+
+Run Build Command(s):/Users/hsharma/opt/homebrew/bin/gmake -f Makefile cmTC_f2714/fast && /Users/hsharma/opt/homebrew/bin/gmake  -f CMakeFiles/cmTC_f2714.dir/build.make CMakeFiles/cmTC_f2714.dir/build
+gmake[1]: Entering directory '/Users/hsharma/opt/LaueMatching/laue_matching_lib/build/CMakeFiles/CMakeScratch/TryCompile-64cW9r'
+Building C object CMakeFiles/cmTC_f2714.dir/CheckIncludeFile.c.o
+/Users/hsharma/opt/homebrew/bin/gcc-14   -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk -I/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include -I/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include  -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk -mmacosx-version-min=14.7 -std=gnu99 -o CMakeFiles/cmTC_f2714.dir/CheckIncludeFile.c.o -c /Users/hsharma/opt/LaueMatching/laue_matching_lib/build/CMakeFiles/CMakeScratch/TryCompile-64cW9r/CheckIncludeFile.c
+Linking C executable cmTC_f2714
+/Applications/CMake.app/Contents/bin/cmake -E cmake_link_script CMakeFiles/cmTC_f2714.dir/link.txt --verbose=1
+/Users/hsharma/opt/homebrew/bin/gcc-14 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk -I/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include -I/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include  -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk -mmacosx-version-min=14.7 -Wl,-search_paths_first -Wl,-headerpad_max_install_names CMakeFiles/cmTC_f2714.dir/CheckIncludeFile.c.o -o cmTC_f2714 
+gmake[1]: Leaving directory '/Users/hsharma/opt/LaueMatching/laue_matching_lib/build/CMakeFiles/CMakeScratch/TryCompile-64cW9r'
+
+
+
+Determining if the include file string.h exists passed with the following output:
+Change Dir: /Users/hsharma/opt/LaueMatching/laue_matching_lib/build/CMakeFiles/CMakeScratch/TryCompile-oE07w9
+
+Run Build Command(s):/Users/hsharma/opt/homebrew/bin/gmake -f Makefile cmTC_05bbd/fast && /Users/hsharma/opt/homebrew/bin/gmake  -f CMakeFiles/cmTC_05bbd.dir/build.make CMakeFiles/cmTC_05bbd.dir/build
+gmake[1]: Entering directory '/Users/hsharma/opt/LaueMatching/laue_matching_lib/build/CMakeFiles/CMakeScratch/TryCompile-oE07w9'
+Building C object CMakeFiles/cmTC_05bbd.dir/CheckIncludeFile.c.o
+/Users/hsharma/opt/homebrew/bin/gcc-14   -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk -I/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include -I/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include  -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk -mmacosx-version-min=14.7 -std=gnu99 -o CMakeFiles/cmTC_05bbd.dir/CheckIncludeFile.c.o -c /Users/hsharma/opt/LaueMatching/laue_matching_lib/build/CMakeFiles/CMakeScratch/TryCompile-oE07w9/CheckIncludeFile.c
+Linking C executable cmTC_05bbd
+/Applications/CMake.app/Contents/bin/cmake -E cmake_link_script CMakeFiles/cmTC_05bbd.dir/link.txt --verbose=1
+/Users/hsharma/opt/homebrew/bin/gcc-14 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk -I/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include -I/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include  -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk -mmacosx-version-min=14.7 -Wl,-search_paths_first -Wl,-headerpad_max_install_names CMakeFiles/cmTC_05bbd.dir/CheckIncludeFile.c.o -o cmTC_05bbd 
+gmake[1]: Leaving directory '/Users/hsharma/opt/LaueMatching/laue_matching_lib/build/CMakeFiles/CMakeScratch/TryCompile-oE07w9'
+
+
+
+Determining if the include file stdint.h exists passed with the following output:
+Change Dir: /Users/hsharma/opt/LaueMatching/laue_matching_lib/build/CMakeFiles/CMakeScratch/TryCompile-P2Vgje
+
+Run Build Command(s):/Users/hsharma/opt/homebrew/bin/gmake -f Makefile cmTC_3ba30/fast && /Users/hsharma/opt/homebrew/bin/gmake  -f CMakeFiles/cmTC_3ba30.dir/build.make CMakeFiles/cmTC_3ba30.dir/build
+gmake[1]: Entering directory '/Users/hsharma/opt/LaueMatching/laue_matching_lib/build/CMakeFiles/CMakeScratch/TryCompile-P2Vgje'
+Building C object CMakeFiles/cmTC_3ba30.dir/CheckIncludeFile.c.o
+/Users/hsharma/opt/homebrew/bin/gcc-14   -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk -I/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include -I/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include  -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk -mmacosx-version-min=14.7 -std=gnu99 -o CMakeFiles/cmTC_3ba30.dir/CheckIncludeFile.c.o -c /Users/hsharma/opt/LaueMatching/laue_matching_lib/build/CMakeFiles/CMakeScratch/TryCompile-P2Vgje/CheckIncludeFile.c
+Linking C executable cmTC_3ba30
+/Applications/CMake.app/Contents/bin/cmake -E cmake_link_script CMakeFiles/cmTC_3ba30.dir/link.txt --verbose=1
+/Users/hsharma/opt/homebrew/bin/gcc-14 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk -I/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include -I/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include  -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk -mmacosx-version-min=14.7 -Wl,-search_paths_first -Wl,-headerpad_max_install_names CMakeFiles/cmTC_3ba30.dir/CheckIncludeFile.c.o -o cmTC_3ba30 
+gmake[1]: Leaving directory '/Users/hsharma/opt/LaueMatching/laue_matching_lib/build/CMakeFiles/CMakeScratch/TryCompile-P2Vgje'
+
+
+
+Determining if the include file stddef.h exists passed with the following output:
+Change Dir: /Users/hsharma/opt/LaueMatching/laue_matching_lib/build/CMakeFiles/CMakeScratch/TryCompile-BthS2w
+
+Run Build Command(s):/Users/hsharma/opt/homebrew/bin/gmake -f Makefile cmTC_380f7/fast && /Users/hsharma/opt/homebrew/bin/gmake  -f CMakeFiles/cmTC_380f7.dir/build.make CMakeFiles/cmTC_380f7.dir/build
+gmake[1]: Entering directory '/Users/hsharma/opt/LaueMatching/laue_matching_lib/build/CMakeFiles/CMakeScratch/TryCompile-BthS2w'
+Building C object CMakeFiles/cmTC_380f7.dir/CheckIncludeFile.c.o
+/Users/hsharma/opt/homebrew/bin/gcc-14   -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk -I/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include -I/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include  -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk -mmacosx-version-min=14.7 -std=gnu99 -o CMakeFiles/cmTC_380f7.dir/CheckIncludeFile.c.o -c /Users/hsharma/opt/LaueMatching/laue_matching_lib/build/CMakeFiles/CMakeScratch/TryCompile-BthS2w/CheckIncludeFile.c
+Linking C executable cmTC_380f7
+/Applications/CMake.app/Contents/bin/cmake -E cmake_link_script CMakeFiles/cmTC_380f7.dir/link.txt --verbose=1
+/Users/hsharma/opt/homebrew/bin/gcc-14 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk -I/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include -I/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include  -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk -mmacosx-version-min=14.7 -Wl,-search_paths_first -Wl,-headerpad_max_install_names CMakeFiles/cmTC_380f7.dir/CheckIncludeFile.c.o -o cmTC_380f7 
+gmake[1]: Leaving directory '/Users/hsharma/opt/LaueMatching/laue_matching_lib/build/CMakeFiles/CMakeScratch/TryCompile-BthS2w'
+
+
+
+Determining if the include file stdbool.h exists passed with the following output:
+Change Dir: /Users/hsharma/opt/LaueMatching/laue_matching_lib/build/CMakeFiles/CMakeScratch/TryCompile-BMMCm0
+
+Run Build Command(s):/Users/hsharma/opt/homebrew/bin/gmake -f Makefile cmTC_4cbf7/fast && /Users/hsharma/opt/homebrew/bin/gmake  -f CMakeFiles/cmTC_4cbf7.dir/build.make CMakeFiles/cmTC_4cbf7.dir/build
+gmake[1]: Entering directory '/Users/hsharma/opt/LaueMatching/laue_matching_lib/build/CMakeFiles/CMakeScratch/TryCompile-BMMCm0'
+Building C object CMakeFiles/cmTC_4cbf7.dir/CheckIncludeFile.c.o
+/Users/hsharma/opt/homebrew/bin/gcc-14   -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk -I/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include -I/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include  -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk -mmacosx-version-min=14.7 -std=gnu99 -o CMakeFiles/cmTC_4cbf7.dir/CheckIncludeFile.c.o -c /Users/hsharma/opt/LaueMatching/laue_matching_lib/build/CMakeFiles/CMakeScratch/TryCompile-BMMCm0/CheckIncludeFile.c
+Linking C executable cmTC_4cbf7
+/Applications/CMake.app/Contents/bin/cmake -E cmake_link_script CMakeFiles/cmTC_4cbf7.dir/link.txt --verbose=1
+/Users/hsharma/opt/homebrew/bin/gcc-14 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk -I/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include -I/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include  -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk -mmacosx-version-min=14.7 -Wl,-search_paths_first -Wl,-headerpad_max_install_names CMakeFiles/cmTC_4cbf7.dir/CheckIncludeFile.c.o -o cmTC_4cbf7 
+gmake[1]: Leaving directory '/Users/hsharma/opt/LaueMatching/laue_matching_lib/build/CMakeFiles/CMakeScratch/TryCompile-BMMCm0'
+
+
+
+Determining if the include file math.h exists passed with the following output:
+Change Dir: /Users/hsharma/opt/LaueMatching/laue_matching_lib/build/CMakeFiles/CMakeScratch/TryCompile-9HbRsZ
+
+Run Build Command(s):/Users/hsharma/opt/homebrew/bin/gmake -f Makefile cmTC_d43d6/fast && /Users/hsharma/opt/homebrew/bin/gmake  -f CMakeFiles/cmTC_d43d6.dir/build.make CMakeFiles/cmTC_d43d6.dir/build
+gmake[1]: Entering directory '/Users/hsharma/opt/LaueMatching/laue_matching_lib/build/CMakeFiles/CMakeScratch/TryCompile-9HbRsZ'
+Building C object CMakeFiles/cmTC_d43d6.dir/CheckIncludeFile.c.o
+/Users/hsharma/opt/homebrew/bin/gcc-14   -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk -I/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include -I/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include  -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk -mmacosx-version-min=14.7 -std=gnu99 -o CMakeFiles/cmTC_d43d6.dir/CheckIncludeFile.c.o -c /Users/hsharma/opt/LaueMatching/laue_matching_lib/build/CMakeFiles/CMakeScratch/TryCompile-9HbRsZ/CheckIncludeFile.c
+Linking C executable cmTC_d43d6
+/Applications/CMake.app/Contents/bin/cmake -E cmake_link_script CMakeFiles/cmTC_d43d6.dir/link.txt --verbose=1
+/Users/hsharma/opt/homebrew/bin/gcc-14 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk -I/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include -I/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include  -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk -mmacosx-version-min=14.7 -Wl,-search_paths_first -Wl,-headerpad_max_install_names CMakeFiles/cmTC_d43d6.dir/CheckIncludeFile.c.o -o cmTC_d43d6 
+gmake[1]: Leaving directory '/Users/hsharma/opt/LaueMatching/laue_matching_lib/build/CMakeFiles/CMakeScratch/TryCompile-9HbRsZ'
+
+
+
+Determining if the include file time.h exists passed with the following output:
+Change Dir: /Users/hsharma/opt/LaueMatching/laue_matching_lib/build/CMakeFiles/CMakeScratch/TryCompile-PHdLYQ
+
+Run Build Command(s):/Users/hsharma/opt/homebrew/bin/gmake -f Makefile cmTC_5fece/fast && /Users/hsharma/opt/homebrew/bin/gmake  -f CMakeFiles/cmTC_5fece.dir/build.make CMakeFiles/cmTC_5fece.dir/build
+gmake[1]: Entering directory '/Users/hsharma/opt/LaueMatching/laue_matching_lib/build/CMakeFiles/CMakeScratch/TryCompile-PHdLYQ'
+Building C object CMakeFiles/cmTC_5fece.dir/CheckIncludeFile.c.o
+/Users/hsharma/opt/homebrew/bin/gcc-14   -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk -I/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include -I/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include  -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk -mmacosx-version-min=14.7 -std=gnu99 -o CMakeFiles/cmTC_5fece.dir/CheckIncludeFile.c.o -c /Users/hsharma/opt/LaueMatching/laue_matching_lib/build/CMakeFiles/CMakeScratch/TryCompile-PHdLYQ/CheckIncludeFile.c
+Linking C executable cmTC_5fece
+/Applications/CMake.app/Contents/bin/cmake -E cmake_link_script CMakeFiles/cmTC_5fece.dir/link.txt --verbose=1
+/Users/hsharma/opt/homebrew/bin/gcc-14 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk -I/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include -I/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include  -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk -mmacosx-version-min=14.7 -Wl,-search_paths_first -Wl,-headerpad_max_install_names CMakeFiles/cmTC_5fece.dir/CheckIncludeFile.c.o -o cmTC_5fece 
+gmake[1]: Leaving directory '/Users/hsharma/opt/LaueMatching/laue_matching_lib/build/CMakeFiles/CMakeScratch/TryCompile-PHdLYQ'
+
+
+
+Determining if the include file sys/mman.h exists passed with the following output:
+Change Dir: /Users/hsharma/opt/LaueMatching/laue_matching_lib/build/CMakeFiles/CMakeScratch/TryCompile-iS6PIp
+
+Run Build Command(s):/Users/hsharma/opt/homebrew/bin/gmake -f Makefile cmTC_80a44/fast && /Users/hsharma/opt/homebrew/bin/gmake  -f CMakeFiles/cmTC_80a44.dir/build.make CMakeFiles/cmTC_80a44.dir/build
+gmake[1]: Entering directory '/Users/hsharma/opt/LaueMatching/laue_matching_lib/build/CMakeFiles/CMakeScratch/TryCompile-iS6PIp'
+Building C object CMakeFiles/cmTC_80a44.dir/CheckIncludeFile.c.o
+/Users/hsharma/opt/homebrew/bin/gcc-14   -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk -I/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include -I/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include  -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk -mmacosx-version-min=14.7 -std=gnu99 -o CMakeFiles/cmTC_80a44.dir/CheckIncludeFile.c.o -c /Users/hsharma/opt/LaueMatching/laue_matching_lib/build/CMakeFiles/CMakeScratch/TryCompile-iS6PIp/CheckIncludeFile.c
+Linking C executable cmTC_80a44
+/Applications/CMake.app/Contents/bin/cmake -E cmake_link_script CMakeFiles/cmTC_80a44.dir/link.txt --verbose=1
+/Users/hsharma/opt/homebrew/bin/gcc-14 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk -I/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include -I/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include  -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk -mmacosx-version-min=14.7 -Wl,-search_paths_first -Wl,-headerpad_max_install_names CMakeFiles/cmTC_80a44.dir/CheckIncludeFile.c.o -o cmTC_80a44 
+gmake[1]: Leaving directory '/Users/hsharma/opt/LaueMatching/laue_matching_lib/build/CMakeFiles/CMakeScratch/TryCompile-iS6PIp'
+
+
+
+Determining if the include file fcntl.h exists passed with the following output:
+Change Dir: /Users/hsharma/opt/LaueMatching/laue_matching_lib/build/CMakeFiles/CMakeScratch/TryCompile-pLXv7g
+
+Run Build Command(s):/Users/hsharma/opt/homebrew/bin/gmake -f Makefile cmTC_e9d48/fast && /Users/hsharma/opt/homebrew/bin/gmake  -f CMakeFiles/cmTC_e9d48.dir/build.make CMakeFiles/cmTC_e9d48.dir/build
+gmake[1]: Entering directory '/Users/hsharma/opt/LaueMatching/laue_matching_lib/build/CMakeFiles/CMakeScratch/TryCompile-pLXv7g'
+Building C object CMakeFiles/cmTC_e9d48.dir/CheckIncludeFile.c.o
+/Users/hsharma/opt/homebrew/bin/gcc-14   -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk -I/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include -I/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include  -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk -mmacosx-version-min=14.7 -std=gnu99 -o CMakeFiles/cmTC_e9d48.dir/CheckIncludeFile.c.o -c /Users/hsharma/opt/LaueMatching/laue_matching_lib/build/CMakeFiles/CMakeScratch/TryCompile-pLXv7g/CheckIncludeFile.c
+Linking C executable cmTC_e9d48
+/Applications/CMake.app/Contents/bin/cmake -E cmake_link_script CMakeFiles/cmTC_e9d48.dir/link.txt --verbose=1
+/Users/hsharma/opt/homebrew/bin/gcc-14 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk -I/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include -I/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include  -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk -mmacosx-version-min=14.7 -Wl,-search_paths_first -Wl,-headerpad_max_install_names CMakeFiles/cmTC_e9d48.dir/CheckIncludeFile.c.o -o cmTC_e9d48 
+gmake[1]: Leaving directory '/Users/hsharma/opt/LaueMatching/laue_matching_lib/build/CMakeFiles/CMakeScratch/TryCompile-pLXv7g'
+
+
+
+Determining if the include file unistd.h exists passed with the following output:
+Change Dir: /Users/hsharma/opt/LaueMatching/laue_matching_lib/build/CMakeFiles/CMakeScratch/TryCompile-nRcZJV
+
+Run Build Command(s):/Users/hsharma/opt/homebrew/bin/gmake -f Makefile cmTC_9010c/fast && /Users/hsharma/opt/homebrew/bin/gmake  -f CMakeFiles/cmTC_9010c.dir/build.make CMakeFiles/cmTC_9010c.dir/build
+gmake[1]: Entering directory '/Users/hsharma/opt/LaueMatching/laue_matching_lib/build/CMakeFiles/CMakeScratch/TryCompile-nRcZJV'
+Building C object CMakeFiles/cmTC_9010c.dir/CheckIncludeFile.c.o
+/Users/hsharma/opt/homebrew/bin/gcc-14   -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk -I/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include -I/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include  -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk -mmacosx-version-min=14.7 -std=gnu99 -o CMakeFiles/cmTC_9010c.dir/CheckIncludeFile.c.o -c /Users/hsharma/opt/LaueMatching/laue_matching_lib/build/CMakeFiles/CMakeScratch/TryCompile-nRcZJV/CheckIncludeFile.c
+Linking C executable cmTC_9010c
+/Applications/CMake.app/Contents/bin/cmake -E cmake_link_script CMakeFiles/cmTC_9010c.dir/link.txt --verbose=1
+/Users/hsharma/opt/homebrew/bin/gcc-14 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk -I/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include -I/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include  -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk -mmacosx-version-min=14.7 -Wl,-search_paths_first -Wl,-headerpad_max_install_names CMakeFiles/cmTC_9010c.dir/CheckIncludeFile.c.o -o cmTC_9010c 
+gmake[1]: Leaving directory '/Users/hsharma/opt/LaueMatching/laue_matching_lib/build/CMakeFiles/CMakeScratch/TryCompile-nRcZJV'
+
+
+
