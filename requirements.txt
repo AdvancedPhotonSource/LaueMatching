@@ -6,4 +6,4 @@ scikit-image
 diplib
 matplotlib
 opencv-python-headless
-yaml
+pyyaml
