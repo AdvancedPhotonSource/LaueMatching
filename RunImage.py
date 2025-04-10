@@ -1221,9 +1221,6 @@ class EnhancedImageProcessor:
             logger.info(f"Sample experimental spot: ({spots[0][5]:.1f}, {spots[0][6]:.1f})")
         if len(simulated_spots) > 0:
             logger.info(f"Sample simulated spot: ({simulated_spots[0][1]:.1f}, {simulated_spots[0][0]:.1f})")
-        # Debug: log all spots from both sources
-        logger.info(f"Experimental spots: {spots[:][5,6]}")
-        logger.info(f"Simulated spots: {simulated_spots[:][1,0]}")
         
         # Create figure with 3 subplots (experimental, simulated, missing spots)
         fig = make_subplots(
@@ -1706,7 +1703,7 @@ class EnhancedImageProcessor:
         orientation_unique_spots: Dict[int, Dict]
     ) -> np.ndarray:
         """
-        Sort orientations by quality score (NMatches*sqrt(intensity)).
+        Sort orientations by quality score while preserving original GrainNr.
         
         Args:
             orientations: Orientation data array
@@ -1718,31 +1715,27 @@ class EnhancedImageProcessor:
         if len(orientations.shape) == 1:
             return orientations
             
-        # Calculate quality scores
+        # Create a mapping to preserve original GrainNr (in column 0)
+        original_grain_numbers = orientations[:, 0].copy()
+        
+        # Extract existing quality scores from column 4 (assuming 0-based indexing)
         quality_scores = []
         for i, orientation in enumerate(orientations):
-            orientation_id = int(orientation[0])
-            
-            # Get unique spot data
-            spot_data = orientation_unique_spots.get(orientation_id, {})
-            n_matches = spot_data.get("count", 0)
-            intensity = spot_data.get("total_intensity", 0.0)
-            
-            # Calculate quality score: NMatches * sqrt(intensity)
-            quality_score = n_matches * np.sqrt(intensity) if intensity > 0 else 0
+            quality_score = orientation[4]  # Use existing quality score from column 4
             quality_scores.append((i, quality_score))
             
         # Sort by quality score in descending order
         sorted_indices = [idx for idx, score in sorted(quality_scores, key=lambda x: x[1], reverse=True)]
         
-        # Reorder orientations
-        sorted_orientations = orientations[sorted_indices]
+        # Reorder orientations but preserve original GrainNr
+        sorted_orientations = orientations[sorted_indices].copy()
         
-        # Update orientation IDs to match new order
-        for i, orientation in enumerate(sorted_orientations):
-            sorted_orientations[i, 0] = i
+        # Restore original grain numbers
+        for i in range(len(sorted_orientations)):
+            original_idx = sorted_indices[i]
+            sorted_orientations[i, 0] = original_grain_numbers[original_idx]
             
-        logger.info(f"Sorted {len(sorted_orientations)} orientations by quality score")
+        logger.info(f"Sorted {len(sorted_orientations)} orientations by quality score while preserving GrainNr")
         return sorted_orientations
     
     def _create_h5_output(
