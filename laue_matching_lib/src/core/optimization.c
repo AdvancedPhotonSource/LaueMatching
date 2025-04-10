@@ -34,6 +34,7 @@ double optimization_objective_function(
     double *grad,
     void *data
 ) {
+    (void)grad;  // Unused parameter, suppress compiler warning
     // Cast data to our structure
     LaueOptimizationData *opt_data = (LaueOptimizationData *)data;
     
