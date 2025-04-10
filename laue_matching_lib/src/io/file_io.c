@@ -164,6 +164,7 @@ int file_read_parameters(const char *filename, MatchingConfig *config) {
         lowNr = strncmp(aline, str, strlen(str));
         if (lowNr == 0) {
             sscanf(aline, "%s %s", dummy, config->forwardSimulationFile);
+            config->forwardSimulationFile[sizeof(config->forwardSimulationFile) - 1] = '\0';
             printf("While reading %s\n",config->forwardSimulationFile);
             continue;
         }
