@@ -544,3 +544,43 @@ int file_write_grain_solution(
     
     return LAUE_SUCCESS;
 }
+
+int file_write_forward_simulation_full(
+    const char *filename,
+    const uint16_t *data,
+    size_t size
+) {
+    FILE *file = fopen(filename, "wb");
+    if (!file) {
+        return LAUE_ERROR_FILE_IO;
+    }
+    
+    size_t written = fwrite(data, sizeof(uint16_t), size, file);
+    fclose(file);
+    
+    if (written != size) {
+        return LAUE_ERROR_FILE_IO;
+    }
+    
+    return LAUE_SUCCESS;
+}
+
+int file_read_forward_simulation_full(
+    const char *filename,
+    uint16_t *data,
+    size_t size
+) {
+    FILE *file = fopen(filename, "rb");
+    if (!file) {
+        return LAUE_ERROR_FILE_IO;
+    }
+    
+    size_t read = fread(data, sizeof(uint16_t), size, file);
+    fclose(file);
+    
+    if (read != size) {
+        return LAUE_ERROR_FILE_IO;
+    }
+    
+    return LAUE_SUCCESS;
+}

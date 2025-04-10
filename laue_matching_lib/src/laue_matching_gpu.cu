@@ -15,8 +15,30 @@
 
 /* Global variables */
 static int laue_gpu_initialized = 0;
+extern int laue_initialized;
 extern int laue_verbose_level;
 
+int laue_init(void) {
+    if (laue_initialized) {
+        return LAUE_SUCCESS;
+    }
+    
+    // Nothing specific to initialize yet, but this function
+    // can be expanded in the future
+    
+    laue_initialized = 1;
+    return LAUE_SUCCESS;
+}
+void laue_cleanup(void) {
+    if (!laue_initialized) {
+        return;
+    }
+    
+    // Nothing specific to clean up yet, but this function
+    // can be expanded in the future
+    
+    laue_initialized = 0;
+}
 /**
  * CUDA kernel to compare simulated patterns with image data
  */

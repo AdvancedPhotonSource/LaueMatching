@@ -149,5 +149,32 @@ int file_write_grain_solution(
     double misorientation,
     int bestOrientation
 );
+/**
+ * @brief Write forward simulation data to file
+ * 
+ * @param filename Name of file to write to
+ * @param data Data array to write
+ * @param size Size of data array in elements
+ * @return LAUE_SUCCESS on success, error code on failure
+ */
+int file_write_forward_simulation_full(
+    const char *filename,
+    const uint16_t *data,
+    size_t size
+);
+
+/**
+ * @brief Read forward simulation data from file
+ * 
+ * @param filename Name of file to read from
+ * @param data Data array to read into
+ * @param size Size of data array in elements
+ * @return LAUE_SUCCESS on success, error code on failure
+ */
+int file_read_forward_simulation_full(
+    const char *filename,
+    uint16_t *data,
+    size_t size
+);
 
 #endif /* LAUE_FILE_IO_H */
