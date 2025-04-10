@@ -1,61 +1,197 @@
 # LaueMatching
 
-LaueMatching code to find orientations in Laue Diffraction Images.
+LaueMatching is a software package to find orientations in Laue Diffraction Images.
 
-To install, you would need to compile C-codes in src.
+## Overview
 
-Installation:
-    
-    git clone https://github.com/AdvancedPhotonSource/LaueMatching
-    cd LaueMatching
-    pip install -r requirements.txt
+This project provides tools for indexing and matching orientations in Laue diffraction patterns. It includes both CPU and GPU implementations for maximum performance, as well as a reusable library component.
 
-Python packages needed:
+## Features
 
-    - numpy
-    - h5py
-    - scipy
-    - pillow
-    - scikit-image
-    - diplib
-    - matplotlib
+- Fast indexing of Laue diffraction patterns
+- CPU and GPU implementations for optimal performance
+- Shared library for integration with other applications
+- Automatic orientation matching algorithms
+- Support for various crystal symmetries
+- Integration with Python for data processing and visualization
 
-C-libraries downloaded:
+## Project Structure
 
-    - nlopt
+- `src/` - Main executable source files
+- `laue_matching_lib/` - Reusable library code
+  - `src/` - Library implementation files
+  - `include/` - Public header files
+- `build/` - Build directory (created during build)
+  - `bin/` - Compiled executables
+  - `lib/` - Compiled libraries
+- `simulation/` - Example data and configuration files
 
-**NOTE:** It will download a ~7GB file once when installing. This file consists of a list of 100 million orientation matrices. These were used in the paper.
+## Installation
 
-For GPU Version, provide CUDA executable as follows:
+LaueMatching can be installed using multiple methods:
 
-    make NCC=PATH_TO_NVCC lauegpu
+### Using CMake (Recommended)
 
-For CPU Version:
+See the detailed [installation guide](INSTALL.md) for CMake-based installation.
 
-    make lauecpu
+```bash
+# Quick start with CMake
+git clone https://github.com/AdvancedPhotonSource/LaueMatching
+cd LaueMatching
+mkdir build && cd build
+cmake ..
+make -j8
+```
 
-To make both:
+### Using the Build Script
 
-    make all
+We provide a convenient build script that handles the compilation process:
 
-**simulation** folder consists of files needed to generate a simulation and run indexing.
+```bash
+./build.sh
+```
 
-## Best Practices:
+Run `./build.sh --help` to see all available options.
 
-> LaueMatching runs only on Linux computers for now.
+### Using Docker
 
-> If you want to reduce initialization times (from a few seconds per image to a few microseconds), your `OrientationFile` and `ForwardFile` should be in `/dev/shm`. You can either just provide the path to these files and `LaueMatching` will generate these, or copy already generated files to `/dev/shm`. Any files on `/dev/shm` can be directly memory mapped instead of being read, and this process is millions of times faster. This is particularly useful for multiple app calls using the same mapping files, but different images. ***Note:*** This will not work on MAC.
+We also provide Docker support for easy deployment:
 
-> The CPU code can be compiled to run on MACOS, but need to `brew install gcc` to get `OpenMP` and possibly other dependencies.
+```bash
+# Build and run the Docker container
+docker-compose up -d
+docker exec -it lauematching bash
+```
 
-> Windows support is not planned.
+## Build Options
 
-> Look inside **simulation** folder for instructions to run the example.
+LaueMatching provides several build options:
 
-# CITATION
+- `USE_CUDA=ON/OFF` - Enable/disable CUDA support (default: ON)
+- `DOWNLOAD_ORIENTATION_FILE=ON/OFF` - Automatically download the orientation file if needed (default: ON)
+- `USE_SYSTEM_NLOPT=ON/OFF` - Use system-installed NLopt instead of building from source (default: OFF)
+- `BUILD_LIBRARY=ON/OFF` - Build the shared library component (default: ON)
 
-If you use `LaueMatching` in your work, please cite the paper:
+Example:
+```bash
+cmake -DUSE_CUDA=OFF -DBUILD_LIBRARY=ON ..
+```
 
-    Citation coming soon. For now, please cite as:
+## Python Requirements
 
-        LaueMatching, 2024. https://github.com/AdvancedPhotonSource/LaueMatching
+The following Python packages are required:
+
+- numpy
+- h5py
+- scipy
+- pillow
+- scikit-image
+- diplib
+- matplotlib
+- opencv-python-headless
+
+You can install all requirements with:
+
+```bash
+pip install -r requirements.txt
+```
+
+## Usage
+
+### Basic Usage
+
+The basic workflow involves:
+
+1. Preparing your data
+2. Running the LaueMatching algorithms
+3. Analyzing the results
+
+```bash
+# Example for CPU version
+./bin/LaueMatchingCPU config_file.txt orientations.bin hkls.txt image.bin 8
+
+# Example for GPU version
+./bin/LaueMatchingGPU config_file.txt orientations.bin hkls.txt image.bin 8
+```
+
+### Python Interface
+
+```python
+# Example Python usage
+import os
+import subprocess
+
+# Setup parameters
+config_file = "config.txt"
+image_file = "laue_image.h5"
+n_cpus = 8
+compute_type = "GPU"  # or "CPU"
+
+# Run the analysis
+subprocess.call(f"python RunImage.py -configFile {config_file} -imageFile {image_file} -nCPUs {n_cpus} -computeType {compute_type}", shell=True)
+```
+
+### Library Usage
+
+If you've built the library component, you can link against it in your own C applications:
+
+```c
+#include <laue_matching/laue_matching.h>
+
+// Initialize the library
+laue_init();
+
+// Use library functions
+laue_process_image(...);
+
+// Cleanup
+laue_cleanup();
+```
+
+Compile and link with:
+```bash
+gcc -o myapp myapp.c -I/path/to/laue_matching/include -L/path/to/laue_matching/lib -llaue_matching
+```
+
+## Examples
+
+Example configurations and test data can be found in the `simulation` directory.
+
+```bash
+cd simulation
+python RunExample.py
+```
+
+## Best Practices
+
+- LaueMatching runs only on Linux computers. Windows support is not planned.
+- The CPU code can be compiled to run on macOS, but requires `brew install gcc` to get OpenMP support.
+- If you want to reduce initialization times, your `OrientationFile` and `ForwardFile` should be in `/dev/shm`. This allows for memory mapping and is millions of times faster.
+
+## Troubleshooting
+
+Common issues:
+
+- **Memory errors**: Make sure you have enough RAM to handle the orientation matrices (≥8GB recommended).
+- **CUDA errors**: Verify your CUDA toolkit is compatible with your GPU.
+- **Missing Dependencies**: Check that all required libraries are installed.
+- **Library Loading Issues**: Ensure the library path is correctly set (e.g., `export LD_LIBRARY_PATH=/path/to/build/lib:$LD_LIBRARY_PATH`).
+
+For more help, contact the developer: hsharma@anl.gov
+
+## Citation
+
+If you use LaueMatching in your work, please cite:
+
+```
+Citation coming soon. For now, please cite as:
+    LaueMatching, 2024. https://github.com/AdvancedPhotonSource/LaueMatching
+```
+
+## License
+
+See the LICENSE file for details.
+
+## Contact
+
+Hemant Sharma (hsharma@anl.gov)

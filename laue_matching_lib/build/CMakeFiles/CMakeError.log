@@ -1,0 +1,326 @@
+Determining if the include file stdio.h exists failed with the following output:
+Change Dir: /Users/hsharma/opt/LaueMatching/laue_matching_lib/build/CMakeFiles/CMakeScratch/TryCompile-ImdaV2
+
+Run Build Command(s):/Users/hsharma/opt/homebrew/bin/gmake -f Makefile cmTC_b0e33/fast && /Users/hsharma/opt/homebrew/bin/gmake  -f CMakeFiles/cmTC_b0e33.dir/build.make CMakeFiles/cmTC_b0e33.dir/build
+gmake[1]: Entering directory '/Users/hsharma/opt/LaueMatching/laue_matching_lib/build/CMakeFiles/CMakeScratch/TryCompile-ImdaV2'
+Building C object CMakeFiles/cmTC_b0e33.dir/CheckIncludeFile.c.o
+/Users/hsharma/opt/homebrew/bin/gcc-14   -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk -I/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include -I/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include  -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk -mmacosx-version-min=14.7 -std=gnu99 -o CMakeFiles/cmTC_b0e33.dir/CheckIncludeFile.c.o -c /Users/hsharma/opt/LaueMatching/laue_matching_lib/build/CMakeFiles/CMakeScratch/TryCompile-ImdaV2/CheckIncludeFile.c
+In file included from /Users/hsharma/opt/LaueMatching/laue_matching_lib/build/CMakeFiles/CMakeScratch/TryCompile-ImdaV2/CheckIncludeFile.c:1:
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:83:8: error: unknown type name 'FILE'
+   83 | extern FILE *__stdinp;
+      |        ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:81:1: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+   80 | #include <sys/_types/_seek_set.h>
+  +++ |+#include <stdio.h>
+   81 | 
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:84:8: error: unknown type name 'FILE'
+   84 | extern FILE *__stdoutp;
+      |        ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:84:8: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:85:8: error: unknown type name 'FILE'
+   85 | extern FILE *__stderrp;
+      |        ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:85:8: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:148:19: error: unknown type name 'FILE'
+  148 | void     clearerr(FILE *);
+      |                   ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:148:19: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:149:17: error: unknown type name 'FILE'
+  149 | int      fclose(FILE *);
+      |                 ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:149:17: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:150:15: error: unknown type name 'FILE'
+  150 | int      feof(FILE *);
+      |               ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:150:15: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:151:17: error: unknown type name 'FILE'
+  151 | int      ferror(FILE *);
+      |                 ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:151:17: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:152:17: error: unknown type name 'FILE'
+  152 | int      fflush(FILE *);
+      |                 ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:152:17: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:153:16: error: unknown type name 'FILE'
+  153 | int      fgetc(FILE *);
+      |                ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:153:16: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:154:18: error: unknown type name 'FILE'
+  154 | int      fgetpos(FILE * __restrict, fpos_t *);
+      |                  ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:154:18: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:154:37: error: unknown type name 'fpos_t'
+  154 | int      fgetpos(FILE * __restrict, fpos_t *);
+      |                                     ^~~~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:154:37: note: 'fpos_t' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:155:40: error: unknown type name 'FILE'
+  155 | char    *fgets(char * __restrict, int, FILE *);
+      |                                        ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:155:40: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:159:1: error: unknown type name 'FILE'
+  159 | FILE    *fopen(const char * __restrict __filename, const char * __restrict __mode) __DARWIN_ALIAS_STARTING(__MAC_10_6, __IPHONE_2_0, __DARWIN_ALIAS(fopen));
+      | ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:159:1: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:161:18: error: unknown type name 'FILE'
+  161 | int      fprintf(FILE * __restrict, const char * __restrict, ...) __printflike(2, 3);
+      |                  ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:161:18: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:162:21: error: unknown type name 'FILE'
+  162 | int      fputc(int, FILE *);
+      |                     ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:162:21: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:163:41: error: unknown type name 'FILE'
+  163 | int      fputs(const char * __restrict, FILE * __restrict) __DARWIN_ALIAS(fputs);
+      |                                         ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:163:41: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:164:1: error: unknown type name 'size_t'
+  164 | size_t   fread(void * __restrict __ptr, size_t __size, size_t __nitems, FILE * __restrict __stream);
+      | ^~~~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:81:1: note: 'size_t' is defined in header '<stddef.h>'; this is probably fixable by adding '#include <stddef.h>'
+   80 | #include <sys/_types/_seek_set.h>
+  +++ |+#include <stddef.h>
+   81 | 
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:164:41: error: unknown type name 'size_t'
+  164 | size_t   fread(void * __restrict __ptr, size_t __size, size_t __nitems, FILE * __restrict __stream);
+      |                                         ^~~~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:164:41: note: 'size_t' is defined in header '<stddef.h>'; this is probably fixable by adding '#include <stddef.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:164:56: error: unknown type name 'size_t'
+  164 | size_t   fread(void * __restrict __ptr, size_t __size, size_t __nitems, FILE * __restrict __stream);
+      |                                                        ^~~~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:164:56: note: 'size_t' is defined in header '<stddef.h>'; this is probably fixable by adding '#include <stddef.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:164:73: error: unknown type name 'FILE'
+  164 | size_t   fread(void * __restrict __ptr, size_t __size, size_t __nitems, FILE * __restrict __stream);
+      |                                                                         ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:164:73: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:165:1: error: unknown type name 'FILE'
+  165 | FILE    *freopen(const char * __restrict, const char * __restrict,
+      | ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:165:1: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:166:18: error: unknown type name 'FILE'
+  166 |                  FILE * __restrict) __DARWIN_ALIAS(freopen);
+      |                  ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:166:18: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:167:17: error: unknown type name 'FILE'
+  167 | int      fscanf(FILE * __restrict, const char * __restrict, ...) __scanflike(2, 3);
+      |                 ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:167:17: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:168:16: error: unknown type name 'FILE'
+  168 | int      fseek(FILE *, long, int);
+      |                ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:168:16: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:169:18: error: unknown type name 'FILE'
+  169 | int      fsetpos(FILE *, const fpos_t *);
+      |                  ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:169:18: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:169:32: error: unknown type name 'fpos_t'
+  169 | int      fsetpos(FILE *, const fpos_t *);
+      |                                ^~~~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:169:32: note: 'fpos_t' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:170:16: error: unknown type name 'FILE'
+  170 | long     ftell(FILE *);
+      |                ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:170:16: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:171:1: error: unknown type name 'size_t'
+  171 | size_t   fwrite(const void * __restrict __ptr, size_t __size, size_t __nitems, FILE * __restrict __stream) __DARWIN_ALIAS(fwrite);
+      | ^~~~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:171:1: note: 'size_t' is defined in header '<stddef.h>'; this is probably fixable by adding '#include <stddef.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:171:48: error: unknown type name 'size_t'
+  171 | size_t   fwrite(const void * __restrict __ptr, size_t __size, size_t __nitems, FILE * __restrict __stream) __DARWIN_ALIAS(fwrite);
+      |                                                ^~~~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:171:48: note: 'size_t' is defined in header '<stddef.h>'; this is probably fixable by adding '#include <stddef.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:171:63: error: unknown type name 'size_t'
+  171 | size_t   fwrite(const void * __restrict __ptr, size_t __size, size_t __nitems, FILE * __restrict __stream) __DARWIN_ALIAS(fwrite);
+      |                                                               ^~~~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:171:63: note: 'size_t' is defined in header '<stddef.h>'; this is probably fixable by adding '#include <stddef.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:171:80: error: unknown type name 'FILE'
+  171 | size_t   fwrite(const void * __restrict __ptr, size_t __size, size_t __nitems, FILE * __restrict __stream) __DARWIN_ALIAS(fwrite);
+      |                                                                                ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:171:80: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:172:15: error: unknown type name 'FILE'
+  172 | int      getc(FILE *);
+      |               ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:172:15: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:184:20: error: unknown type name 'FILE'
+  184 | int      putc(int, FILE *);
+      |                    ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:184:20: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:189:17: error: unknown type name 'FILE'
+  189 | void     rewind(FILE *);
+      |                 ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:189:17: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:191:17: error: unknown type name 'FILE'
+  191 | void     setbuf(FILE * __restrict, char * __restrict);
+      |                 ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:191:17: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:192:18: error: unknown type name 'FILE'
+  192 | int      setvbuf(FILE * __restrict, char * __restrict, int, size_t);
+      |                  ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:192:18: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:192:61: error: unknown type name 'size_t'
+  192 | int      setvbuf(FILE * __restrict, char * __restrict, int, size_t);
+      |                                                             ^~~~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:192:61: note: 'size_t' is defined in header '<stddef.h>'; this is probably fixable by adding '#include <stddef.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:203:1: error: unknown type name 'FILE'
+  203 | FILE    *tmpfile(void);
+      | ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:203:1: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:213:22: error: unknown type name 'FILE'
+  213 | int      ungetc(int, FILE *);
+      |                      ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:213:22: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:214:19: error: unknown type name 'FILE'
+  214 | int      vfprintf(FILE * __restrict, const char * __restrict, __gnuc_va_list) __printflike(2, 0);
+      |                   ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:214:19: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:242:1: error: unknown type name 'FILE'
+  242 | FILE    *fdopen(int, const char *) __DARWIN_ALIAS_STARTING(__MAC_10_6, __IPHONE_2_0, __DARWIN_ALIAS(fdopen));
+      | ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:242:1: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:244:17: error: unknown type name 'FILE'
+  244 | int      fileno(FILE *);
+      |                 ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:244:17: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:255:17: error: unknown type name 'FILE'
+  255 | int      pclose(FILE *) __swift_unavailable("Use posix_spawn APIs or NSTask instead. (On iOS, process spawning is unavailable.)");
+      |                 ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:255:17: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:259:1: error: unknown type name 'FILE'
+  259 | FILE    *popen(const char *, const char *) __DARWIN_ALIAS_STARTING(__MAC_10_6, __IPHONE_2_0, __DARWIN_ALIAS(popen)) __swift_unavailable("Use posix_spawn APIs or NSTask instead. (On iOS, process spawning is unavailable.)");
+      | ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:259:1: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:274:17: error: unknown type name 'FILE'
+  274 | int     __srget(FILE *);
+      |                 ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:274:17: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:275:20: error: unknown type name 'FILE'
+  275 | int     __svfscanf(FILE *, const char *, __gnuc_va_list) __scanflike(2, 0);
+      |                    ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:275:20: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:276:22: error: unknown type name 'FILE'
+  276 | int     __swbuf(int, FILE *);
+      |                      ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:276:22: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:285:44: error: unknown type name 'FILE'
+  285 | __header_always_inline int __sputc(int _c, FILE *_p) {
+      |                                            ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:285:44: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:311:20: error: unknown type name 'FILE'
+  311 | void     flockfile(FILE *);
+      |                    ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:311:20: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:312:23: error: unknown type name 'FILE'
+  312 | int      ftrylockfile(FILE *);
+      |                       ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:312:23: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:313:22: error: unknown type name 'FILE'
+  313 | void     funlockfile(FILE *);
+      |                      ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:313:22: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:314:24: error: unknown type name 'FILE'
+  314 | int      getc_unlocked(FILE *);
+      |                        ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:314:24: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:316:29: error: unknown type name 'FILE'
+  316 | int      putc_unlocked(int, FILE *);
+      |                             ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:316:29: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:321:15: error: unknown type name 'FILE'
+  321 | int      getw(FILE *);
+      |               ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:321:15: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:322:20: error: unknown type name 'FILE'
+  322 | int      putw(int, FILE *);
+      |                    ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:322:20: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:354:17: error: unknown type name 'FILE'
+  354 | int      fseeko(FILE * __stream, off_t __offset, int __whence);
+      |                 ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:354:17: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:355:17: error: unknown type name 'FILE'
+  355 | off_t    ftello(FILE * __stream);
+      |                 ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:355:17: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:361:44: error: unknown type name 'size_t'
+  361 | int      snprintf(char * __restrict __str, size_t __size, const char * __restrict __format, ...) __printflike(3, 4);
+      |                                            ^~~~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:361:44: note: 'size_t' is defined in header '<stddef.h>'; this is probably fixable by adding '#include <stddef.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:362:18: error: unknown type name 'FILE'
+  362 | int      vfscanf(FILE * __restrict __stream, const char * __restrict __format, __gnuc_va_list) __scanflike(2, 0);
+      |                  ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:362:18: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:364:45: error: unknown type name 'size_t'
+  364 | int      vsnprintf(char * __restrict __str, size_t __size, const char * __restrict __format, __gnuc_va_list) __printflike(3, 0);
+      |                                             ^~~~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:364:45: note: 'size_t' is defined in header '<stddef.h>'; this is probably fixable by adding '#include <stddef.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:379:71: error: expected ',' or ';' before '__OSX_AVAILABLE_STARTING'
+  379 | int     dprintf(int, const char * __restrict, ...) __printflike(2, 3) __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_4_3);
+      |                                                                       ^~~~~~~~~~~~~~~~~~~~~~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:380:83: error: expected ',' or ';' before '__OSX_AVAILABLE_STARTING'
+  380 | int     vdprintf(int, const char * __restrict, __gnuc_va_list) __printflike(2, 0) __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_4_3);
+      |                                                                                   ^~~~~~~~~~~~~~~~~~~~~~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:381:46: error: unknown type name 'size_t'
+  381 | ssize_t getdelim(char ** __restrict __linep, size_t * __restrict __linecapp, int __delimiter, FILE * __restrict __stream) __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_4_3);
+      |                                              ^~~~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:381:46: note: 'size_t' is defined in header '<stddef.h>'; this is probably fixable by adding '#include <stddef.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:381:95: error: unknown type name 'FILE'
+  381 | ssize_t getdelim(char ** __restrict __linep, size_t * __restrict __linecapp, int __delimiter, FILE * __restrict __stream) __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_4_3);
+      |                                                                                               ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:381:95: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:382:45: error: unknown type name 'size_t'
+  382 | ssize_t getline(char ** __restrict __linep, size_t * __restrict __linecapp, FILE * __restrict __stream) __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_4_3);
+      |                                             ^~~~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:382:45: note: 'size_t' is defined in header '<stddef.h>'; this is probably fixable by adding '#include <stddef.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:382:77: error: unknown type name 'FILE'
+  382 | ssize_t getline(char ** __restrict __linep, size_t * __restrict __linecapp, FILE * __restrict __stream) __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_4_3);
+      |                                                                             ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:382:77: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:383:1: error: unknown type name 'FILE'
+  383 | FILE *fmemopen(void * __restrict __buf, size_t __size, const char * __restrict __mode) __API_AVAILABLE(macos(10.13), ios(11.0), tvos(11.0), watchos(4.0));
+      | ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:383:1: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:383:41: error: unknown type name 'size_t'
+  383 | FILE *fmemopen(void * __restrict __buf, size_t __size, const char * __restrict __mode) __API_AVAILABLE(macos(10.13), ios(11.0), tvos(11.0), watchos(4.0));
+      |                                         ^~~~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:383:41: note: 'size_t' is defined in header '<stddef.h>'; this is probably fixable by adding '#include <stddef.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:384:1: error: unknown type name 'FILE'
+  384 | FILE *open_memstream(char **__bufp, size_t *__sizep) __API_AVAILABLE(macos(10.13), ios(11.0), tvos(11.0), watchos(4.0));
+      | ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:384:1: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:384:37: error: unknown type name 'size_t'
+  384 | FILE *open_memstream(char **__bufp, size_t *__sizep) __API_AVAILABLE(macos(10.13), ios(11.0), tvos(11.0), watchos(4.0));
+      |                                     ^~~~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:384:37: note: 'size_t' is defined in header '<stddef.h>'; this is probably fixable by adding '#include <stddef.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:399:17: error: unknown type name 'FILE'
+  399 | char    *fgetln(FILE *, size_t *);
+      |                 ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:399:17: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:399:25: error: unknown type name 'size_t'
+  399 | char    *fgetln(FILE *, size_t *);
+      |                         ^~~~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:399:25: note: 'size_t' is defined in header '<stddef.h>'; this is probably fixable by adding '#include <stddef.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:401:17: error: unknown type name 'FILE'
+  401 | int      fpurge(FILE *);
+      |                 ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:401:17: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:402:20: error: unknown type name 'FILE'
+  402 | void     setbuffer(FILE *, char *, int);
+      |                    ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:402:20: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:403:21: error: unknown type name 'FILE'
+  403 | int      setlinebuf(FILE *);
+      |                     ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:403:21: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:410:1: error: unknown type name 'FILE'
+  410 | FILE    *funopen(const void *,
+      | ^~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:410:1: note: 'FILE' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:413:18: error: unknown type name 'fpos_t'
+  413 |                  fpos_t (* _Nullable)(void *, fpos_t, int),
+      |                  ^~~~~~
+/Users/hsharma/opt/homebrew/Cellar/gcc/14.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin23/14/include-fixed/stdio.h:413:18: note: 'fpos_t' is defined in header '<stdio.h>'; this is probably fixable by adding '#include <stdio.h>'
+gmake[1]: *** [CMakeFiles/cmTC_b0e33.dir/build.make:78: CMakeFiles/cmTC_b0e33.dir/CheckIncludeFile.c.o] Error 1
+gmake[1]: Leaving directory '/Users/hsharma/opt/LaueMatching/laue_matching_lib/build/CMakeFiles/CMakeScratch/TryCompile-ImdaV2'
+gmake: *** [Makefile:127: cmTC_b0e33/fast] Error 2
+
+
+
