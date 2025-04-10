@@ -69,21 +69,48 @@ if(USE_SYSTEM_NLOPT)
   set(NLOPT_INCLUDE_DIRS ${NLOPT_INCLUDE_DIRS})
   set(NLOPT_LIBRARIES ${NLOPT_LIBRARIES})
 else()
-  # Build NLopt from source with C++ interfaces disabled
-  include(ExternalProject)
-  ExternalProject_Add(
-    nlopt_external
-    GIT_REPOSITORY https://github.com/stevengj/nlopt.git
-    CMAKE_ARGS -DCMAKE_INSTALL_PREFIX=${CMAKE_BINARY_DIR}/nlopt_install
-              -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
-              -DBUILD_SHARED_LIBS=OFF
-              -DNLOPT_PYTHON=OFF
-              -DNLOPT_OCTAVE=OFF
-              -DNLOPT_MATLAB=OFF
-              -DNLOPT_GUILE=OFF
-              -DNLOPT_SWIG=OFF
-              -DNLOPT_CXX=OFF
-  )
+  # Define the expected location for the NLopt source
+  set(NLOPT_SOURCE_DIR "${CMAKE_BINARY_DIR}/nlopt_external-src")
+  
+  # Check if NLopt source already exists
+  if(EXISTS "${NLOPT_SOURCE_DIR}" AND IS_DIRECTORY "${NLOPT_SOURCE_DIR}")
+    message(STATUS "NLopt source directory already exists at ${NLOPT_SOURCE_DIR}. Skipping download.")
+    
+    # Configure NLopt without downloading it again
+    include(ExternalProject)
+    ExternalProject_Add(
+      nlopt_external
+      SOURCE_DIR ${NLOPT_SOURCE_DIR}
+      DOWNLOAD_COMMAND ""
+      UPDATE_COMMAND ""
+      CMAKE_ARGS -DCMAKE_INSTALL_PREFIX=${CMAKE_BINARY_DIR}/nlopt_install
+                -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
+                -DBUILD_SHARED_LIBS=OFF
+                -DNLOPT_PYTHON=OFF
+                -DNLOPT_OCTAVE=OFF
+                -DNLOPT_MATLAB=OFF
+                -DNLOPT_GUILE=OFF
+                -DNLOPT_SWIG=OFF
+                -DNLOPT_CXX=OFF
+    )
+  else()
+    # Build NLopt from source with C++ interfaces disabled
+    include(ExternalProject)
+    ExternalProject_Add(
+      nlopt_external
+      GIT_REPOSITORY https://github.com/stevengj/nlopt.git
+      SOURCE_DIR ${NLOPT_SOURCE_DIR}
+      CMAKE_ARGS -DCMAKE_INSTALL_PREFIX=${CMAKE_BINARY_DIR}/nlopt_install
+                -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
+                -DBUILD_SHARED_LIBS=OFF
+                -DNLOPT_PYTHON=OFF
+                -DNLOPT_OCTAVE=OFF
+                -DNLOPT_MATLAB=OFF
+                -DNLOPT_GUILE=OFF
+                -DNLOPT_SWIG=OFF
+                -DNLOPT_CXX=OFF
+    )
+  endif()
   
   # Set include and library paths for built NLopt
   set(NLOPT_INCLUDE_DIRS ${CMAKE_BINARY_DIR}/nlopt_install/include)
