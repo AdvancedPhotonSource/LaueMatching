@@ -1,4 +1,8 @@
 cmake_minimum_required(VERSION 3.15)
+
+# Set CUDA architecture before project declaration
+set(CMAKE_CUDA_ARCHITECTURES 90)
+
 project(LaueMatching LANGUAGES C CUDA)
 
 # Set C standard
@@ -29,10 +33,7 @@ find_package(OpenMP REQUIRED)
 if(USE_CUDA)
   find_package(CUDA REQUIRED)
   set(CUDA_NVCC_FLAGS "${CUDA_NVCC_FLAGS} -lgomp -O3 -G -g -w \
-     -gencode=arch=compute_70,code=sm_70 \
-     -gencode=arch=compute_86,code=sm_86 \
      -gencode=arch=compute_90,code=sm_90 \
-     -gencode=arch=compute_80,code=sm_80 \
      -lm -rdc=true")
 endif()
 
