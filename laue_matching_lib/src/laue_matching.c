@@ -148,7 +148,8 @@
      const char *imageFile,
      MatchingResults *results
  ) {
-     int ret;
+    printf("%s\n",config->forwardSimulationFile);
+    int ret;
      double start_time, time_checkpoint;
      double *image = NULL;
      double *orientations = NULL;
