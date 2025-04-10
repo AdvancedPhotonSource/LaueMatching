@@ -18,27 +18,6 @@ static int laue_gpu_initialized = 0;
 extern int laue_initialized;
 extern int laue_verbose_level;
 
-int laue_init(void) {
-    if (laue_initialized) {
-        return LAUE_SUCCESS;
-    }
-    
-    // Nothing specific to initialize yet, but this function
-    // can be expanded in the future
-    
-    laue_initialized = 1;
-    return LAUE_SUCCESS;
-}
-void laue_cleanup(void) {
-    if (!laue_initialized) {
-        return;
-    }
-    
-    // Nothing specific to clean up yet, but this function
-    // can be expanded in the future
-    
-    laue_initialized = 0;
-}
 /**
  * CUDA kernel to compare simulated patterns with image data
  */
@@ -200,7 +179,7 @@ int laue_gpu_perform_matching(
     laue_log(1, "Reading orientations from %s", orientationFile);
     ret = file_read_orientations(orientationFile, &orientations, &numOrientations, config->numThreads);
     if (ret != LAUE_SUCCESS) {
-        laue_cleanup();
+        laue_gpu_cleanup();
         return ret;
     }
     
@@ -214,7 +193,7 @@ int laue_gpu_perform_matching(
         if (orientations != NULL) {
             free(orientations);
         }
-        laue_cleanup();
+        laue_gpu_cleanup();
         return ret;
     }
     
@@ -230,7 +209,7 @@ int laue_gpu_perform_matching(
         if (hkls != NULL) {
             free(hkls);
         }
-        laue_cleanup();
+        laue_gpu_cleanup();
         return ret;
     }
     
@@ -287,7 +266,7 @@ int laue_gpu_perform_matching(
         if (image != NULL) {
             free(image);
         }
-        laue_cleanup();
+        laue_gpu_cleanup();
         return LAUE_ERROR_MEMORY_ALLOCATION;
     }
     
@@ -325,7 +304,7 @@ int laue_gpu_perform_matching(
             free(orientations);
             free(hkls);
             free(image);
-            laue_cleanup();
+            laue_gpu_cleanup();
             return LAUE_ERROR_MEMORY_ALLOCATION;
         }
         
@@ -339,7 +318,7 @@ int laue_gpu_perform_matching(
             free(orientations);
             free(hkls);
             free(image);
-            laue_cleanup();
+            laue_gpu_cleanup();
             return LAUE_ERROR_MEMORY_ALLOCATION;
         }
         
@@ -540,7 +519,7 @@ int laue_gpu_perform_matching(
             free(orientations);
             free(hkls);
             free(image);
-            laue_cleanup();
+            laue_gpu_cleanup();
             return LAUE_ERROR_FORWARD_SIMULATION;
         }
         
@@ -570,7 +549,7 @@ int laue_gpu_perform_matching(
             free(orientations);
             free(hkls);
             free(image);
-            laue_cleanup();
+            laue_gpu_cleanup();
             return LAUE_ERROR_MEMORY_ALLOCATION;
         }
         
@@ -587,7 +566,7 @@ int laue_gpu_perform_matching(
             free(orientations);
             free(hkls);
             free(image);
-            laue_cleanup();
+            laue_gpu_cleanup();
             return ret;
         }
         
@@ -757,7 +736,7 @@ int laue_gpu_perform_matching(
             free(image);
         }
         
-        laue_cleanup();
+        laue_gpu_cleanup();
         return ret;
     }
     
@@ -805,7 +784,7 @@ int laue_gpu_perform_matching(
             fclose(solutionFile);
         }
         
-        laue_cleanup();
+        laue_gpu_cleanup();
         return LAUE_ERROR_MEMORY_ALLOCATION;
     }
     

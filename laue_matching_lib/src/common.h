@@ -138,6 +138,7 @@
  
  /* Function prototypes for main API */
  int laue_init(void);
+ int laue_gpu_init(void);
 //  MatchingConfig laue_create_default_config(void);
 //  int laue_perform_matching(
 //      const MatchingConfig *config,

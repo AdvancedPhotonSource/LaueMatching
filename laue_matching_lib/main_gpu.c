@@ -132,7 +132,7 @@ int main(int argc, char *argv[]) {
     config.numThreads = numThreads;
     
     // Initialize the library
-    ret = laue_init();
+    ret = laue_gpu_init();
     if (ret != LAUE_SUCCESS) {
         fprintf(stderr, "ERROR: Failed to initialize library\n");
         laue_gpu_cleanup();
@@ -147,7 +147,6 @@ int main(int argc, char *argv[]) {
     ret = laue_gpu_perform_matching(&config, orientFile, hklFile, imageFile, &results);
     if (ret != LAUE_SUCCESS) {
         fprintf(stderr, "ERROR: Failed to perform GPU matching (error code: %d)\n", ret);
-        laue_cleanup();
         laue_gpu_cleanup();
         return 1;
     }
@@ -175,7 +174,6 @@ int main(int argc, char *argv[]) {
     
     // Clean up
     laue_free_results(&results);
-    laue_cleanup();
     laue_gpu_cleanup();
     
     return 0;
