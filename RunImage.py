@@ -2035,7 +2035,6 @@ class EnhancedImageProcessor:
                 orientations = np.expand_dims(orientations, axis=0)
                 
             # Create colormap
-            min_good_spots = self.config.get("min_good_spots")
             orientation_colors = px.colors.qualitative.Dark24
             
             # Dictionary to store traces by orientation
@@ -2043,30 +2042,30 @@ class EnhancedImageProcessor:
             
             # Plot spots for each orientation
             for i, orientation in enumerate(orientations):
-                orientation_id = int(orientation[0])
-                color = orientation_colors[i % len(orientation_colors)]
+                grain_nr = int(orientation[0])  # Use actual grain number
+                color = orientation_colors[i % len(orientation_colors)]  # Color still based on position
                 
                 # Get orientation quality score
                 quality_score = orientation[4]
                 
                 # Get unique spot count if available
                 unique_count = 0
-                if orientation_unique_spots and orientation_id in orientation_unique_spots:
-                    unique_count = orientation_unique_spots[orientation_id]["unique_label_count"]
+                if orientation_unique_spots and grain_nr in orientation_unique_spots:
+                    unique_count = orientation_unique_spots[grain_nr]["unique_label_count"]
                 
                 # Get spots for this orientation
-                orientation_spots = spots[spots[:, 0] == orientation_id]
+                orientation_spots = spots[spots[:, 0] == grain_nr]  # Use grain_nr to filter spots
                 
                 # Skip if no spots
                 if len(orientation_spots) == 0:
                     continue
                     
-                # Create scatter trace for spots
+                # Create scatter trace for spots - use grain_nr in name instead of i
                 x_coords = orientation_spots[:, 5]
                 y_coords = orientation_spots[:, 6]
                 
                 # Add trace for this orientation
-                name = f"ID {i} ({unique_count} unique)"
+                name = f"Grain {grain_nr} ({unique_count} unique)"  # Changed "ID" to "Grain"
                 trace = go.Scatter(
                     x=x_coords,
                     y=y_coords,
@@ -2078,7 +2077,7 @@ class EnhancedImageProcessor:
                     ),
                     name=name,
                     hovertext=[
-                        f"Orientation: {i}<br>"
+                        f"Grain: {grain_nr}<br>"  # Changed "Orientation" to "Grain"
                         f"HKL: {int(spot[2])},{int(spot[3])},{int(spot[4])}<br>"
                         f"Position: ({spot[5]:.1f}, {spot[6]:.1f})<br>"
                         f"Unique Spots: {unique_count}"
@@ -2367,7 +2366,7 @@ class EnhancedImageProcessor:
                 <h2>Orientation Summary</h2>
                 <table>
                     <tr>
-                        <th>ID</th>
+                        <th>Grain Nr</th>
                         <th>Quality</th>
                         <th>Spots</th>
                         <th>Unique Spots</th>
@@ -2377,45 +2376,49 @@ class EnhancedImageProcessor:
         
         for i, orientation in enumerate(orientations):
             # Extract orientation parameters
-            orientation_id = int(orientation[0])
+            grain_nr = int(orientation[0])  # Use the actual grain number
             quality = orientation[4]
             num_spots = orientation[5]
             
             # Get unique spot count if available
             unique_spots = 0
-            if orientation_unique_spots and orientation_id in orientation_unique_spots:
-                unique_spots = orientation_unique_spots[orientation_id]["unique_label_count"]
+            if orientation_unique_spots and grain_nr in orientation_unique_spots:
+                unique_spots = orientation_unique_spots[grain_nr]["unique_label_count"]
             
             # Extract quaternion components
             qw, qx, qy, qz = orientation[7:11]
             
-            # Add table row with unique spots column
+            # Add table row with unique spots column - use grain_nr instead of i
             html_content.append(f"""
                     <tr>
-                        <td>{i}</td>
+                        <td>{grain_nr}</td>
                         <td>{quality:.4f}</td>
                         <td>{int(num_spots)}</td>
                         <td>{unique_spots}</td>
                         <td>{qw:.4f}, {qx:.4f}, {qy:.4f}, {qz:.4f}</td>
                     </tr>
             """)
-            
+        
         html_content.append("</table>")
         
-        # Add spot distribution visualization (simple histogram of spots per orientation)
+        # Add spot distribution visualization
         spots_per_orientation = {}
         unique_spots_per_orientation = {}
-        for orient_id in range(len(orientations)):
+        
+        # Get all grain numbers to ensure correct ordering
+        grain_numbers = [int(orient[0]) for orient in orientations]
+        
+        for grain_nr in grain_numbers:
             # Count spots
-            orientation_spots = spots[spots[:, 0] == orient_id]
-            spots_per_orientation[orient_id] = len(orientation_spots)
+            orientation_spots = spots[spots[:, 0] == grain_nr]
+            spots_per_orientation[grain_nr] = len(orientation_spots)
             
             # Get unique spots
-            if orientation_unique_spots and orient_id in orientation_unique_spots:
-                unique_spots_per_orientation[orient_id] = orientation_unique_spots[orient_id]["unique_label_count"]
+            if orientation_unique_spots and grain_nr in orientation_unique_spots:
+                unique_spots_per_orientation[grain_nr] = orientation_unique_spots[grain_nr]["unique_label_count"]
             else:
-                unique_spots_per_orientation[orient_id] = 0
-            
+                unique_spots_per_orientation[grain_nr] = 0
+        
         html_content.append("""
                 <h2>Spot Distribution</h2>
                 <div class="chart-container">
@@ -2427,17 +2430,17 @@ class EnhancedImageProcessor:
                     new Chart(ctx, {
                         type: 'bar',
                         data: {
-                            labels: [""" + ", ".join([f"'{i}'" for i in range(len(orientations))]) + """],
+                            labels: [""" + ", ".join([f"'{grain_nr}'" for grain_nr in grain_numbers]) + """],
                             datasets: [{
                                 label: 'Total Spots',
-                                data: [""" + ", ".join([str(spots_per_orientation.get(i, 0)) for i in range(len(orientations))]) + """],
+                                data: [""" + ", ".join([str(spots_per_orientation.get(grain_nr, 0)) for grain_nr in grain_numbers]) + """],
                                 backgroundColor: 'rgba(54, 162, 235, 0.5)',
                                 borderColor: 'rgba(54, 162, 235, 1)',
                                 borderWidth: 1
                             },
                             {
                                 label: 'Unique Spots',
-                                data: [""" + ", ".join([str(unique_spots_per_orientation.get(i, 0)) for i in range(len(orientations))]) + """],
+                                data: [""" + ", ".join([str(unique_spots_per_orientation.get(grain_nr, 0)) for grain_nr in grain_numbers]) + """],
                                 backgroundColor: 'rgba(255, 99, 132, 0.5)',
                                 borderColor: 'rgba(255, 99, 132, 1)',
                                 borderWidth: 1
@@ -2457,7 +2460,7 @@ class EnhancedImageProcessor:
                                 x: {
                                     title: {
                                         display: true,
-                                        text: 'Orientation ID'
+                                        text: 'Grain Number'
                                     }
                                 }
                             }
