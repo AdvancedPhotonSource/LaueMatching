@@ -1287,27 +1287,27 @@ class EnhancedImageProcessor:
             
         # Plot spots for each orientation
         for i, orientation in enumerate(indexed_orientations):
-            orientation_id = int(orientation[0])
+            grain_nr = int(orientation[0])  # Use actual grain number, not index
             color = orientation_colors[i % len(orientation_colors)]
             
             # Get spots for this orientation
-            orientation_spots = spots[spots[:, 0] == orientation_id]
+            orientation_spots = spots[spots[:, 0] == grain_nr]  # Use grain_nr to filter spots
             
             # Count unique spots for this orientation
-            if orientation_id not in orientation_unique_spots:
-                orientation_unique_spots[orientation_id] = set()
+            if grain_nr not in orientation_unique_spots:
+                orientation_unique_spots[grain_nr] = set()
                 
             for spot in orientation_spots:
                 # Use spot position as a unique identifier
                 spot_id = (int(spot[5]), int(spot[6]))
-                orientation_unique_spots[orientation_id].add(spot_id)
+                orientation_unique_spots[grain_nr].add(spot_id)
             
             # Skip if no spots
             if len(orientation_spots) == 0:
                 continue
                 
             # Create scatter trace for experimental spots
-            name = f"Exp ID {i}"
+            name = f"Exp Grain {grain_nr}"  # Changed from "ID" to "Grain"
             trace = go.Scatter(
                 x=orientation_spots[:, 5],
                 y=orientation_spots[:, 6],
@@ -1319,9 +1319,9 @@ class EnhancedImageProcessor:
                     symbol='circle',
                 ),
                 name=name,
-                legendgroup=f'orientation_{i}',
+                legendgroup=f'orientation_{grain_nr}',  # Use grain_nr for consistent grouping
                 hovertext=[
-                    f"Orientation: {i}<br>"
+                    f"Grain: {grain_nr}<br>"  # Changed from "Orientation" to "Grain"
                     f"HKL: {int(spot[2])},{int(spot[3])},{int(spot[4])}<br>"
                     f"Position: ({spot[5]:.1f}, {spot[6]:.1f})"
                     for spot in orientation_spots
@@ -1332,23 +1332,39 @@ class EnhancedImageProcessor:
             fig.add_trace(trace, row=1, col=1)
             
             # Add experimental spot positions to matched spots set
-            if i not in matched_spots:
-                matched_spots[i] = set()
+            if grain_nr not in matched_spots:
+                matched_spots[grain_nr] = set()
                 
             for spot in orientation_spots:
                 spot_pos = (round(float(spot[5])), round(float(spot[6])))
-                matched_spots[i].add(spot_pos)
+                matched_spots[grain_nr].add(spot_pos)
             
-            # Filter simulated spots for this orientation grain number
-            sim_orientation_spots = simulated_spots[simulated_spots[:, 2] == i]
+            # Determine if simulated spots use grain numbers or indices
+            use_grain_numbers = True
+            # Sample check to determine whether simulation uses grain numbers or indices
+            if len(simulated_spots) > 0:
+                # Check if max value in simulated_spots[:, 2] is less than number of orientations
+                if np.max(simulated_spots[:, 2]) < len(indexed_orientations):
+                    use_grain_numbers = False  # Likely using indices (0,1,2...) instead of grain numbers
+                    logger.info(f"Simulation appears to use indices rather than grain numbers")
+                else:
+                    logger.info(f"Simulation appears to use grain numbers")
+            
+            # Filter simulated spots for this orientation
+            if use_grain_numbers:
+                # If simulation uses grain numbers
+                sim_orientation_spots = simulated_spots[simulated_spots[:, 2] == grain_nr]
+            else:
+                # If simulation uses indices (0,1,2...)
+                sim_orientation_spots = simulated_spots[simulated_spots[:, 2] == i]
             
             # Initialize missing spots for this orientation
-            if i not in missing_spots:
-                missing_spots[i] = []
+            if grain_nr not in missing_spots:
+                missing_spots[grain_nr] = []
                 
             # Remove duplicate simulated spots (same position)
-            if i not in unique_sim_positions:
-                unique_sim_positions[i] = {}
+            if grain_nr not in unique_sim_positions:
+                unique_sim_positions[grain_nr] = {}
                 
             unique_spots = []
             
@@ -1357,8 +1373,8 @@ class EnhancedImageProcessor:
                 pos_key = (round(float(spot[1])), round(float(spot[0])))
                 
                 # Only keep the first spot at this position
-                if pos_key not in unique_sim_positions[i]:
-                    unique_sim_positions[i][pos_key] = spot
+                if pos_key not in unique_sim_positions[grain_nr]:
+                    unique_sim_positions[grain_nr][pos_key] = spot
                     unique_spots.append(spot)
                     
             if len(unique_spots) > 0:
@@ -1375,10 +1391,10 @@ class EnhancedImageProcessor:
                         line=dict(width=1, color='black'),
                         symbol='x',
                     ),
-                    name=f"Sim ID {i}",
-                    legendgroup=f'orientation_{i}',
+                    name=f"Sim Grain {grain_nr}",  # Changed from "ID" to "Grain"
+                    legendgroup=f'orientation_{grain_nr}',  # Use grain_nr for consistent grouping
                     hovertext=[
-                        f"Orientation: {i}<br>"
+                        f"Grain: {grain_nr}<br>"  # Changed from "Orientation" to "Grain"
                         f"Position: ({spot[1]:.1f}, {spot[0]:.1f})<br>"
                         f"Status: {'Matched' if spot[3] == 1 else 'Unmatched'}"
                         for spot in unique_spots_array
@@ -1397,10 +1413,10 @@ class EnhancedImageProcessor:
                     
                     # Check if this spot is close to any experimental spot
                     is_matched = False
-                    for exp_spot_pos in matched_spots.get(i, set()):
+                    for exp_spot_pos in matched_spots.get(grain_nr, set()):
                         # Calculate distance between simulated and experimental spot
                         dist = np.sqrt((spot_pos_sim[0] - exp_spot_pos[0])**2 + 
-                                      (spot_pos_sim[1] - exp_spot_pos[1])**2)
+                                    (spot_pos_sim[1] - exp_spot_pos[1])**2)
                         
                         if dist <= proximity_threshold:
                             is_matched = True
@@ -1408,15 +1424,22 @@ class EnhancedImageProcessor:
                             
                     # If not matched, add to missing spots
                     if not is_matched:
-                        missing_spots[i].append(spot)
+                        missing_spots[grain_nr].append(spot)
         
         # Add missing spots to third subplot
-        for i, spots_list in missing_spots.items():
+        for grain_nr, spots_list in missing_spots.items():
             if not spots_list:
                 continue
                 
             spots_array = np.array(spots_list)
-            color = orientation_colors[i % len(orientation_colors)]
+            # Find the index of this grain number in the indexed_orientations array
+            # to maintain consistent coloring
+            try:
+                grain_idx = [int(o[0]) for o in indexed_orientations].index(grain_nr)
+                color = orientation_colors[grain_idx % len(orientation_colors)]
+            except ValueError:
+                # Fallback if grain_nr not found
+                color = orientation_colors[hash(grain_nr) % len(orientation_colors)]
             
             # Create trace with flipped x and y coordinates
             missing_trace = go.Scatter(
@@ -1429,10 +1452,10 @@ class EnhancedImageProcessor:
                     line=dict(width=1, color='black'),
                     symbol='diamond',
                 ),
-                name=f"Missing ID {i}",
-                legendgroup=f'orientation_{i}',
+                name=f"Missing Grain {grain_nr}",  # Changed from "ID" to "Grain"
+                legendgroup=f'orientation_{grain_nr}',  # Use grain_nr for consistent grouping
                 hovertext=[
-                    f"Orientation: {i}<br>"
+                    f"Grain: {grain_nr}<br>"  # Changed from "Orientation" to "Grain"
                     f"Position: ({spot[1]:.1f}, {spot[0]:.1f})<br>"
                     f"Missing spot"
                     for spot in spots_array
@@ -1443,7 +1466,7 @@ class EnhancedImageProcessor:
             fig.add_trace(missing_trace, row=1, col=3)
             
             # Log number of missing spots for this orientation
-            logger.info(f"Orientation {i}: {len(spots_list)} missing spots")
+            logger.info(f"Grain {grain_nr}: {len(spots_list)} missing spots")
         
         # Update layout
         fig.update_layout(
@@ -1504,15 +1527,15 @@ class EnhancedImageProcessor:
             logger.warning(f"Could not save standalone visualization: {str(e)}")
         
         # Store orientation unique spot counts
-        unique_counts = {orient_id: len(spots) for orient_id, spots in orientation_unique_spots.items()}
+        unique_counts = {grain_nr: len(spots) for grain_nr, spots in orientation_unique_spots.items()}
         orientation_unique_counts_file = f"{output_path}.bin.unique_spot_counts.txt"
         with open(orientation_unique_counts_file, 'w') as f:
-            f.write("Orientation_ID\tUnique_Spots\n")
-            for orient_id, count in unique_counts.items():
-                f.write(f"{orient_id}\t{count}\n")
+            f.write("Grain_Nr\tUnique_Spots\n")
+            for grain_nr, count in unique_counts.items():
+                f.write(f"{grain_nr}\t{count}\n")
         
         logger.info(f"Orientation unique spot counts saved to {orientation_unique_counts_file}")
-            
+
     def _generate_hkl_file(self) -> Dict[str, Any]:
         """
         Generate HKL file using the GenerateHKLs.py script.
@@ -1756,10 +1779,10 @@ class EnhancedImageProcessor:
         """
         output_h5 = f"{output_path}.bin.output.h5"
         
-        # Create unique spot count array
+        # Create unique spot count array - store GRAIN NUMBER and count
         unique_counts = np.zeros((len(orientation_unique_spots), 2))
-        for i, (orient_id, data) in enumerate(orientation_unique_spots.items()):
-            unique_counts[i, 0] = orient_id
+        for i, (grain_nr, data) in enumerate(orientation_unique_spots.items()):
+            unique_counts[i, 0] = grain_nr  # Use the actual grain number
             unique_counts[i, 1] = data["unique_label_count"]
             
         try:
@@ -1778,11 +1801,11 @@ class EnhancedImageProcessor:
                 hf.create_dataset('/entry/results/spots', data=spots)
                 hf.create_dataset('/entry/results/filtered_spots', data=spots)
                 
-                # Store unique spot counts
+                # Store unique spot counts with grain numbers
                 hf.create_dataset('/entry/results/unique_spots_per_orientation', data=unique_counts)
                 
                 logger.info(f"Stored orientation and spot data in {output_h5}")
-                
+                    
         except Exception as e:
             logger.error(f"Error creating H5 output: {str(e)}")
 
@@ -2996,9 +3019,10 @@ def view_results(args):
                 unique_spots_array = np.array(h5_file['/entry/results/unique_spots_per_orientation'])
                 orientation_unique_spots = {}
                 for i in range(unique_spots_array.shape[0]):
-                    orient_id = int(unique_spots_array[i, 0])
+                    grain_nr = int(unique_spots_array[i, 0])  # This is the grain number, not an index
                     unique_count = int(unique_spots_array[i, 1])
-                    orientation_unique_spots[orient_id] = {
+                    # Create a complete structure compatible with the original calculation
+                    orientation_unique_spots[grain_nr] = {
                         "unique_label_count": unique_count,
                         "spots": set(),  # Empty placeholder
                         "unique_labels": set(),  # Empty placeholder
