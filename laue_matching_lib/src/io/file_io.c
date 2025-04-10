@@ -163,9 +163,17 @@ int file_read_parameters(const char *filename, MatchingConfig *config) {
         str = "ForwardFile";
         lowNr = strncmp(aline, str, strlen(str));
         if (lowNr == 0) {
-            sscanf(aline, "%s %s", dummy, config->forwardSimulationFile);
-            config->forwardSimulationFile[sizeof(config->forwardSimulationFile) - 1] = '\0';
-            printf("While reading %s\n",config->forwardSimulationFile);
+            char tempPath[1024] = {0}; // Temporary buffer
+            
+            // Use a safer method to extract the path
+            if (sscanf(aline, "%s %1023s", dummy, tempPath) == 2) {
+                // Safely copy to config structure with explicit length
+                memset(config->forwardSimulationFile, 0, sizeof(config->forwardSimulationFile));
+                strncpy(config->forwardSimulationFile, tempPath, sizeof(config->forwardSimulationFile) - 1);
+                printf("While reading parameter: ForwardFile = '%s'\n", config->forwardSimulationFile);
+            } else {
+                fprintf(stderr, "WARNING: Failed to parse ForwardFile parameter: %s\n", aline);
+            }
             continue;
         }
         
