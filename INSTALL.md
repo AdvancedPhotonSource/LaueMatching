@@ -35,7 +35,7 @@ For a standard build with CUDA support:
 
 ```bash
 cmake ..
-make -j8
+make
 ```
 
 #### Build options:
@@ -44,28 +44,35 @@ If you don't want CUDA support:
 
 ```bash
 cmake -DUSE_CUDA=OFF ..
-make -j8
+make
+```
+
+If you want a custom CUDA compiler:
+
+```bash
+cmake -DCMAKE_CUDA_COMPILER=path_to_nvcc -DCMAKE_CUDA_COMPILER_FORCED=ON -DCMAKE_CUDA_ARCHITECTURES=90   ..
+make
 ```
 
 If you don't want to download the 7GB orientation file (for example, if you already have it):
 
 ```bash
 cmake -DDOWNLOAD_ORIENTATION_FILE=OFF ..
-make -j8
+make
 ```
 
 If you want to use a system-installed NLopt library instead of building it:
 
 ```bash
 cmake -DUSE_SYSTEM_NLOPT=ON ..
-make -j8
+make
 ```
 
 If you want to build without the shared library:
 
 ```bash
 cmake -DBUILD_LIBRARY=OFF ..
-make -j8
+make
 ```
 
 You can also use the provided build script which offers a more user-friendly interface:
@@ -74,7 +81,6 @@ You can also use the provided build script which offers a more user-friendly int
 ./build.sh                     # Default build with all features
 ./build.sh --no-cuda           # Build without CUDA support
 ./build.sh --no-orientation-file  # Skip downloading orientation file
-./build.sh --cores 4           # Use 4 cores for building
 ./build.sh --help              # Show all options
 ```
 

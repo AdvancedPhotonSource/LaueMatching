@@ -38,10 +38,6 @@ while [[ $# -gt 0 ]]; do
             BUILD_TYPE="Debug"
             shift
             ;;
-        --cores)
-            CORES="$2"
-            shift 2
-            ;;
         --help)
             print_usage
             exit 0
@@ -58,7 +54,6 @@ echo "=== LaueMatching Build Script ==="
 echo "CUDA support: $USE_CUDA"
 echo "Download orientation file: $DOWNLOAD_ORIENTATION"
 echo "Build type: $BUILD_TYPE"
-echo "Using $CORES cores for build"
 echo "============================"
 
 # Create build directory
@@ -73,8 +68,7 @@ cmake -DUSE_CUDA=$USE_CUDA \
       ..
 
 # Build
-echo "Building using $CORES cores..."
-make -j$CORES
+make
 
 # Install Python requirements
 echo "Installing Python requirements..."
