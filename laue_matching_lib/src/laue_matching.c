@@ -290,6 +290,7 @@
      
      // Create forward simulation file if needed
      int doForwardSimulation = config->performForwardSimulation;
+     printf("%s\n",config->forwardSimulationFile);
      if (doForwardSimulation == 0) {
          // Check if forward simulation file exists
          int result = open(config->forwardSimulationFile, O_RDONLY, S_IRUSR | S_IWUSR);
