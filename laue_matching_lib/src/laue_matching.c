@@ -371,7 +371,7 @@
                  double totalIntensity = 0.0;
                  
                  if (doForwardSimulation) {
-                    printf("%s\n",config->forwardSimulationFile);
+                    // printf("%s\n",config->forwardSimulationFile);
                      // Generate forward simulation
                      // Extract orientation matrix
                      double orientMatrix[3][3];
@@ -549,7 +549,7 @@
              
              // Write forward simulation data if needed
              if (doForwardSimulation) {
-                printf("%s\n",config->forwardSimulationFile);
+                // printf("%s\n",config->forwardSimulationFile);
                  int ret = file_write_forward_simulation(
                      config->forwardSimulationFile,
                      outArray,
