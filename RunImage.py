@@ -1395,7 +1395,7 @@ class EnhancedImageProcessor:
             fig.update_layout(
                 title="Laue Diffraction Analysis",
                 height=1200,
-                width=1200,
+                width=2400,
                 showlegend=True,
                 legend=dict(
                     yanchor="top",
