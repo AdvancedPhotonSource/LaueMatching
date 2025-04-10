@@ -131,10 +131,8 @@ Citation coming soon. For now, please cite as:
 @misc{LaueMatching,
   author = {Sharma, Hemant, and, Sheyfer, Dina, and, Harder, Ross, and, Tischler, Jonathan Z.},
   title = {LaueMatching},
-  year = {2024},
-  publisher = {GitHub},
-    journal = {LaueMatching},
-    url = {https://github.com/AdvancedPhotonSource/LaueMatching}
+  year = {2025},
+  url = {https://github.com/AdvancedPhotonSource/LaueMatching}
 }
 ```
 
