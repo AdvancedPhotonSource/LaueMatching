@@ -988,7 +988,7 @@ class EnhancedImageProcessor:
                 if os.path.exists(txt_file['file']):
                     with open(txt_file['file'], 'r') as f:
                         content = f.read()
-                    h5_file.create_dataset(txt_file['dataset'], data=np.string_(content))
+                    h5_file.create_dataset(txt_file['dataset'], data=np.bytes_(content))
                     logger.debug(f"Stored {txt_file['file']} in H5 dataset {txt_file['dataset']}")
             except Exception as e:
                 logger.warning(f"Error storing {txt_file['file']} in H5: {str(e)}")
