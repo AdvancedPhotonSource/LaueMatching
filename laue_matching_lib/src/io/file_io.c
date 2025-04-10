@@ -107,7 +107,7 @@ int file_read_parameters(const char *filename, MatchingConfig *config) {
         str = "DoFwd";
         lowNr = strncmp(aline, str, strlen(str));
         if (lowNr == 0) {
-            sscanf(aline, "%s %d", dummy, &config->performForwardSimulation);
+            sscanf(aline, "%s %d", dummy, (int*) &config->performForwardSimulation);
             continue;
         }
         
@@ -197,6 +197,7 @@ int file_read_orientations(
     size_t *numOrientations,
     int numThreads
 ) {
+    (void)numThreads;  // Unused parameter
     FILE *orientFile;
     size_t fileSize;
     int useMemoryMapping = 0;
