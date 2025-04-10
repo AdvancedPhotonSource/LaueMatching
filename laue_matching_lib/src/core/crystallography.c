@@ -3,7 +3,7 @@
  * @brief Implementation of crystallography utilities
  */
 
-#include "../common.h"
+// #include "../common.h"
 #include "crystallography.h"
 #include "geometry.h"
 
