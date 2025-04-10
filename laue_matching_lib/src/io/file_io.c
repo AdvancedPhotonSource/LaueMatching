@@ -40,7 +40,6 @@ int file_read_parameters(const char *filename, MatchingConfig *config) {
     }
     
     while (fgets(aline, 1000, fileParam) != NULL) {
-        printf("%s",aline);
         str = "LatticeParameter";
         lowNr = strncmp(aline, str, strlen(str));
         if (lowNr == 0) {
