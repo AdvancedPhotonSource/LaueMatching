@@ -1394,8 +1394,8 @@ class EnhancedImageProcessor:
             # Update layout
             fig.update_layout(
                 title="Laue Diffraction Analysis",
-                height=1200,
-                width=2400,
+                height=800,
+                width=1600,
                 showlegend=True,
                 legend=dict(
                     yanchor="top",
@@ -1411,8 +1411,8 @@ class EnhancedImageProcessor:
             fig.update_xaxes(title_text="X Position (pixels)", row=1, col=2)
             fig.update_yaxes(title_text="Y Position (pixels)", row=1, col=2)
             # Preserve aspect ratio for both subplots
-            fig.update_xaxes(scaleanchor="y", scaleratio=1, row=1, col=1)
-            fig.update_xaxes(scaleanchor="y", scaleratio=1, row=1, col=2)
+            fig.update_xaxes(scaleanchor="x", scaleratio=1, row=1, col=1)
+            fig.update_xaxes(scaleanchor="x", scaleratio=1, row=1, col=2)
             # Save as HTML
             fig.write_html(f"{output_path}.bin.interactive.html")
             logger.info(f"Interactive visualization saved to {output_path}.bin.interactive.html")
@@ -1604,7 +1604,7 @@ class EnhancedImageProcessor:
                 </div>
         """)
         
-        # Add orientation summary table
+        # Add orientation summary table - MODIFIED: removed Euler angles column
         html_content.append("""
                 <h2>Orientation Summary</h2>
                 <table>
@@ -1613,7 +1613,6 @@ class EnhancedImageProcessor:
                         <th>Quality</th>
                         <th>Spots</th>
                         <th>Quaternion (w,x,y,z)</th>
-                        <th>Euler Angles (°)</th>
                     </tr>
         """)
         
@@ -1626,29 +1625,13 @@ class EnhancedImageProcessor:
             # Extract quaternion components (assuming w,x,y,z format)
             qw, qx, qy, qz = orientation[7:11]
             
-            # Convert quaternion to Euler angles (ZXZ convention)
-            # This is a simplified conversion - adjust as needed based on your convention
-            try:
-                # Clamp the arcsin input value to the valid range [-1, 1]
-                arcsin_input = 2*(qw*qy - qz*qx)
-                arcsin_input = max(-1.0, min(1.0, arcsin_input))
-
-                # Convert quaternion to Euler angles (in degrees)
-                euler_z1 = np.degrees(np.arctan2(2*(qw*qz + qx*qy), 1 - 2*(qy*qy + qz*qz)))
-                euler_x = np.degrees(np.arcsin(2*(qw*qy - qz*qx)))
-                euler_z2 = np.degrees(np.arctan2(2*(qw*qx + qy*qz), 1 - 2*(qx*qx + qy*qy)))
-                euler_angles = f"{euler_z1:.2f}, {euler_x:.2f}, {euler_z2:.2f}"
-            except:
-                euler_angles = "N/A"
-            
-            # Add table row
+            # Add table row - MODIFIED: removed Euler angles
             html_content.append(f"""
                     <tr>
                         <td>{i}</td>
                         <td>{quality:.4f}</td>
                         <td>{int(num_spots)}</td>
                         <td>{qw:.4f}, {qx:.4f}, {qy:.4f}, {qz:.4f}</td>
-                        <td>{euler_angles}</td>
                     </tr>
             """)
             
