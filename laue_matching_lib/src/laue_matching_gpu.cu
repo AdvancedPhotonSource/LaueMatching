@@ -19,137 +19,80 @@
 #include <cuda_runtime.h>
 #include <stdarg.h>
  
- /* Global variables */
- static int laue_initialized = 0;
- int laue_verbose_level = 1;  // Changed from static to match extern declaration
+ /* Error checking macro */
+ #define CUDA_CHECK(call) \
+ do { \
+     cudaError_t err = call; \
+     if (err != cudaSuccess) { \
+         fprintf(stderr, "CUDA error in %s:%d: %s\n", __FILE__, __LINE__, cudaGetErrorString(err)); \
+         return LAUE_ERROR_GPU; \
+     } \
+ } while(0)
  
- /* Verbose logging function */
- void laue_log(int level, const char *format, ...) {
-     if (level <= laue_verbose_level) {
-         va_list args;
-         va_start(args, format);
-         vprintf(format, args);
-         va_end(args);
-         printf("\n");
-     }
+ /* External function declarations */
+ extern "C" {
+     int laue_perform_matching_gpu(
+         const MatchingConfig *config,
+         const char *orientationFile,
+         const char *hklFile,
+         const char *imageFile,
+         MatchingResults *results
+     );
+     
+     void laue_log(int level, const char *format, ...);
  }
  
- void laue_set_verbose(int level) {
-     laue_verbose_level = level;
- }
- 
- int laue_init(void) {
-     if (laue_initialized) {
-         return LAUE_SUCCESS;
-     }
+ /* Kernel to compute matching scores */
+ __global__ void matchSpots_kernel(
+     const uint16_t *outArray,
+     const double *image,
+     double *matchedScores,
+     int numOrientations,
+     int maxNumSpots,
+     int nrPxY,
+     int nrPxTotal,
+     int minNumSpots,
+     double minIntensity
+ ) {
+     int orientNr = blockIdx.x * blockDim.x + threadIdx.x;
      
-     // Nothing specific to initialize yet, but this function
-     // can be expanded in the future
-     
-     laue_initialized = 1;
-     return LAUE_SUCCESS;
- }
- 
- MatchingConfig laue_create_default_config(void) {
-     MatchingConfig config;
-     
-     // Lattice parameters
-     config.lattice.a = 0.4;
-     config.lattice.b = 0.4;
-     config.lattice.c = 0.4;
-     config.lattice.alpha = 90.0;
-     config.lattice.beta = 90.0;
-     config.lattice.gamma = 90.0;
-     
-     // Tolerances
-     for (int i = 0; i < 6; i++) {
-         config.latticeParamTol[i] = 0.0;
-     }
-     config.cOverATol = 0.0;
-     
-     // Crystallography
-     config.spaceGroup = 225;  // Default to cubic
-     
-     // Detector parameters
-     config.detectorParams.position[0] = 0.0;
-     config.detectorParams.position[1] = 0.0;
-     config.detectorParams.position[2] = 0.0;
-     config.detectorParams.rotation[0] = 0.0;
-     config.detectorParams.rotation[1] = 0.0;
-     config.detectorParams.rotation[2] = 0.0;
-     config.detectorParams.pixelSize[0] = 0.1;
-     config.detectorParams.pixelSize[1] = 0.1;
-     config.detectorParams.numPixels[0] = 2048;
-     config.detectorParams.numPixels[1] = 2048;
-     config.detectorParams.energyRange[0] = 5.0;
-     config.detectorParams.energyRange[1] = 30.0;
-     
-     // Matching parameters
-     config.maxNumSpots = 500;
-     config.minNumSpots = 5;
-     config.minIntensity = 1000.0;
-     config.maxAngle = 2.0;
-     
-     // Forward simulation
-     config.performForwardSimulation = 1;
-     strcpy(config.forwardSimulationFile, "forward_sim.bin");
-     
-     // Performance
-     config.numThreads = omp_get_max_threads();
-     
-     return config;
- }
- 
- void laue_free_results(MatchingResults *results) {
-     if (results == NULL) {
+     if (orientNr >= numOrientations) {
          return;
      }
      
-     if (results->orientations != NULL) {
-         free(results->orientations);
-         results->orientations = NULL;
+     int outArrayIdx = orientNr * (1 + 2 * maxNumSpots);
+     int spotCount = (int)outArray[outArrayIdx];
+     
+     int matchCount = 0;
+     double totalIntensity = 0.0;
+     
+     // Count matches for this orientation
+     for (int i = 0; i < spotCount; i++) {
+         int pixelX = outArray[outArrayIdx + 1 + 2 * i + 0];
+         int pixelY = outArray[outArrayIdx + 1 + 2 * i + 1];
+         int pixelIndex = pixelX * nrPxY + pixelY;
+         
+         if (pixelIndex >= 0 && pixelIndex < nrPxTotal && image[pixelIndex] > 0) {
+             totalIntensity += image[pixelIndex];
+             matchCount++;
+         }
      }
      
-     if (results->eulerAngles != NULL) {
-         free(results->eulerAngles);
-         results->eulerAngles = NULL;
+     // Store match score if matches are found
+     if (matchCount >= minNumSpots && totalIntensity >= minIntensity) {
+         matchedScores[orientNr] = totalIntensity * sqrt((double)matchCount);
+     } else {
+         matchedScores[orientNr] = 0.0;
      }
-     
-     if (results->lattices != NULL) {
-         free(results->lattices);
-         results->lattices = NULL;
-     }
-     
-     if (results->numSpots != NULL) {
-         free(results->numSpots);
-         results->numSpots = NULL;
-     }
-     
-     if (results->intensities != NULL) {
-         free(results->intensities);
-         results->intensities = NULL;
-     }
-     
-     if (results->numSolutions != NULL) {
-         free(results->numSolutions);
-         results->numSolutions = NULL;
-     }
-     
-     results->numGrains = 0;
  }
  
- void laue_cleanup(void) {
-     if (!laue_initialized) {
-         return;
-     }
-     
-     crystal_cleanup();
-     diffraction_cleanup();
-     
-     laue_initialized = 0;
- }
- 
- int laue_perform_matching(
+ /**
+  * @brief Perform Laue pattern matching using GPU acceleration
+  * 
+  * This function is similar to laue_perform_matching but offloads the matching
+  * part to the GPU. It is optimized for cases where forward simulation is not needed.
+  */
+ int laue_perform_matching_gpu(
      const MatchingConfig *config,
      const char *orientationFile,
      const char *hklFile,
@@ -164,6 +107,11 @@
      size_t numOrientations;
      int numHkls, nonZeroPixels;
      int nrPxX, nrPxY;
+     
+     // Device pointers
+     double *d_image = NULL;
+     uint16_t *d_outArray = NULL;
+     double *d_matchedScores = NULL;
      
      // Initialize result structure
      memset(results, 0, sizeof(MatchingResults));
@@ -210,7 +158,6 @@
      laue_log(1, "Reading HKLs from %s", hklFile);
      ret = file_read_hkls(hklFile, &hkls, &numHkls);
      if (ret != LAUE_SUCCESS) {
-         // Free previous allocations
          if (orientations != NULL) {
              free(orientations);
          }
@@ -223,7 +170,6 @@
      laue_log(1, "Reading image from %s", imageFile);
      ret = file_read_image(imageFile, &image, nrPxX, nrPxY, &nonZeroPixels);
      if (ret != LAUE_SUCCESS) {
-         // Free previous allocations
          if (orientations != NULL) {
              free(orientations);
          }
@@ -274,10 +220,32 @@
      
      crystal_calculate_reciprocal_matrix(latticeParams, config->spaceGroup, recipMatrix);
      
-     // Perform forward simulation and matching
-     laue_log(1, "Performing pattern matching with %d threads", config->numThreads);
+     // Verify forward simulation file exists
+     int result = open(config->forwardSimulationFile, O_RDONLY, S_IRUSR | S_IWUSR);
+     if (result < 0) {
+         laue_log(0, "ERROR: Forward simulation file not found. GPU version requires existing forward simulations.");
+         if (orientations != NULL) {
+             free(orientations);
+         }
+         if (hkls != NULL) {
+             free(hkls);
+         }
+         if (image != NULL) {
+             free(image);
+         }
+         laue_cleanup();
+         return LAUE_ERROR_FILE_NOT_FOUND;
+     }
+     close(result);
      
-     // Allocate array to store matching scores
+     // Perform matching on GPU
+     laue_log(1, "Performing pattern matching on GPU");
+     
+     // Parameters
+     int nrPxTotal = nrPxX * nrPxY;
+     int maxNumSpots = config->maxNumSpots;
+     
+     // Allocate CPU memory for scores
      double *matchedScores = (double *)calloc(numOrientations, sizeof(double));
      if (matchedScores == NULL) {
          laue_log(0, "ERROR: Failed to allocate memory for matching scores");
@@ -294,279 +262,99 @@
          return LAUE_ERROR_MEMORY_ALLOCATION;
      }
      
-     int nrPxTotal = nrPxX * nrPxY;
-     
-     // Create forward simulation file if needed
-     int doForwardSimulation = config->performForwardSimulation;
-     if (doForwardSimulation == 0) {
-         // Check if forward simulation file exists
-         int result = open(config->forwardSimulationFile, O_RDONLY, S_IRUSR | S_IWUSR);
-         if (result < 0) {
-             laue_log(1, "Forward simulation file not found. Running in simulation mode.");
-             doForwardSimulation = 1;
-         } else {
-             laue_log(1, "Using existing forward simulation file.");
-             close(result);
+     // Read forward simulation data into host memory
+     uint16_t *outArray = (uint16_t *)malloc(numOrientations * (1 + 2 * maxNumSpots) * sizeof(uint16_t));
+     if (outArray == NULL) {
+         laue_log(0, "ERROR: Failed to allocate memory for forward simulation data");
+         free(matchedScores);
+         if (orientations != NULL) {
+             free(orientations);
          }
+         if (hkls != NULL) {
+             free(hkls);
+         }
+         if (image != NULL) {
+             free(image);
+         }
+         laue_cleanup();
+         return LAUE_ERROR_MEMORY_ALLOCATION;
      }
      
-     // Determine number of orientations per thread
-     int numThreads = config->numThreads;
-     int maxNumSpots = config->maxNumSpots;
+     // Read the entire forward simulation file
+     ret = file_read_forward_simulation(
+         config->forwardSimulationFile,
+         outArray,
+         numOrientations * (1 + 2 * maxNumSpots),
+         0
+     );
      
-     // Track number of matched patterns
-     int numResults = 0;
-     int anyThreadError = 0; // Flag to track if any thread encountered an error
-     
-     #pragma omp parallel num_threads(numThreads) reduction(+:numResults) shared(anyThreadError)
-     {
-         int threadId = omp_get_thread_num();
-         int threadError = 0; // Local thread error flag
-         int orientationsPerThread = (int)ceil((double)numOrientations / (double)numThreads);
-         int startOrientNr = threadId * orientationsPerThread;
-         int endOrientNr = startOrientNr + orientationsPerThread;
-         
-         if (endOrientNr > (int)numOrientations) { // Fixed sign comparison warning
-             endOrientNr = (int)numOrientations;
+     if (ret != LAUE_SUCCESS) {
+         laue_log(0, "ERROR: Failed to read forward simulation data");
+         free(matchedScores);
+         free(outArray);
+         if (orientations != NULL) {
+             free(orientations);
          }
-         
-         // Allocate arrays for forward simulation
-         uint16_t *outArray = NULL;
-         bool *pixelMask = NULL;
-         
-         size_t arraySize = orientationsPerThread * (1 + 2 * maxNumSpots);
-         size_t arrayOffset = threadId * arraySize * sizeof(uint16_t);
-         
-         outArray = (uint16_t *)calloc(arraySize, sizeof(uint16_t));
-         if (outArray == NULL) {
-             laue_log(0, "ERROR: Failed to allocate memory for forward simulation array in thread %d", threadId);
-             threadError = 1;
-             #pragma omp atomic write
-             anyThreadError = 1;
+         if (hkls != NULL) {
+             free(hkls);
          }
-         
-         if (!threadError && doForwardSimulation) {
-             pixelMask = (bool *)calloc(nrPxTotal, sizeof(bool));
-             if (pixelMask == NULL) {
-                 laue_log(0, "ERROR: Failed to allocate memory for pixel mask in thread %d", threadId);
-                 threadError = 1;
-                 #pragma omp atomic write
-                 anyThreadError = 1;
-             }
-         } else if (!threadError) {
-             // Read existing forward simulation data
-             int ret = file_read_forward_simulation(
-                 config->forwardSimulationFile,
-                 outArray,
-                 arraySize,
-                 arrayOffset
-             );
-             
-             if (ret != LAUE_SUCCESS) {
-                 laue_log(0, "ERROR: Failed to read forward simulation data in thread %d", threadId);
-                 threadError = 1;
-                 #pragma omp atomic write
-                 anyThreadError = 1;
-             }
+         if (image != NULL) {
+             free(image);
          }
-         
-         // Process orientations assigned to this thread if no errors
-         if (!threadError) {
-             // Process orientations assigned to this thread
-             for (int orientNr = startOrientNr; orientNr < endOrientNr; orientNr++) {
-                 int spotCount = 0;
-                 int matchCount = 0;
-                 double totalIntensity = 0.0;
-                 
-                 if (doForwardSimulation) {
-                     // Generate forward simulation
-                     // Extract orientation matrix
-                     double orientMatrix[3][3];
-                     for (int i = 0; i < 3; i++) {
-                         for (int j = 0; j < 3; j++) {
-                             orientMatrix[i][j] = orientations[orientNr * 9 + i * 3 + j];
-                         }
-                     }
-                     
-                     // Convert to Euler angles
-                     double euler[3];
-                     geometry_orientation_matrix_to_euler(orientMatrix, euler);
-                     
-                     // Calculate pattern
-                     double *qHatArray = (double *)calloc(3 * maxNumSpots, sizeof(double));
-                     if (qHatArray == NULL) {
-                         laue_log(0, "ERROR: Failed to allocate memory for qHat array in thread %d", threadId);
-                         continue;  // Skip this orientation but continue with others
-                     }
-                     
-                     // Store spot positions
-                     for (int i = 0; i < nrPxTotal; i++) {
-                         pixelMask[i] = false;
-                     }
-                     
-                     spotCount = 0;
-                     double orientMatrix2[3][3], tempMatrix[3][3];
-                     
-                     // Convert Euler angles to orientation matrix
-                     geometry_euler_to_orientation_matrix(euler, tempMatrix);
-                     
-                     // Multiply orientation matrix with reciprocal lattice matrix
-                     geometry_matrix_multiply_3x3(tempMatrix, recipMatrix, orientMatrix2);
-                     
-                     // Loop through all hkl indices
-                     for (int hklIndex = 0; hklIndex < numHkls; hklIndex++) {
-                         double hkl[3], qVector[3], qLength, qHat[3], dot;
-                         double scattered_beam[3], position[3];
-                         double xp, yp, pixelX, pixelY, sinTheta, energy;
-                         int badSpot;
-                         
-                         // Get current hkl
-                         hkl[0] = hkls[hklIndex * 3 + 0];
-                         hkl[1] = hkls[hklIndex * 3 + 1];
-                         hkl[2] = hkls[hklIndex * 3 + 2];
-                         
-                         // Calculate q-vector for this hkl
-                         geometry_matrix_vector_multiply(orientMatrix2, hkl, qVector);
-                         
-                         // Calculate length of q-vector
-                         qLength = LAUE_CALC_LENGTH(qVector[0], qVector[1], qVector[2]);
-                         if (qLength < LAUE_EPSILON) continue;
-                         
-                         // Normalize q-vector to get unit vector
-                         qHat[0] = qVector[0] / qLength;
-                         qHat[1] = qVector[1] / qLength;
-                         qHat[2] = qVector[2] / qLength;
-                         
-                         // Dot product with incident beam (0,0,1)
-                         dot = qHat[2];
-                         
-                         // Calculate scattered beam direction
-                         scattered_beam[0] = 0.0 - 2 * dot * qHat[0];
-                         scattered_beam[1] = 0.0 - 2 * dot * qHat[1];
-                         scattered_beam[2] = 1.0 - 2 * dot * qHat[2];
-                         
-                         // Transform scattered beam to detector coordinates
-                         geometry_matrix_vector_multiply(rotTranspose, scattered_beam, position);
-                         
-                         // Check if beam hits detector
-                         if (position[2] <= 0) continue;
-                         
-                         // Project onto detector plane
-                         position[0] = position[0] * config->detectorParams.position[2] / position[2];
-                         position[1] = position[1] * config->detectorParams.position[2] / position[2];
-                         position[2] = config->detectorParams.position[2];
-                         
-                         // Calculate pixel coordinates
-                         xp = position[0] - config->detectorParams.position[0];
-                         yp = position[1] - config->detectorParams.position[1];
-                         
-                         pixelX = (xp / config->detectorParams.pixelSize[0]) + (0.5 * (nrPxX - 1));
-                         if (pixelX < 0 || pixelX > (nrPxX - 1)) continue;
-                         
-                         pixelY = (yp / config->detectorParams.pixelSize[1]) + (0.5 * (nrPxY - 1));
-                         if (pixelY < 0 || pixelY > (nrPxY - 1)) continue;
-                         
-                         // Calculate energy
-                         sinTheta = -qHat[2];
-                         energy = LAUE_HC_KEVNM * qLength / (4 * M_PI * sinTheta);
-                         
-                         // Check if energy is within range
-                         if (energy < config->detectorParams.energyRange[0] || 
-                             energy > config->detectorParams.energyRange[1]) continue;
-                         
-                         // Check for pixel already used
-                         int pixelIndex = (int)pixelX * nrPxY + (int)pixelY;
-                         if (pixelMask[pixelIndex]) continue;
-                         
-                         // Check if spot overlaps with previously calculated spots
-                         badSpot = 0;
-                         for (int i = 0; i < spotCount; i++) {
-                             if ((fabs(qHat[0] - qHatArray[3 * i + 0]) * 100000 < 0.1) &&
-                                 (fabs(qHat[1] - qHatArray[3 * i + 1]) * 100000 < 0.1) &&
-                                 (fabs(qHat[2] - qHatArray[3 * i + 2]) * 100000 < 0.1)) {
-                                 badSpot = 1;
-                                 break;
-                             }
-                         }
-                         
-                         if (badSpot == 0) {
-                             // Store qHat in output array
-                             qHatArray[3 * spotCount + 0] = qHat[0];
-                             qHatArray[3 * spotCount + 1] = qHat[1];
-                             qHatArray[3 * spotCount + 2] = qHat[2];
-                             
-                             // Mark pixel as used
-                             pixelMask[pixelIndex] = true;
-                             
-                             // Store pixel coordinates in output array
-                             int outArrayIdx = (orientNr - startOrientNr) * (1 + 2 * maxNumSpots);
-                             outArray[outArrayIdx + 1 + 2 * spotCount + 0] = (uint16_t)pixelX;
-                             outArray[outArrayIdx + 1 + 2 * spotCount + 1] = (uint16_t)pixelY;
-                             
-                             // Check if there's intensity at this pixel position in the image
-                             if (image[pixelIndex] > 0) {
-                                 totalIntensity += image[pixelIndex];
-                                 matchCount++;
-                             }
-                             
-                             spotCount++;
-                             if (spotCount >= maxNumSpots) {
-                                 break;
-                             }
-                         }
-                     }
-                     
-                     // Store number of spots in output array
-                     int outArrayIdx = (orientNr - startOrientNr) * (1 + 2 * maxNumSpots);
-                     outArray[outArrayIdx] = (uint16_t)spotCount;
-                     
-                     // Clean up
-                     for (int i = 0; i < spotCount; i++) {
-                         int pixelX = outArray[outArrayIdx + 1 + 2 * i + 0];
-                         int pixelY = outArray[outArrayIdx + 1 + 2 * i + 1];
-                         int pixelIndex = pixelX * nrPxY + pixelY;
-                         pixelMask[pixelIndex] = false;
-                     }
-                     
-                     free(qHatArray);
-                    // Store match score if matches are found
-                    if (matchCount >= config->minNumSpots && totalIntensity >= config->minIntensity) {
-                        matchedScores[orientNr] = totalIntensity * sqrt((double)matchCount);
-                        numResults++; // Using reduction(+:numResults)
-                    }
-                    int ret = file_write_forward_simulation(
-                        config->forwardSimulationFile,
-                        outArray,
-                        arraySize,
-                        arrayOffset
-                    );
-                    
-                    if (ret != LAUE_SUCCESS) {
-                        laue_log(0, "ERROR: Failed to write forward simulation data in thread %d", threadId);
-                        // Continue despite write error
-                    }
-                }
-            }
-         }
-         
-         // Clean up thread resources
-         if (outArray != NULL) {
-             free(outArray);
-         }
-         if (pixelMask != NULL) {
-             free(pixelMask);
-         }
-     } // End of parallel region
-     
-     // Check if any thread had an error
-     if (anyThreadError) {
-         laue_log(0, "ERROR: One or more threads encountered errors");
-         // We can continue with partial results or return an error
-         // Depends on the application requirements
+         laue_cleanup();
+         return ret;
      }
+     
+     // Allocate GPU memory
+     CUDA_CHECK(cudaMalloc((void**)&d_image, nrPxTotal * sizeof(double)));
+     CUDA_CHECK(cudaMalloc((void**)&d_outArray, numOrientations * (1 + 2 * maxNumSpots) * sizeof(uint16_t)));
+     CUDA_CHECK(cudaMalloc((void**)&d_matchedScores, numOrientations * sizeof(double)));
+     
+     // Copy data to GPU
+     CUDA_CHECK(cudaMemcpy(d_image, image, nrPxTotal * sizeof(double), cudaMemcpyHostToDevice));
+     CUDA_CHECK(cudaMemcpy(d_outArray, outArray, numOrientations * (1 + 2 * maxNumSpots) * sizeof(uint16_t), cudaMemcpyHostToDevice));
+     CUDA_CHECK(cudaMemset(d_matchedScores, 0, numOrientations * sizeof(double)));
+     
+     // Determine kernel launch parameters
+     int threadsPerBlock = 256;
+     int numBlocks = (numOrientations + threadsPerBlock - 1) / threadsPerBlock;
+     
+     // Launch kernel
+     matchSpots_kernel<<<numBlocks, threadsPerBlock>>>(
+         d_outArray,
+         d_image,
+         d_matchedScores,
+         numOrientations,
+         maxNumSpots,
+         nrPxY,
+         nrPxTotal,
+         config->minNumSpots,
+         config->minIntensity
+     );
+     
+     // Check for kernel launch errors
+     CUDA_CHECK(cudaGetLastError());
+     CUDA_CHECK(cudaDeviceSynchronize());
+     
+     // Copy results back to host
+     CUDA_CHECK(cudaMemcpy(matchedScores, d_matchedScores, numOrientations * sizeof(double), cudaMemcpyDeviceToHost));
+     
+     // Free GPU memory
+     cudaFree(d_image);
+     cudaFree(d_outArray);
+     cudaFree(d_matchedScores);
      
      time_checkpoint = omp_get_wtime();
-     laue_log(1, "Forward simulation and matching completed in %.2f seconds", time_checkpoint - start_time);
+     laue_log(1, "GPU pattern matching completed in %.2f seconds", time_checkpoint - start_time);
+     
+     // Count initial matches
+     int numResults = 0;
+     for (size_t i = 0; i < numOrientations; i++) {
+         if (matchedScores[i] > 0) {
+             numResults++;
+         }
+     }
+     
      laue_log(1, "Initial matches found: %d", numResults);
      
      // Find unique grains (merge orientations within maxAngle)
@@ -671,6 +459,7 @@
          free(finalOrientations);
          free(solutionCounts);
          free(bestSolutionIndices);
+         free(outArray);
          
          if (orientations != NULL) {
              free(orientations);
@@ -711,6 +500,7 @@
          free(finalOrientations);
          free(solutionCounts);
          free(bestSolutionIndices);
+         free(outArray);
          
          if (orientations != NULL) {
              free(orientations);
@@ -743,7 +533,7 @@
          threadRefinementErrors[i] = 0;
      }
      
-     #pragma omp parallel for num_threads(numThreads)
+     #pragma omp parallel for num_threads(config->numThreads)
      for (int grainIndex = 0; grainIndex < uniqueCount; grainIndex++) {
          double orientMatrix[3][3];
          double euler[3], eulerRefined[3];
@@ -808,10 +598,10 @@
          
          // Now optimize lattice parameters if requested
          doCrystalFit = (config->latticeParamTol[0] != 0 || config->latticeParamTol[1] != 0 || 
-                          config->latticeParamTol[2] != 0 || config->latticeParamTol[3] != 0 || 
-                          config->latticeParamTol[4] != 0 || config->latticeParamTol[5] != 0 || 
-                          config->cOverATol != 0);
-                          
+                         config->latticeParamTol[2] != 0 || config->latticeParamTol[3] != 0 || 
+                         config->latticeParamTol[4] != 0 || config->latticeParamTol[5] != 0 || 
+                         config->cOverATol != 0);
+                         
          if (doCrystalFit) {
              ret = optimization_fit_orientation(
                  image,
@@ -966,6 +756,7 @@
      free(finalOrientations);
      free(solutionCounts);
      free(bestSolutionIndices);
+     free(outArray);
      
      if (orientations != NULL) {
          free(orientations);

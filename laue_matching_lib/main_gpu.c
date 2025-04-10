@@ -1,11 +1,12 @@
 /**
  * @file main_gpu.c
- * @brief Main application for Laue pattern matching with GPU acceleration
+ * @brief GPU-accelerated main application for Laue pattern matching
  * 
- * This provides the same interface as the original LaueMatchingCPU program
- * but uses the improved library code with GPU acceleration internally.
+ * This provides a GPU-accelerated version of the original LaueMatchingCPU program.
+ * It uses CUDA to offload the matching part to the GPU, which is particularly
+ * efficient when forward simulation is not needed.
  * 
- * @author Hemant Sharma
+ * @author Hemant Sharma (original code)
  * @date 2025-04-10
  * @copyright Copyright (c) 2025, UChicago Argonne, LLC
  */
@@ -21,20 +22,32 @@
  #include "src/core/optimization.h"
  #include "src/io/file_io.h"
  
+ // Add CUDA-specific error code
+ #define LAUE_ERROR_GPU -100
+ 
+ // External function declaration for the GPU implementation
+ extern int laue_perform_matching_gpu(
+     const MatchingConfig *config,
+     const char *orientationFile,
+     const char *hklFile,
+     const char *imageFile,
+     MatchingResults *results
+ );
+ 
  /**
   * @brief Print usage information
   */
  static void print_usage(void) {
-     puts("LaueMatching with GPU Acceleration\n"
+     puts("LaueMatching on the GPU\n"
           "Contact hsharma@anl.gov\n"
           "Arguments: \n"
           "* \tparameterFile (text)\n"
           "* \tbinary files for candidate orientation list [double]\n"
           "* \ttext of valid_hkls (preferably sorted on f2), space separated\n"
           "* \tbinary file for image [double]\n"
-          "* \tnumber of CPU cores to use: \n"
-          "* NOTE: some computers cannot read the full candidate orientation list, \n"
-          "* must use multiple cores to distribute in that case\n\n"
+          "* \tnumber of CPU cores to use for non-GPU parts: \n"
+          "* NOTE: This GPU version requires a pre-computed forward simulation file.\n"
+          "* \tuse the CPU version first with DoFwd=1 to generate this file.\n\n"
           "Parameter file with the following parameters: \n"
           "\t\t* LatticeParameter (in nm and degrees),\n"
           "\t\t* tol_latC (in %, 6 values),\n"
@@ -50,7 +63,7 @@
           "\t\t* Ehi (maximum energy for simulating diffraction spots),\n"
           "\t\t* MaxNrLaueSpots(maximum number of spots to simulate),\n"
           "\t\t* ForwardFile (file name to save forward simulation result),\n"
-          "\t\t* DoFwd (whether to do forward simulation, ensure ForwardFile exists),\n"
+          "\t\t* DoFwd (must be 0 for GPU version),\n"
           "\t\t* MinNrSpots (minimum number of spots that qualify a grain, must\n"
           "\t\t\t\t  be smaller than MaxNrLaueSpots),\n"
           "\t\t* MinIntensity (minimum total intensity from the MinNrSpots that\n"
@@ -58,21 +71,6 @@
           "\t\t* MaxAngle (maximum angle in degrees that defines a grain, \n"
           "\t\t\t\tif misorientation between two candidates is smaller \n"
           "\t\t\t\tthan this, the solutions will be merged).\n");
- }
- 
- /**
-  * @brief Check if CUDA is available
-  * @return 1 if CUDA is available, 0 otherwise
-  */
- static int check_cuda_available(void) {
-     int deviceCount = 0;
-     cudaError_t err = cudaGetDeviceCount(&deviceCount);
-     
-     if (err != cudaSuccess || deviceCount == 0) {
-         return 0;
-     }
-     
-     return 1;
  }
  
  /**
@@ -90,14 +88,6 @@
      char *imageFile = argv[4];
      int numThreads = atoi(argv[5]);
      
-     // Check for GPU availability
-     int cuda_available = check_cuda_available();
-     if (cuda_available) {
-         printf("CUDA GPU detected. Using GPU acceleration when possible.\n");
-     } else {
-         printf("No CUDA GPU detected. Using CPU implementation.\n");
-     }
-     
      // Read configuration from parameter file
      MatchingConfig config;
      int ret = file_read_parameters(paramFile, &config);
@@ -109,6 +99,14 @@
      // Override number of threads with command line argument
      config.numThreads = numThreads;
      
+     // Verify that forward simulation is disabled for the GPU version
+     if (config.performForwardSimulation == 1) {
+         fprintf(stderr, "WARNING: The GPU version does not support forward simulation.\n");
+         fprintf(stderr, "Please set DoFwd=0 in the parameter file and ensure a forward simulation file exists.\n");
+         fprintf(stderr, "Run the CPU version first with DoFwd=1 if needed.\n");
+         return 1;
+     }
+     
      // Initialize the library
      ret = laue_init();
      if (ret != LAUE_SUCCESS) {
@@ -116,14 +114,15 @@
          return 1;
      }
      
-     // Set verbosity level
-     laue_set_verbose(1);
-     
-     // Perform matching
+     // Perform matching using the GPU implementation
      MatchingResults results;
-     ret = laue_gpu_perform_matching(&config, orientFile, hklFile, imageFile, &results);
+     ret = laue_perform_matching_gpu(&config, orientFile, hklFile, imageFile, &results);
      if (ret != LAUE_SUCCESS) {
-         fprintf(stderr, "ERROR: Failed to perform matching (error code: %d)\n", ret);
+         if (ret == LAUE_ERROR_GPU) {
+             fprintf(stderr, "ERROR: GPU operation failed\n");
+         } else {
+             fprintf(stderr, "ERROR: Failed to perform matching (error code: %d)\n", ret);
+         }
          laue_cleanup();
          return 1;
      }
