@@ -96,70 +96,12 @@ You can install all requirements with:
 pip install -r requirements.txt
 ```
 
-## Usage
-
-### Basic Usage
-
-The basic workflow involves:
-
-1. Preparing your data
-2. Running the LaueMatching algorithms
-3. Analyzing the results
-
-```bash
-# Example for CPU version
-./bin/LaueMatchingCPU config_file.txt orientations.bin hkls.txt image.bin 8
-
-# Example for GPU version
-./bin/LaueMatchingGPU config_file.txt orientations.bin hkls.txt image.bin 8
-```
-
-### Python Interface
-
-```python
-# Example Python usage
-import os
-import subprocess
-
-# Setup parameters
-config_file = "config.txt"
-image_file = "laue_image.h5"
-n_cpus = 8
-compute_type = "GPU"  # or "CPU"
-
-# Run the analysis
-subprocess.call(f"python RunImage.py -configFile {config_file} -imageFile {image_file} -nCPUs {n_cpus} -computeType {compute_type}", shell=True)
-```
-
-### Library Usage
-
-If you've built the library component, you can link against it in your own C applications:
-
-```c
-#include <laue_matching/laue_matching.h>
-
-// Initialize the library
-laue_init();
-
-// Use library functions
-laue_process_image(...);
-
-// Cleanup
-laue_cleanup();
-```
-
-Compile and link with:
-```bash
-gcc -o myapp myapp.c -I/path/to/laue_matching/include -L/path/to/laue_matching/lib -llaue_matching
-```
-
 ## Examples
 
 Example configurations and test data can be found in the `simulation` directory.
 
 ```bash
 cd simulation
-python RunExample.py
 ```
 
 ## Best Practices
@@ -183,9 +125,17 @@ For more help, contact the developer: hsharma@anl.gov
 
 If you use LaueMatching in your work, please cite:
 
-```
 Citation coming soon. For now, please cite as:
-    LaueMatching, 2024. https://github.com/AdvancedPhotonSource/LaueMatching
+
+```bibtex
+@misc{LaueMatching,
+  author = {Sharma, Hemant, and, Sheyfer, Dina, and, Harder, Ross, and, Tischler, Jonathan Z.},
+  title = {LaueMatching},
+  year = {2024},
+  publisher = {GitHub},
+    journal = {LaueMatching},
+    url = {https://github.com/AdvancedPhotonSource/LaueMatching}
+}
 ```
 
 ## License
