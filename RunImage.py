@@ -961,7 +961,8 @@ class EnhancedImageProcessor:
     
     def _store_txt_files_in_h5(self, output_path: str, h5_file) -> None:
         """
-        Store the contents of all generated txt files in the H5 file.
+        Store the contents of all generated txt files in the H5 file,
+        and add their headers as attributes to the corresponding datasets.
         
         Args:
             output_path: Base path for txt files
@@ -980,11 +981,80 @@ class EnhancedImageProcessor:
             try:
                 if os.path.exists(txt_file['file']):
                     with open(txt_file['file'], 'r') as f:
-                        content = f.read()
-                    h5_file.create_dataset(txt_file['dataset'], data=np.bytes_(content))
-                    logger.debug(f"Stored {txt_file['file']} in H5 dataset {txt_file['dataset']}")
+                        # Read all lines
+                        lines = f.readlines()
+                        # Extract header (first line) if available
+                        header = lines[0].strip() if lines else ""
+                        # Join all lines into a single string
+                        content = "".join(lines)
+                    
+                    # Create dataset with the content
+                    dataset = h5_file.create_dataset(txt_file['dataset'], data=np.bytes_(content))
+                    
+                    # Add header as an attribute to the dataset
+                    dataset.attrs['header'] = header
+                    
+                    logger.debug(f"Stored {txt_file['file']} in H5 dataset {txt_file['dataset']} with header attribute")
+                
             except Exception as e:
                 logger.warning(f"Error storing {txt_file['file']} in H5: {str(e)}")
+                
+        # Also store the binary file headers in their corresponding datasets
+        self._store_binary_headers_in_h5(output_path, h5_file)
+
+    def _store_binary_headers_in_h5(self, output_path: str, h5_file) -> None:
+        """
+        Store the headers from the binary files and add as attributes to corresponding datasets.
+        
+        Args:
+            output_path: Base path for binary files
+            h5_file: Open H5 file handle to store data
+        """
+        # Map HDF5 datasets to their corresponding text files with headers
+        binary_datasets = {
+            '/entry/results/orientations': {'header_file': f"{output_path}.bin.solutions.txt"},
+            '/entry/results/filtered_orientations': {'header_file': f"{output_path}.bin.solutions.txt"},
+            '/entry/results/spots': {'header_file': f"{output_path}.bin.spots.txt"},
+            '/entry/results/filtered_spots': {'header_file': f"{output_path}.bin.spots.txt"},
+        }
+        
+        # Add headers as attributes to corresponding binary datasets
+        for dataset_path, file_info in binary_datasets.items():
+            try:
+                if dataset_path in h5_file and os.path.exists(file_info['header_file']):
+                    # Read header from text file
+                    with open(file_info['header_file'], 'r') as f:
+                        header = f.readline().strip()
+                    
+                    # Add header as attribute
+                    if header and dataset_path in h5_file:
+                        h5_file[dataset_path].attrs['header'] = header
+                        h5_file[dataset_path].attrs['columns'] = [col.strip() for col in header.split()]
+                        logger.debug(f"Added header attribute to {dataset_path}")
+                        
+            except Exception as e:
+                logger.warning(f"Error adding header attribute to {dataset_path}: {str(e)}")
+                
+        # Also add header information to unique spots dataset if it exists
+        if '/entry/results/unique_spots_per_orientation' in h5_file:
+            try:
+                unique_spots_dataset = h5_file['/entry/results/unique_spots_per_orientation']
+                unique_spots_dataset.attrs['header'] = "Grain_Nr Unique_Spots"
+                unique_spots_dataset.attrs['columns'] = ['Grain_Nr', 'Unique_Spots']
+                logger.debug("Added header attribute to unique spots dataset")
+            except Exception as e:
+                logger.warning(f"Error adding header to unique spots dataset: {str(e)}")
+                
+        # Add column information to simulation datasets if they exist
+        if '/entry/simulation/simulated_spots' in h5_file:
+            try:
+                simulated_spots_dataset = h5_file['/entry/simulation/simulated_spots']
+                simulated_spots_dataset.attrs['header'] = "X Y GrainID Matched H K L Energy"
+                simulated_spots_dataset.attrs['columns'] = ['X', 'Y', 'GrainID', 'Matched', 'H', 'K', 'L', 'Energy']
+                logger.debug("Added header attribute to simulated spots dataset")
+            except Exception as e:
+                logger.warning(f"Error adding header to simulated spots dataset: {str(e)}")
+
                 
     def _run_indexing(
         self, 
