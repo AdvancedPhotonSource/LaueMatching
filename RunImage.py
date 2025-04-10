@@ -154,9 +154,9 @@ class VisualizationConfig:
 class SimulationConfig:
     """Configuration parameters for diffraction simulation."""
     enable_simulation: bool = True
-    skip_percentage: float = 0.0
+    skip_percentage: float = 30.0
     orientation_file: str = "orientations.txt"
-    energies: str = "5 30"  # Energy range in keV (Elo Ehi)
+    energies: str = "10 100"  # Energy range in keV (Elo Ehi)
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
@@ -1105,53 +1105,9 @@ class EnhancedImageProcessor:
         """
         logger.info("Running diffraction simulation")
         
-        # Create temporary configuration file for simulation
-        sim_config_path = f"{output_path}.sim_config.txt"
         try:
-            with open(sim_config_path, 'w') as f:
-                f.write(f"SpaceGroup {self.config.get('space_group')}\n")
-                f.write(f"Symmetry {self.config.get('symmetry')}\n")
-                f.write(f"LatticeParameter {self.config.get('lattice_parameter')}\n")
-                f.write(f"R_Array {self.config.get('r_array')}\n")
-                f.write(f"P_Array {self.config.get('p_array')}\n")
-                f.write(f"PxX {self.config.get('px_x')}\n")
-                f.write(f"PxY {self.config.get('px_y')}\n")
-                f.write(f"NrPxX {self.config.get('nr_px_x')}\n")
-                f.write(f"NrPxY {self.config.get('nr_px_y')}\n")
-                
-                # Add AStar parameter (critical for simulation)
-                # Check if AStar is defined in original config, otherwise use default calculation
-                astar = -1.0
-                with open(self.config.config_file, 'r') as orig_f:
-                    for line in orig_f:
-                        if line.startswith('AStar'):
-                            astar = float(line.split()[1])
-                            break
-                
-                if astar > 0:
-                    f.write(f"AStar {astar}\n")
-                else:
-                    # If AStar wasn't found, calculate from first lattice parameter as default
-                    lat_params = self.config.get('lattice_parameter').split()
-                    if len(lat_params) > 0:
-                        try:
-                            first_lat_param = float(lat_params[0])
-                            astar = 2 * np.pi / first_lat_param
-                            f.write(f"AStar {astar}\n")
-                        except (ValueError, IndexError):
-                            f.write(f"AStar 17.83\n")  # Default fallback value
-                
-                # Split energy range
-                energies = self.config.get("simulation").energies.split()
-                if len(energies) >= 2:
-                    f.write(f"Elo {energies[0]}\n")
-                    f.write(f"Ehi {energies[1]}\n")
-                else:
-                    f.write(f"Elo 10\n")
-                    f.write(f"Ehi 100\n")
-                
-                f.write(f"SimulationSmoothingWidth 5\n")
-                f.write(f"HKLFile {self.config.get('hkl_file')}\n")
+            # Use the original config file directly for simulation
+            orig_config_file = self.config.config_file
             
             # Create orientation file for simulation
             orientation_output = f"{output_path}.indexed_orientations.txt"
@@ -1175,7 +1131,7 @@ class EnhancedImageProcessor:
             skip_percentage = self.config.get("simulation").skip_percentage
             
             sim_cmd = (f"{PYTHON_PATH} {INSTALL_PATH}/GenerateSimulation.py "
-                      f"-configFile {sim_config_path} "
+                      f"-configFile {orig_config_file} "
                       f"-orientationFile {orientation_output} "
                       f"-outputFile {sim_output} "
                       f"-skipPercentage {skip_percentage}")
@@ -1381,11 +1337,12 @@ class EnhancedImageProcessor:
             if i not in missing_spots:
                 missing_spots[i] = []
                 
-            # Create scatter trace for simulated spots
+            # Create scatter trace for simulated spots - NOTE: Swap x and y coordinates
             if len(sim_orientation_spots) > 0:
+                # Flip x and y coordinates for simulated spots (y is first column, x is second)
                 sim_trace = go.Scatter(
-                    x=sim_orientation_spots[:, 0],
-                    y=sim_orientation_spots[:, 1],
+                    x=sim_orientation_spots[:, 1],  # Use column 1 for x (was y)
+                    y=sim_orientation_spots[:, 0],  # Use column 0 for y (was x)
                     mode='markers',
                     marker=dict(
                         color=color,
@@ -1397,7 +1354,7 @@ class EnhancedImageProcessor:
                     legendgroup=f'orientation_{i}',
                     hovertext=[
                         f"Orientation: {i}<br>"
-                        f"Position: ({spot[0]:.1f}, {spot[1]:.1f})<br>"
+                        f"Position: ({spot[1]:.1f}, {spot[0]:.1f})<br>"  # Swap in hover text too
                         f"Status: {'Matched' if spot[3] == 1 else 'Unmatched'}"
                         for spot in sim_orientation_spots
                     ],
@@ -1408,7 +1365,8 @@ class EnhancedImageProcessor:
                 
                 # Find missing spots (in simulation but not in experimental data)
                 for spot in sim_orientation_spots:
-                    spot_pos = (round(float(spot[0])), round(float(spot[1])))
+                    # Create spot position with flipped x and y
+                    spot_pos = (round(float(spot[1])), round(float(spot[0])))
                     if spot[3] == 0 or spot_pos not in matched_spots.get(i, set()):
                         missing_spots[i].append(spot)
         
@@ -1420,9 +1378,10 @@ class EnhancedImageProcessor:
             spots_array = np.array(spots_list)
             color = orientation_colors[i % len(orientation_colors)]
             
+            # Create trace with flipped x and y coordinates
             missing_trace = go.Scatter(
-                x=spots_array[:, 0],
-                y=spots_array[:, 1],
+                x=spots_array[:, 1],  # Use column 1 for x (was y)
+                y=spots_array[:, 0],  # Use column 0 for y (was x)
                 mode='markers',
                 marker=dict(
                     color=color,
@@ -1434,7 +1393,7 @@ class EnhancedImageProcessor:
                 legendgroup=f'orientation_{i}',
                 hovertext=[
                     f"Orientation: {i}<br>"
-                    f"Position: ({spot[0]:.1f}, {spot[1]:.1f})<br>"
+                    f"Position: ({spot[1]:.1f}, {spot[0]:.1f})<br>"  # Swap in hover text too
                     f"Missing spot"
                     for spot in spots_array
                 ],
