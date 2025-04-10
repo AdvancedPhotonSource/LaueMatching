@@ -876,7 +876,16 @@ class EnhancedImageProcessor:
             
             hf_out.create_dataset('/entry/data/cleaned_data_threshold_filtered', data=filtered_image)
             hf_out.create_dataset('/entry/data/cleaned_data_threshold_filtered_labels', data=filtered_labels)
-            hf_out.create_dataset('/entry/data/component_centers', data=np.array(centers, dtype=object))
+            # Store component centers properly
+            # Convert centers to a structured format HDF5 can store
+            centers_array = np.zeros((len(centers), 4), dtype=np.float64)
+            for i, center in enumerate(centers):
+                centers_array[i, 0] = float(center[0])  # label_idx
+                centers_array[i, 1] = float(center[1][0])  # center_x
+                centers_array[i, 2] = float(center[1][1])  # center_y
+                centers_array[i, 3] = float(center[2])  # area
+            
+            hf_out.create_dataset('/entry/data/component_centers', data=centers_array)
             progress.update(1, "Small components filtered")
             
             # Step 5: Calculate Gaussian blur width
