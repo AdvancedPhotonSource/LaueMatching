@@ -164,7 +164,7 @@ int file_read_parameters(const char *filename, MatchingConfig *config) {
         lowNr = strncmp(aline, str, strlen(str));
         if (lowNr == 0) {
             sscanf(aline, "%s %s", dummy, config->forwardSimulationFile);
-            printf("%s\n",config->forwardSimulationFile);
+            printf("While reading %s\n",config->forwardSimulationFile);
             continue;
         }
         
@@ -188,7 +188,7 @@ int file_read_parameters(const char *filename, MatchingConfig *config) {
             config->latticeParamTol[i] = 0.0;
         }
     }
-    
+    printf("After reading %s\n",config->forwardSimulationFile);
     return LAUE_SUCCESS;
 }
 
