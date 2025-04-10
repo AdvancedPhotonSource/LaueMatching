@@ -1221,6 +1221,9 @@ class EnhancedImageProcessor:
             logger.info(f"Sample experimental spot: ({spots[0][5]:.1f}, {spots[0][6]:.1f})")
         if len(simulated_spots) > 0:
             logger.info(f"Sample simulated spot: ({simulated_spots[0][1]:.1f}, {simulated_spots[0][0]:.1f})")
+        # Debug: log all spots from both sources
+        logger.debug(f"Experimental spots: {spots[:][5,6]}")
+        logger.debug(f"Simulated spots: {simulated_spots[:][1,0]}")
         
         # Create figure with 3 subplots (experimental, simulated, missing spots)
         fig = make_subplots(
