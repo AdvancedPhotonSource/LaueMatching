@@ -3,12 +3,14 @@
  * @brief Implementation of GPU-accelerated Laue pattern matching
  */
 
+ extern "C" {
 #include "common.h"
-#include "src/core/geometry.h"
-#include "src/core/crystallography.h"
-#include "src/core/diffraction.h"
-#include "src/core/optimization.h"
-#include "src/io/file_io.h"
+#include "core/geometry.h"
+#include "core/crystallography.h"
+#include "core/diffraction.h"
+#include "core/optimization.h"
+#include "io/file_io.h"
+}
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <stdarg.h>
