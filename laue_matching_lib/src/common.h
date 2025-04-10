@@ -131,8 +131,10 @@
      LAUE_ERROR_MEMORY_ALLOCATION = -1,
      LAUE_ERROR_FILE_IO = -2,
      LAUE_ERROR_INVALID_PARAMETER = -3,
-     LAUE_ERROR_OPTIMIZATION_FAILED = -4
- };
+     LAUE_ERROR_OPTIMIZATION_FAILED = -4,
+     LAUE_ERROR_NO_GPU = -5,
+     LAUE_ERROR_FORWARD_SIMULATION = -6
+  };
  
  /* Function prototypes for main API */
  int laue_init(void);
