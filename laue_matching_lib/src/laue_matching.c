@@ -548,6 +548,7 @@
              
              // Write forward simulation data if needed
              if (doForwardSimulation) {
+                printf("%s\n",config->forwardSimulationFile);
                  int ret = file_write_forward_simulation(
                      config->forwardSimulationFile,
                      outArray,
