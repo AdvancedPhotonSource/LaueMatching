@@ -19,7 +19,84 @@
 #include <cuda_runtime.h>
 #include <stdarg.h>
 
-int laue_initialized = 0;
+ /* Global variables */
+ static int laue_initialized = 0;
+ int laue_verbose_level = 1;  // Changed from static to match extern declaration
+ 
+ /* Verbose logging function */
+ void laue_log(int level, const char *format, ...) {
+     if (level <= laue_verbose_level) {
+         va_list args;
+         va_start(args, format);
+         vprintf(format, args);
+         va_end(args);
+         printf("\n");
+     }
+ }
+ 
+ void laue_set_verbose(int level) {
+     laue_verbose_level = level;
+ }
+ 
+ int laue_init(void) {
+     if (laue_initialized) {
+         return LAUE_SUCCESS;
+     }
+     
+     // Nothing specific to initialize yet, but this function
+     // can be expanded in the future
+     
+     laue_initialized = 1;
+     return LAUE_SUCCESS;
+ }
+ void laue_cleanup(void) {
+    if (!laue_initialized) {
+        return;
+    }
+    
+    crystal_cleanup();
+    diffraction_cleanup();
+    
+    laue_initialized = 0;
+}
+
+void laue_free_results(MatchingResults *results) {
+    if (results == NULL) {
+        return;
+    }
+    
+    if (results->orientations != NULL) {
+        free(results->orientations);
+        results->orientations = NULL;
+    }
+    
+    if (results->eulerAngles != NULL) {
+        free(results->eulerAngles);
+        results->eulerAngles = NULL;
+    }
+    
+    if (results->lattices != NULL) {
+        free(results->lattices);
+        results->lattices = NULL;
+    }
+    
+    if (results->numSpots != NULL) {
+        free(results->numSpots);
+        results->numSpots = NULL;
+    }
+    
+    if (results->intensities != NULL) {
+        free(results->intensities);
+        results->intensities = NULL;
+    }
+    
+    if (results->numSolutions != NULL) {
+        free(results->numSolutions);
+        results->numSolutions = NULL;
+    }
+    
+    results->numGrains = 0;
+}
 
  /* Error checking macro */
  #define CUDA_CHECK(call) \
