@@ -50,6 +50,7 @@ typedef struct {
  */
 typedef struct {
     LatticeParameters lattice;   /**< Lattice parameters */
+    DetectorParameters detectorParams; /**< Detector parameters */
     double latticeParamTol[6];   /**< Tolerance for each lattice parameter (%) */
     double cOverATol;            /**< Tolerance for c/a ratio (%) */
     int spaceGroup;              /**< Space group number */
