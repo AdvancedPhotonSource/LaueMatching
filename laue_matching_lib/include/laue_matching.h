@@ -59,7 +59,7 @@ typedef struct {
     double minIntensity;         /**< Minimum total intensity for a valid match */
     double maxAngle;             /**< Maximum misorientation angle for merging (degrees) */
     bool performForwardSimulation; /**< Whether to perform forward simulation */
-    char forwardSimulationFile[256]; /**< File name for forward simulation results */
+    char forwardSimulationFile[1024]; /**< File name for forward simulation results */
     int numThreads;              /**< Number of CPU threads to use */
 } MatchingConfig;
 

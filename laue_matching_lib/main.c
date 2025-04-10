@@ -77,12 +77,17 @@ int main(int argc, char *argv[]) {
     
     // Read configuration from parameter file
     MatchingConfig config;
+    // Before reading parameters
+printf("Before reading parameters: '%s'\n", config.forwardSimulationFile);
+
     int ret = file_read_parameters(paramFile, &config);
     if (ret != LAUE_SUCCESS) {
         fprintf(stderr, "ERROR: Failed to read parameter file\n");
         return 1;
     }
-    
+    // After reading parameters
+printf("After reading parameters: '%s'\n", config.forwardSimulationFile);
+
     // Override number of threads with command line argument
     config.numThreads = numThreads;
     
