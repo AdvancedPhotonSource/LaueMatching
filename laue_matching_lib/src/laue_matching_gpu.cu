@@ -124,6 +124,7 @@ int laue_gpu_perform_matching(
     const char *imageFile,
     MatchingResults *results
 ) {
+    int laue_initialized = 0;
     int ret;
     double start_time, time_checkpoint;
     double *image = NULL;
