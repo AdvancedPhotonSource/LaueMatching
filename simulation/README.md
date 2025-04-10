@@ -27,9 +27,9 @@ This will generate the following files:
 
 The orientations present in the `simulated_1.h5` file can be determined using the following command:
 
-    ../RunImage.py -configFile params_sim.txt -imageFile simulated_1.h5 -nCPUs NCPUS -computeType COMPUTE
+    ../RunImage.py process -c params_sim.txt -i simulated_1.h5 -n 64
 
-Here `NCPUS` should be the number of CPU cores you want to use and `COMPUTE` can either be `GPU` or `CPU`.
+Here `n` should be the number of CPU cores you want to use.
 
 **NOTE:** Even when using a GPU, please use multiple CPU cores because refinement of orientations is still run on the CPU.
 

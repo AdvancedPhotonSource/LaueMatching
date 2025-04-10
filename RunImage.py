@@ -142,6 +142,7 @@ class VisualizationConfig:
     generate_3d: bool = False
     generate_report: bool = True
     report_template: str = "default"
+    show_hkl_labels: bool = False
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
@@ -1850,7 +1851,7 @@ class EnhancedImageProcessor:
             )
             
             # Optionally add HKL labels
-            if self.config.get("visualization").get("show_hkl_labels", False):
+            if hasattr(self.config.get("visualization"), "show_hkl_labels") and self.config.get("visualization").show_hkl_labels:
                 for spot in good_spots_filtered:
                     h, k, l = int(spot[2]), int(spot[3]), int(spot[4])
                     x, y = spot[5], spot[6]
