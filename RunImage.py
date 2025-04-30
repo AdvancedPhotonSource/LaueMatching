@@ -167,6 +167,7 @@ class LaueConfig:
     p_array: str = "0.02 0.002 0.513"
     min_good_spots: int = 5
     max_laue_spots: int = 7
+    min_nr_spots: int = 5
     
     # File paths
     result_dir: str = "results"
@@ -182,6 +183,10 @@ class LaueConfig:
     nr_px_y: int = 2048
     orientation_spacing: float = 0.4
     distance: float = 0.513
+    min_intensity: float = 50.0
+    elo: float = 5.0
+    ehi: float = 30.0
+    maxAngle: float = 2.0
     
     # Processing parameters
     do_forward: bool = True
@@ -322,7 +327,11 @@ class ConfigurationManager:
         elif line.startswith('Threshold'):
             self.config.image_processing.threshold_value = float(line.split()[1])
         elif line.startswith('MinIntensity'):
-            min_intensity = float(line.split()[1])
+            self.config.min_intensity = float(line.split()[1])
+        elif line.startswith('Elo'):
+            self.config.elo = float(line.split()[1])
+        elif line.startswith('Ehi'):
+            self.config.ehi = float(line.split()[1])
         elif line.startswith('PxX'):
             self.config.px_x = float(line.split()[1])
         elif line.startswith('PxY'):
@@ -343,6 +352,10 @@ class ConfigurationManager:
             self.config.image_processing.min_area = int(line.split()[1])
         elif line.startswith('MinGoodSpots'):
             self.config.min_good_spots = int(line.split()[1])
+        elif line.startswith('MinNrSpots'):
+            self.config.min_nr_spots = int(line.split()[1])
+        elif line.startswith('MaxAngle'):
+            self.config.maxAngle = float(line.split()[1])
         elif line.startswith('MaxNrLaueSpots'):
             self.config.max_laue_spots = int(line.split()[1])
         elif line.startswith('ResultDir'):
@@ -412,8 +425,14 @@ class ConfigurationManager:
             f.write(f"FilterRadius {self.config.image_processing.filter_radius}\n")
             f.write(f"NMeadianPasses {self.config.image_processing.median_passes}\n")
             f.write(f"MinArea {self.config.image_processing.min_area}\n")
+            f.write(f"MinIntensity {self.config.min_intensity}\n")
+            f.write(f"Elo {self.config.elo}\n")
+            f.write(f"Ehi {self.config.ehi}\n")
+            f.write(f"SimulationSmoothingWidth 2\n")
             f.write(f"MinGoodSpots {self.config.min_good_spots}\n")
+            f.write(f"MinNrSpots {self.config.min_nr_spots}\n")
             f.write(f"MaxNrLaueSpots {self.config.max_laue_spots}\n")
+            f.write(f"MaxAngle {self.config.maxAngle}\n")
             f.write(f"ResultDir {self.config.result_dir}\n")
             f.write(f"OrientationFile {self.config.orientation_file}\n")
             f.write(f"HKLFile {self.config.hkl_file}\n")
