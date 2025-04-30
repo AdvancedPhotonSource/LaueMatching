@@ -1005,55 +1005,68 @@ class EnhancedImageProcessor:
     def _store_binary_headers_in_h5(self, output_path: str, h5_file) -> None:
         """
         Store the headers from the binary files and add as attributes to corresponding datasets.
+        Handles both filtered and unfiltered datasets.
         
         Args:
-            output_path: Base path for binary files
+            output_path: Base path for binary files (e.g., 'results/image_001')
             h5_file: Open H5 file handle to store data
         """
         # Map HDF5 datasets to their corresponding text files with headers
         binary_datasets = {
-            '/entry/results/orientations': {'header_file': f"{output_path}.bin.solutions.txt"},
-            '/entry/results/filtered_orientations': {'header_file': f"{output_path}.bin.solutions.txt"},
-            '/entry/results/spots': {'header_file': f"{output_path}.bin.spots.txt"},
-            '/entry/results/filtered_spots': {'header_file': f"{output_path}.bin.spots.txt"},
+            # --- Orientations ---
+            '/entry/results/orientations': {'header_file': f"{output_path}.bin.solutions.txt"},          # Unfiltered (originally sorted)
+            '/entry/results/filtered_orientations': {'header_file': f"{output_path}.bin.solutions.txt"},  # Filtered
+            # --- Spots ---
+            '/entry/results/spots': {'header_file': f"{output_path}.bin.spots.txt"},                    # Unfiltered
+            '/entry/results/filtered_spots': {'header_file': f"{output_path}.bin.spots.txt"},            # Filtered
         }
         
         # Add headers as attributes to corresponding binary datasets
         for dataset_path, file_info in binary_datasets.items():
+            header_file_path = file_info['header_file']
             try:
-                if dataset_path in h5_file and os.path.exists(file_info['header_file']):
+                # Check if dataset exists in H5 and header file exists on disk
+                if dataset_path in h5_file and os.path.exists(header_file_path):
                     # Read header from text file
-                    with open(file_info['header_file'], 'r') as f:
+                    with open(header_file_path, 'r') as f:
                         header = f.readline().strip()
                     
-                    # Add header as attribute
-                    if header and dataset_path in h5_file:
-                        h5_file[dataset_path].attrs['header'] = header
-                        h5_file[dataset_path].attrs['columns'] = [col.strip() for col in header.split()]
-                        logger.debug(f"Added header attribute to {dataset_path}")
+                    # Add header as attribute if header is not empty
+                    if header:
+                        dataset = h5_file[dataset_path]
+                        dataset.attrs['header'] = header
+                        # Split header into column names, handling potential extra spaces
+                        dataset.attrs['columns'] = [col.strip() for col in header.split() if col.strip()] 
+                        logger.debug(f"Added header attribute and columns to {dataset_path}")
                         
             except Exception as e:
-                logger.warning(f"Error adding header attribute to {dataset_path}: {str(e)}")
+                logger.warning(f"Error adding header attribute to {dataset_path} using {header_file_path}: {str(e)}")
                 
         # Also add header information to unique spots dataset if it exists
-        if '/entry/results/unique_spots_per_orientation' in h5_file:
+        unique_spots_path = '/entry/results/unique_spots_per_orientation'
+        if unique_spots_path in h5_file:
             try:
-                unique_spots_dataset = h5_file['/entry/results/unique_spots_per_orientation']
+                unique_spots_dataset = h5_file[unique_spots_path]
                 unique_spots_dataset.attrs['header'] = "Grain_Nr Unique_Spots"
                 unique_spots_dataset.attrs['columns'] = ['Grain_Nr', 'Unique_Spots']
-                logger.debug("Added header attribute to unique spots dataset")
+                logger.debug("Added header attribute and columns to unique spots dataset")
             except Exception as e:
-                logger.warning(f"Error adding header to unique spots dataset: {str(e)}")
+                logger.warning(f"Error adding header to unique spots dataset {unique_spots_path}: {str(e)}")
                 
         # Add column information to simulation datasets if they exist
-        if '/entry/simulation/simulated_spots' in h5_file:
+        simulated_spots_path = '/entry/simulation/simulated_spots'
+        if simulated_spots_path in h5_file:
             try:
-                simulated_spots_dataset = h5_file['/entry/simulation/simulated_spots']
-                simulated_spots_dataset.attrs['header'] = "X Y GrainID Matched H K L Energy"
-                simulated_spots_dataset.attrs['columns'] = ['X', 'Y', 'GrainID', 'Matched', 'H', 'K', 'L', 'Energy']
-                logger.debug("Added header attribute to simulated spots dataset")
+                simulated_spots_dataset = h5_file[simulated_spots_path]
+                # Check if header already exists to avoid overwriting
+                if 'header' not in simulated_spots_dataset.attrs:
+                    simulated_spots_dataset.attrs['header'] = "X Y GrainID Matched H K L Energy"
+                    simulated_spots_dataset.attrs['columns'] = ['X', 'Y', 'GrainID', 'Matched', 'H', 'K', 'L', 'Energy']
+                    logger.debug("Added header attribute and columns to simulated spots dataset")
+                else:
+                    logger.debug("Header attribute already exists for simulated spots dataset.")
             except Exception as e:
-                logger.warning(f"Error adding header to simulated spots dataset: {str(e)}")
+                logger.warning(f"Error adding header to simulated spots dataset {simulated_spots_path}: {str(e)}")
 
                 
     def _run_indexing(
@@ -1650,7 +1663,7 @@ class EnhancedImageProcessor:
         filtered_image: np.ndarray
     ) -> Dict[str, Any]:
         """
-        Process and visualize the indexing results.
+        Process and visualize the indexing results, including filtering based on unique spots.
         
         Args:
             output_path: Path to the output files
@@ -1659,59 +1672,125 @@ class EnhancedImageProcessor:
             filtered_image: Filtered image
             
         Returns:
-            Dictionary with processing results
+            Dictionary with processing results (using filtered data)
         """
         # Read solutions and spots
         try:
             with open(f'{output_path}.bin.solutions.txt') as f:
                 header_gr = f.readline()
                 
-            orientations = np.genfromtxt(f'{output_path}.bin.solutions.txt', skip_header=1)
+            orientations_unfiltered = np.genfromtxt(f'{output_path}.bin.solutions.txt', skip_header=1)
+            # Ensure 2D even if only one orientation
+            if len(orientations_unfiltered.shape) == 1:
+                 orientations_unfiltered = np.expand_dims(orientations_unfiltered, axis=0)
             
             with open(f'{output_path}.bin.spots.txt') as f:
                 header_sp = f.readline()
                 
-            spots = np.genfromtxt(f'{output_path}.bin.spots.txt', skip_header=1)
+            spots_unfiltered = np.genfromtxt(f'{output_path}.bin.spots.txt', skip_header=1)
+            # Ensure 2D even if only one spot or no spots
+            if spots_unfiltered.size == 0:
+                # Handle case with no spots found
+                spots_unfiltered = np.empty((0, spots_unfiltered.shape[1] if len(spots_unfiltered.shape) > 1 else 8)) # Assume default 8 cols if needed
+            elif len(spots_unfiltered.shape) == 1:
+                 spots_unfiltered = np.expand_dims(spots_unfiltered, axis=0)
+
             
-            logger.info(f"Read indexing results: {orientations.shape[0] if len(orientations.shape) > 1 else 1} orientations")
+            logger.info(f"Read indexing results: {len(orientations_unfiltered)} orientations (before filtering)")
             
             # Calculate unique spot counts for each orientation and create orientation quality score
-            orientation_unique_spots = self._calculate_unique_spots_per_orientation(orientations, spots, labels)
+            orientation_unique_spots = self._calculate_unique_spots_per_orientation(orientations_unfiltered, spots_unfiltered, labels)
             
             # Sort orientations by quality score (NMatches*sqrt(intensity))
-            orientations = self._sort_orientations_by_quality(orientations, orientation_unique_spots)
+            orientations_sorted = self._sort_orientations_by_quality(orientations_unfiltered, orientation_unique_spots)
             
-            # Save updated sorted orientations
-            np.savetxt(f'{output_path}.bin.solutions_sorted.txt', orientations, 
+            # --- Filtering Step ---
+            logger.info(f"Filtering orientations with less than 2 unique spots...")
+            
+            indices_to_keep = []
+            kept_grain_nrs = set()
+            
+            if orientations_sorted.size > 0: # Check if there are any orientations
+                if len(orientations_sorted.shape) == 1: # Handle single orientation case after sorting
+                    orientations_sorted = np.expand_dims(orientations_sorted, axis=0)
+
+                for i, orientation in enumerate(orientations_sorted):
+                    grain_nr = int(orientation[0])
+                    if grain_nr in orientation_unique_spots:
+                        # Use unique_label_count as the criterion for unique spots
+                        # This counts distinct segmented regions uniquely assigned to this orientation
+                        unique_spot_count = orientation_unique_spots[grain_nr]["unique_label_count"] 
+                        if unique_spot_count >= 2:
+                            indices_to_keep.append(i)
+                            kept_grain_nrs.add(grain_nr)
+                        else:
+                            logger.debug(f"Filtering out Grain Nr {grain_nr} (Unique Spots: {unique_spot_count})")
+                    else:
+                        logger.warning(f"Grain Nr {grain_nr} from sorted orientations not found in unique spot calculation results. Keeping it.")
+                        # Decide whether to keep or discard if calculation failed - keeping seems safer
+                        indices_to_keep.append(i) 
+                        kept_grain_nrs.add(grain_nr)
+
+            filtered_orientations = orientations_sorted[indices_to_keep]
+            
+            # Filter spots based on the grain numbers that were kept
+            if spots_unfiltered.size > 0 and kept_grain_nrs:
+                filtered_spots = spots_unfiltered[np.isin(spots_unfiltered[:, 0].astype(int), list(kept_grain_nrs))]
+            else:
+                # Handle cases where spots_unfiltered is empty or no grains were kept
+                filtered_spots = np.empty((0, spots_unfiltered.shape[1] if spots_unfiltered.size > 0 else 8))
+
+            num_filtered_out = len(orientations_sorted) - len(filtered_orientations)
+            logger.info(f"Filtered out {num_filtered_out} orientations with less than 2 unique spots.")
+            logger.info(f"Final number of orientations after filtering: {len(filtered_orientations)}")
+            logger.info(f"Final number of spots after filtering: {len(filtered_spots)}")
+            
+            # Save updated sorted orientations (consider saving filtered ones instead/additionally)
+            # Let's save the *filtered* orientations to a specific file
+            filtered_solutions_file = f'{output_path}.bin.solutions_filtered.txt'
+            np.savetxt(filtered_solutions_file, filtered_orientations, 
                       header=header_gr.strip(), comments='')
+            logger.info(f"Filtered orientations saved to {filtered_solutions_file}")
+
+            # Create h5 file with orientation and spot data (both original sorted and filtered)
+            self._create_h5_output(output_path, orientations_sorted, filtered_orientations, 
+                                   spots_unfiltered, filtered_spots, orientation_unique_spots)
             
-            # Create h5 file with orientation and spot data
-            self._create_h5_output(output_path, orientations, spots, orientation_unique_spots)
-            
+        except FileNotFoundError:
+             logger.error(f"Indexing result files (.solutions.txt or .spots.txt) not found for {output_path}.bin. Skipping result processing.")
+             # Return success=False or an empty result structure? Let's return failure.
+             return {"success": False, "error": "Indexing output files not found."}
         except Exception as e:
-            logger.error(f"Error reading indexing results: {str(e)}")
-            return {"success": False, "error": f"Failed to read indexing results: {str(e)}"}
+            logger.error(f"Error processing indexing results: {str(e)}")
+            return {"success": False, "error": f"Failed to process indexing results: {str(e)}"}
             
-        # Create visualization if enabled
+        # Create visualization if enabled, using the *filtered* data
+        visualization_results = {"success": False, "message": "Visualization skipped or failed"}
         if self.config.get("visualization").enable_visualization:
-            visualization_results = self._visualize_results(
-                output_path, orientations, spots, labels, filtered_image, orientation_unique_spots
-            )
-            
-            if not visualization_results["success"]:
-                logger.warning(f"Visualization failed: {visualization_results.get('error', 'Unknown error')}")
+            if filtered_orientations.size > 0: # Only visualize if there are orientations left
+                visualization_results = self._visualize_results(
+                    output_path, filtered_orientations, filtered_spots, labels, filtered_image, orientation_unique_spots
+                )
+                if not visualization_results["success"]:
+                    logger.warning(f"Visualization failed: {visualization_results.get('error', 'Unknown error')}")
+            else:
+                 logger.info("Skipping visualization as no orientations remained after filtering.")
+                 visualization_results = {"success": True, "message": "Visualization skipped (no orientations after filtering)"}
         else:
             logger.info("Visualization disabled, skipping")
             visualization_results = {"success": True, "message": "Visualization disabled"}
             
-        # Return results
+        # Return results based on *filtered* data
         return {
             "success": True,
-            "orientations": orientations,
-            "spots": spots,
-            "unique_spots_per_orientation": orientation_unique_spots,
+            "orientations": filtered_orientations, # Return filtered orientations as primary result
+            "spots": filtered_spots,               # Return filtered spots as primary result
+            "unfiltered_orientations": orientations_sorted, # Also return originals for reference
+            "unfiltered_spots": spots_unfiltered,           # Also return originals for reference
+            "unique_spots_per_orientation": orientation_unique_spots, # This refers to original grain numbers
             "visualization": visualization_results
         }
+
         
     def _calculate_unique_spots_per_orientation(
         self,
@@ -1854,50 +1933,74 @@ class EnhancedImageProcessor:
     def _create_h5_output(
         self,
         output_path: str,
-        orientations: np.ndarray,
-        spots: np.ndarray,
+        orientations_unfiltered: np.ndarray, # Renamed for clarity
+        filtered_orientations: np.ndarray,  # Added filtered data
+        spots_unfiltered: np.ndarray,       # Renamed for clarity
+        filtered_spots: np.ndarray,         # Added filtered data
         orientation_unique_spots: Dict[int, Dict]
     ) -> None:
         """
-        Create HDF5 file with orientation and spot data.
+        Create HDF5 file with orientation and spot data (unfiltered and filtered).
         
         Args:
             output_path: Path to output files
-            orientations: Orientation data array
-            spots: Spot data array
+            orientations_unfiltered: Original sorted orientation data array
+            filtered_orientations: Filtered orientation data array (>= 2 unique spots)
+            spots_unfiltered: Original spot data array
+            filtered_spots: Filtered spot data array (corresponding to filtered orientations)
             orientation_unique_spots: Dictionary of unique spots per orientation
         """
         output_h5 = f"{output_path}.bin.output.h5"
         
         # Create unique spot count array - store GRAIN NUMBER and count
-        unique_counts = np.zeros((len(orientation_unique_spots), 2))
-        for i, (grain_nr, data) in enumerate(orientation_unique_spots.items()):
-            unique_counts[i, 0] = grain_nr  # Use the actual grain number
-            unique_counts[i, 1] = data["unique_label_count"]
+        # This dictionary refers to the *original* set of grain numbers
+        unique_counts_list = []
+        if orientation_unique_spots:
+            for grain_nr, data in orientation_unique_spots.items():
+                 # Store grain number and its calculated unique label count
+                 unique_counts_list.append([grain_nr, data["unique_label_count"]])
+        
+        # Convert to numpy array, handle empty case
+        if unique_counts_list:
+            unique_counts = np.array(unique_counts_list)
+        else:
+            unique_counts = np.empty((0, 2))
             
         try:
-            with h5py.File(output_h5, 'a') as hf:
-                # Create results group if it doesn't exist
-                if '/entry/results' not in hf:
-                    hf.create_group('/entry/results')
+            with h5py.File(output_h5, 'a') as hf: # Open in append mode
+                # Ensure results group exists
+                results_group = hf.require_group('/entry/results')
                     
-                # Store orientation data
-                if len(orientations.shape) == 1:
-                    orientations = np.expand_dims(orientations, axis=0)
-                    
-                # Store orientation and spot data
-                hf.create_dataset('/entry/results/orientations', data=orientations)
-                hf.create_dataset('/entry/results/filtered_orientations', data=orientations)
-                hf.create_dataset('/entry/results/spots', data=spots)
-                hf.create_dataset('/entry/results/filtered_spots', data=spots)
+                # Store orientation data (unfiltered and filtered)
+                # Ensure arrays are created/updated even if empty
+                if 'orientations' in results_group: del results_group['orientations']
+                results_group.create_dataset('orientations', data=orientations_unfiltered)
+                
+                if 'filtered_orientations' in results_group: del results_group['filtered_orientations']
+                results_group.create_dataset('filtered_orientations', data=filtered_orientations)
+                
+                # Store spot data (unfiltered and filtered)
+                if 'spots' in results_group: del results_group['spots']
+                results_group.create_dataset('spots', data=spots_unfiltered)
+
+                if 'filtered_spots' in results_group: del results_group['filtered_spots']
+                results_group.create_dataset('filtered_spots', data=filtered_spots)
                 
                 # Store unique spot counts with grain numbers
-                hf.create_dataset('/entry/results/unique_spots_per_orientation', data=unique_counts)
+                if 'unique_spots_per_orientation' in results_group: del results_group['unique_spots_per_orientation']
+                results_group.create_dataset('unique_spots_per_orientation', data=unique_counts)
                 
-                logger.info(f"Stored orientation and spot data in {output_h5}")
+                logger.info(f"Stored unfiltered and filtered orientation/spot data in {output_h5}")
+                
+                # --- Add Headers/Attributes ---
+                # Use the internal method to add headers etc. This should be called *after* datasets are created.
+                # This method needs the base output path to find the .txt files
+                base_output_path_for_headers = os.path.splitext(output_path)[0] # Remove .bin if present
+                self._store_binary_headers_in_h5(base_output_path_for_headers, hf)
+
                     
         except Exception as e:
-            logger.error(f"Error creating H5 output: {str(e)}")
+            logger.error(f"Error creating/updating H5 output in {output_h5}: {str(e)}")
 
     def _visualize_results(
         self, 
