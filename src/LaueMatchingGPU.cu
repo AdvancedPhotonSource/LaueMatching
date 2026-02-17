@@ -748,6 +748,7 @@ int main(int argc, char *argv[]) {
     // outArrThisFit = (double *)calloc(3 * maxNrSpots,
     // sizeof(*outArrThisFit)); // Hoisted
     memset(outArrThisFit, 0, 3 * maxNrSpots * sizeof(*outArrThisFit));
+    int simulNrSps = 0;
     int nrSps =
         writeCalcOverlap(image, eulerFit, hkls, nhkls, nrPxX, nrPxY, recipFit,
                          outArrThisFit, maxNrSpots, rotTranspose, pArr, pxX,
