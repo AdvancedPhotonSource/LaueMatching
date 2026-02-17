@@ -1,0 +1,50 @@
+name: Build
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    # Cache NLopt to speed up build
+    - name: Cache NLopt
+      id: cache-nlopt
+      uses: actions/cache@v4
+      with:
+        path: LIBS/NLOPT
+        key: ${{ runner.os }}-nlopt-${{ hashFiles('CMakeLists.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-nlopt-
+
+    # Cache the large orientation file to avoid re-downloading 6.7GB
+    - name: Cache Orientation File
+      id: cache-orients
+      uses: actions/cache@v4
+      with:
+        path: 100MilOrients.bin
+        key: orientation-file-v1
+    
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cmake build-essential
+        
+    - name: Build
+      run: ./build.sh
+      
+    - name: Verify Executable
+      run: |
+        if [ -f bin/LaueMatchingCPU ]; then
+          echo "Build successful: binary found."
+          ./bin/LaueMatchingCPU --help || true # Should show usage and exit 1, which is fine, but we force true so CI doesn't fail on exit code 1
+        else
+          echo "Build failed: binary not found."
+          exit 1
+        fi
