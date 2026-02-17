@@ -238,7 +238,17 @@ int main(int argc, char *argv[]) {
     fflush(stdout);
   } else {
     orients = (double *)malloc(szFile);
-    fread(orients, 1, szFile, orientF);
+    size_t rc = fread(orients, 1, szFile, orientF);
+    if (rc != szFile) {
+      printf(
+          "Error: Failed to read orientations. Expected %zu bytes, got %zu.\n",
+          szFile, rc);
+      if (ferror(orientF))
+        perror("Error details");
+      fclose(orientF);
+      free(orients);
+      return 1;
+    }
     fclose(orientF);
     printf("%zu Orientations read, took %lf seconds, now reading hkls\n",
            nrOrients, omp_get_wtime() - st_tm);
@@ -276,7 +286,19 @@ int main(int argc, char *argv[]) {
     return 1;
   }
   double *image = malloc(nrPxX * nrPxY * sizeof(*image));
-  fread(image, nrPxX * nrPxY * sizeof(*image), 1, imageFile);
+  size_t read_cts = fread(image, nrPxX * nrPxY * sizeof(*image), 1, imageFile);
+  if (read_cts != 1) {
+    if (ferror(imageFile)) {
+      perror("Error reading image file");
+    } else if (feof(imageFile)) {
+      printf("Error: Unexpected end of file while reading image.\n");
+    } else {
+      printf("Error: Failed to read full image data.\n");
+    }
+    free(image);
+    fclose(imageFile);
+    return 1;
+  }
   int pxNr, nonZeroPx = 0;
   for (pxNr = 0; pxNr < nrPxX * nrPxY; pxNr++) {
     if (image[pxNr] > 0)
@@ -514,16 +536,18 @@ int main(int argc, char *argv[]) {
     if (doFwd == 1) {
       ssize_t rc =
           pwrite(fwdFd, outArrThis, szArr * sizeof(*outArrThis), OffsetHere);
-      if (rc < 0)
-        printf("Could not write to output file\n");
-      else if (rc != (ssize_t)(szArr * sizeof(*outArrThis))) {
+      if (rc < 0) {
+        perror("Error: Could not write to output file");
+      } else if (rc != (ssize_t)(szArr * sizeof(*outArrThis))) {
         size_t off2 = OffsetHere + rc;
         size_t offset_arr = rc / sizeof(*outArrThis);
         size_t bytesRemaining = szArr * sizeof(*outArrThis) - rc;
         rc = pwrite(fwdFd, outArrThis + offset_arr, bytesRemaining, off2);
-        if (rc != (ssize_t)bytesRemaining)
-          printf(
-              "Second try didn't work either. Too big array. Update code.\n");
+        if (rc != (ssize_t)bytesRemaining) {
+          perror("Error: Second write attempt failed");
+          printf("Partial write: Expected %zu bytes, wrote %zd\n",
+                 bytesRemaining, rc);
+        }
       }
     }
     if (LowNr != 0)

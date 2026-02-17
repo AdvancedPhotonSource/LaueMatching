@@ -272,7 +272,17 @@ int main(int argc, char *argv[]) {
     fflush(stdout);
   } else {
     orients = (double *)malloc(szFile);
-    fread(orients, 1, szFile, orientF);
+    size_t rc = fread(orients, 1, szFile, orientF);
+    if (rc != szFile) {
+      printf(
+          "Error: Failed to read orientations. Expected %zu bytes, got %zu.\n",
+          szFile, rc);
+      if (ferror(orientF))
+        perror("Error details");
+      fclose(orientF);
+      free(orients);
+      return 1;
+    }
     fclose(orientF);
     printf("%zu Orientations read, took %lf seconds, now reading hkls\n",
            nrOrients, omp_get_wtime() - st_tm);
@@ -310,7 +320,19 @@ int main(int argc, char *argv[]) {
     return 1;
   }
   double *image = (double *)malloc(nrPxX * nrPxY * sizeof(*image));
-  fread(image, nrPxX * nrPxY * sizeof(*image), 1, imageFile);
+  size_t read_cts = fread(image, nrPxX * nrPxY * sizeof(*image), 1, imageFile);
+  if (read_cts != 1) {
+    if (ferror(imageFile)) {
+      perror("Error reading image file");
+    } else if (feof(imageFile)) {
+      printf("Error: Unexpected end of file while reading image.\n");
+    } else {
+      printf("Error: Failed to read full image data.\n");
+    }
+    free(image);
+    fclose(imageFile);
+    return 1;
+  }
   int pxNr, nonZeroPx = 0;
   for (pxNr = 0; pxNr < nrPxX * nrPxY; pxNr++) {
     if (image[pxNr] > 0)
@@ -529,7 +551,15 @@ int main(int argc, char *argv[]) {
         free(outArr);
         return 1;
       }
-      fread(outArr, szArr * sizeof(uint16_t), 1, fwdFN);
+      size_t read_cts = fread(outArr, szArr * sizeof(uint16_t), 1, fwdFN);
+      if (read_cts != 1) {
+        printf("Error: Failed to read forward simulation file.\n");
+        if (ferror(fwdFN))
+          perror("Error details");
+        free(outArr);
+        fclose(fwdFN);
+        return 1;
+      }
       fclose(fwdFN);
     }
     clock_t end = clock();
