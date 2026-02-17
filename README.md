@@ -58,7 +58,7 @@ LaueMatching is a software package for indexing orientations in Laue diffraction
 ./build.sh
 ```
 
-**Note**: This script will automatically download the required ~6.7 GB orientation database (`100MilOrients.bin`) if it is not present.
+**Note**: The first time you run this script, it will automatically download (~6.7 GB) and reassemble the required orientation database (`100MilOrients.bin`), if it is not already present.
 
 ### Using CMake Directly
 
