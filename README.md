@@ -222,10 +222,18 @@ graph TD
     PostProc --> Sim{"Simulation Enabled?"}
     
     Sim -- Yes --> FwdSim["Forward Simulation"]
-    Sim -- No --> Output
-    FwdSim --> Output["Final HDF5 Output"]
+    Sim -- No --> Output["Final HDF5 Output"]
+   If you have any questions or meaningful contributions, please feel free to contact Hemant Sharma (hsharma@anl.gov).
+
+## Optimization Updates (2024)
+
+### Memory & Performance
+- **Fixed Memory Leaks**: Resolved `outArrThisFit` memory leaks in both CPU and GPU optimization loops.
+- **Hoisted Allocations**: Moved memory allocations out of critical loops to reduce overhead.
+- **CUDA Error Checking**: Added `gpuErrchk` macro for robust error handling in `LaueMatchingGPU.cu`.
 ```
 
 ## Contact
 
 Hemant Sharma — hsharma@anl.gov
+```

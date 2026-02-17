@@ -25,6 +25,20 @@ double phiVol;
 int nSym;
 double Symm[24][4];
 
+#define gpuErrchk(ans)                                                         \
+  {                                                                            \
+    gpuAssert((ans), __FILE__, __LINE__);                                      \
+  }
+inline void gpuAssert(cudaError_t code, const char *file, int line,
+                      bool abort = true) {
+  if (code != cudaSuccess) {
+    fprintf(stderr, "GPUassert: %s %s %d\n", cudaGetErrorString(code), file,
+            line);
+    if (abort)
+      exit(code);
+  }
+}
+
 // ── CUDA kernel ─────────────────────────────────────────────────────────
 __global__ void compare(size_t nrPxX, size_t nOr, size_t nrMaxSpots,
                         double minInt, size_t minSps, uint16_t *oA, double *im,
@@ -569,19 +583,19 @@ int main(int argc, char *argv[]) {
     // CUDA
     start = clock();
     uint16_t *device_outArr;
-    cudaMalloc(&device_outArr, szArr * sizeof(uint16_t));
+    gpuErrchk(cudaMalloc(&device_outArr, szArr * sizeof(uint16_t)));
     double *device_image;
-    cudaMalloc(&device_image, nrPxX * nrPxY * sizeof(double));
+    gpuErrchk(cudaMalloc(&device_image, nrPxX * nrPxY * sizeof(double)));
     double *device_matchedArr;
-    cudaMalloc(&device_matchedArr, nrOrients * sizeof(double));
-    cudaMemcpy(device_outArr, outArr, szArr * sizeof(uint16_t),
-               cudaMemcpyHostToDevice);
-    cudaDeviceSynchronize();
-    cudaMemcpy(device_image, image, nrPxX * nrPxY * sizeof(double),
-               cudaMemcpyHostToDevice);
-    cudaDeviceSynchronize();
-    cudaMemset(device_matchedArr, 0, nrOrients * sizeof(double));
-    cudaDeviceSynchronize();
+    gpuErrchk(cudaMalloc(&device_matchedArr, nrOrients * sizeof(double)));
+    gpuErrchk(cudaMemcpy(device_outArr, outArr, szArr * sizeof(uint16_t),
+                         cudaMemcpyHostToDevice));
+    gpuErrchk(cudaDeviceSynchronize());
+    gpuErrchk(cudaMemcpy(device_image, image, nrPxX * nrPxY * sizeof(double),
+                         cudaMemcpyHostToDevice));
+    gpuErrchk(cudaDeviceSynchronize());
+    gpuErrchk(cudaMemset(device_matchedArr, 0, nrOrients * sizeof(double)));
+    gpuErrchk(cudaDeviceSynchronize());
     end = clock();
     printf("Time elapsed to prepare the GPU: %lf\n",
            (double)(end - start) / CLOCKS_PER_SEC);
@@ -589,10 +603,10 @@ int main(int argc, char *argv[]) {
     compare<<<(nrOrients + 1023) / 1024, 1024>>>(
         nrPxX, nrOrients, maxNrSpots, minIntensity, minNrSpots, device_outArr,
         device_image, device_matchedArr);
-    cudaDeviceSynchronize();
-    cudaMemcpy(matchedArr, device_matchedArr, nrOrients * sizeof(double),
-               cudaMemcpyDeviceToHost);
-    cudaDeviceSynchronize();
+    gpuErrchk(cudaDeviceSynchronize());
+    gpuErrchk(cudaMemcpy(matchedArr, device_matchedArr,
+                         nrOrients * sizeof(double), cudaMemcpyDeviceToHost));
+    gpuErrchk(cudaDeviceSynchronize());
     end = clock();
     printf("Time elapsed to match on the GPU: %lf\n",
            (double)(end - start) / CLOCKS_PER_SEC);
@@ -710,6 +724,9 @@ int main(int argc, char *argv[]) {
     double orientBest[3][3], eulerBest[3], eulerFit[3], orientFit[3][3], q1[4],
         q2[4];
     int iJ, iK;
+    // Hoisted allocation
+    double *outArrThisFit =
+        (double *)calloc(3 * maxNrSpots, sizeof(*outArrThisFit));
     for (iJ = 0; iJ < 3; iJ++) {
       for (iK = 0; iK < 3; iK++) {
         orientBest[iJ][iK] = FinOrientArr[iterNr * 9 + 3 * iJ + iK];
@@ -720,44 +737,34 @@ int main(int argc, char *argv[]) {
       eulerFit[iJ] = eulerBest[iJ];
     int saveExtraInfo = 0;
     int doCrystalFit = 0;
-    double *outArrThisFit =
-        (double *)calloc(3 * maxNrSpots, sizeof(*outArrThisFit));
+    // double *outArrThisFit = (double *)calloc(3 * maxNrSpots,
+    // sizeof(*outArrThisFit)); // Hoisted
+    memset(outArrThisFit, 0, 3 * maxNrSpots * sizeof(*outArrThisFit));
     double latCFit[6], recipFit[3][3], mv = 0;
     FitOrientation(image, eulerBest, hkls, nhkls, nrPxX, nrPxY, recip,
                    outArrThisFit, maxNrSpots, rotTranspose, pArr, pxX, pxY, Elo,
                    Ehi, tol, LatticeParameter, eulerFit, latCFit, &mv,
                    doCrystalFit);
-    free(outArrThisFit); // FIX: was leaked
-    doCrystalFit = 1;
-    for (iK = 0; iK < 3; iK++)
-      eulerBest[iK] = eulerFit[iK];
-    outArrThisFit = (double *)calloc(3 * maxNrSpots, sizeof(*outArrThisFit));
-    FitOrientation(image, eulerBest, hkls, nhkls, nrPxX, nrPxY, recip,
-                   outArrThisFit, maxNrSpots, rotTranspose, pArr, pxX, pxY, Elo,
-                   Ehi, tol, LatticeParameter, eulerFit, latCFit, &mv,
-                   doCrystalFit);
-    free(outArrThisFit); // FIX: was leaked
-    Euler2OrientMat(eulerFit, orientFit);
-    OrientMat2Quat33(orientBest, q1);
-    OrientMat2Quat33(orientFit, q2);
-    int simulNrSps = 0;
-    calcRecipArray(latCFit, sg_num, recipFit);
-    outArrThisFit = (double *)calloc(3 * maxNrSpots, sizeof(*outArrThisFit));
+    // outArrThisFit = (double *)calloc(3 * maxNrSpots,
+    // sizeof(*outArrThisFit)); // Hoisted
+    memset(outArrThisFit, 0, 3 * maxNrSpots * sizeof(*outArrThisFit));
     int nrSps =
         writeCalcOverlap(image, eulerFit, hkls, nhkls, nrPxX, nrPxY, recipFit,
                          outArrThisFit, maxNrSpots, rotTranspose, pArr, pxX,
                          pxY, Elo, Ehi, ExtraInfo, saveExtraInfo, &simulNrSps);
-    free(outArrThisFit); // FIX: was leaked
+    // free(outArrThisFit); // Hoisted
     if (nrSps >= minNrSpots) {
       int bs = bsArr[iterNr];
       double miso = GetMisOrientation(q1, q2);
       saveExtraInfo = iterNr + 1;
       calcRecipArray(latCFit, sg_num, recipFit);
-      outArrThisFit = (double *)calloc(3 * maxNrSpots, sizeof(*outArrThisFit));
+      // outArrThisFit = (double *)calloc(3 * maxNrSpots,
+      // sizeof(*outArrThisFit)); // Hoisted
+      memset(outArrThisFit, 0, 3 * maxNrSpots * sizeof(*outArrThisFit));
       writeCalcOverlap(image, eulerFit, hkls, nhkls, nrPxX, nrPxY, recipFit,
                        outArrThisFit, maxNrSpots, rotTranspose, pArr, pxX, pxY,
                        Elo, Ehi, ExtraInfo, saveExtraInfo, &simulNrSps);
-      free(outArrThisFit); // FIX: was leaked
+      // free(outArrThisFit); // Hoisted
       double OF[3][3];
       MatrixMultF33(orientFit, recipFit, OF);
 #pragma omp critical
@@ -783,6 +790,7 @@ int main(int argc, char *argv[]) {
         fprintf(outF, "%-13.4lf\t%-13.7lf\t%d\n", matchedArr[bs], miso, bs);
       }
     }
+    free(outArrThisFit); // Final free per thread/iteration
   }
   fclose(ExtraInfo);
   fclose(outF);
