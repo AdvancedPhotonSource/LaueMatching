@@ -3291,7 +3291,8 @@ class EnhancedImageProcessor:
         def add_param_rows(group_name, params):
             rows = ""
             for i, (name, value) in enumerate(params):
-                rows += f"<tr>{'<td rowspan=\"{}\">{}</td>'.format(len(params), group_name) if i == 0 else ''}<td>{name}</td><td>{value}</td></tr>\n"
+                rowspan_cell = '<td rowspan="{}">{}</td>'.format(len(params), group_name) if i == 0 else ''
+                rows += f"<tr>{rowspan_cell}<td>{name}</td><td>{value}</td></tr>\n"
             return rows
 
         html += add_param_rows("Core/Detector", core_params)
