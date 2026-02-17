@@ -1115,7 +1115,7 @@ int main(int argc, char *argv[])
 		}
 		int orientNr;
         double *qhatarr;
-        qhatarr = calloc(maxNrSpots*3,sizeof(qhatarr));
+        qhatarr = calloc(maxNrSpots*3,sizeof(*qhatarr));
         size_t loc;
 		uint16_t px,py;
 		double thisInt;
