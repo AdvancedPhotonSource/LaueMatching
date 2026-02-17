@@ -1715,7 +1715,7 @@ class EnhancedImageProcessor:
 
         # Find executable path relative to script location
         script_dir = os.path.dirname(os.path.realpath(__file__))
-        build_dir = os.path.join(script_dir, 'build')
+        build_dir = os.path.join(script_dir, 'bin')
 
         # Choose the appropriate executable
         do_forward = self.config.get("do_forward", False)
