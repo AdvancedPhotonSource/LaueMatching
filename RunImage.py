@@ -459,7 +459,10 @@ class ConfigurationManager:
                 img_proc.denoise_strength = get_val(1, float)
             elif key == 'EdgeEnhancement':
                 img_proc.edge_enhancement = bool(get_val(1, int))
-            # --- Ignore unknown keys? ---
+            # --- Keys used by other scripts (GenerateSimulation.py, etc.) ---
+            elif key in ('AStar', 'SimulationSmoothingWidth'):
+                pass  # Recognized but not used by RunImage.py
+            # --- Ignore truly unknown keys ---
             else:
                 logger.warning(f"Ignoring unknown configuration key '{key}' on line: '{line}'")
 
@@ -2075,7 +2078,7 @@ class EnhancedImageProcessor:
                     hoverinfo="text"
                 )
                 fig.add_trace(exp_trace, row=1, col=1)
-                fig.add_trace(exp_trace.copy(), row=1, col=3) # Add to overlay plot too
+                fig.add_trace(go.Scatter(exp_trace), row=1, col=3) # Add to overlay plot too
 
                 # Store positions for matching later
                 matched_exp_spots_dict[grain_nr] = set((round(float(s[5])), round(float(s[6]))) for s in grain_exp_spots)
@@ -2111,7 +2114,7 @@ class EnhancedImageProcessor:
                     hoverinfo="text"
                 )
                 fig.add_trace(sim_trace, row=1, col=2)
-                fig.add_trace(sim_trace.copy(), row=1, col=3) # Add to overlay plot too
+                fig.add_trace(go.Scatter(sim_trace), row=1, col=3) # Add to overlay plot too
 
                 # --- Find Missing Simulated Spots ---
                 missing_spots_dict[grain_nr] = []
@@ -3252,11 +3255,12 @@ class EnhancedImageProcessor:
         simulation_file = f"{image_basename}.simulation_comparison.html"
         threed_file = f"{image_basename}.3D.html"
 
-        if os.path.exists(os.path.join(self.config.result_dir, interactive_file)):
+        result_dir = self.config.get("result_dir", "results")
+        if os.path.exists(os.path.join(result_dir, interactive_file)):
              html += f'<li><a href="{interactive_file}" target="_blank">Interactive Diffraction Pattern & Quality Map</a></li>'
-        if os.path.exists(os.path.join(self.config.result_dir, simulation_file)):
+        if os.path.exists(os.path.join(result_dir, simulation_file)):
              html += f'<li><a href="{simulation_file}" target="_blank">Simulation Comparison</a></li>'
-        if vis_config.generate_3d and os.path.exists(os.path.join(self.config.result_dir, threed_file)):
+        if vis_config.generate_3d and os.path.exists(os.path.join(result_dir, threed_file)):
              html += f'<li><a href="{threed_file}" target="_blank">3D Orientation Visualization</a></li>'
         html += """</ul>"""
 
