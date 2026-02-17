@@ -85,7 +85,27 @@ cmake .. -DUSE_CUDA=ON -DCMAKE_BUILD_TYPE=Release
 make -j$(nproc)
 ```
 
-Default CUDA architectures: sm_70, sm_80, sm_86, sm_90. Override with `-DCMAKE_CUDA_ARCHITECTURES="80;90"`.
+Default CUDA architectures: sm_70, sm_80, sm_86, sm_90. Override with `CMAKE_CUDA_ARCHITECTURES="75;80;86"`.
+
+#### Custom CUDA Architectures
+To build for specific GPU architectures (e.g., Turing sm_75 and Ampere sm_80), set the `CMAKE_CUDA_ARCHITECTURES` environment variable:
+
+```bash
+CMAKE_CUDA_ARCHITECTURES="75;80" ./build.sh gpu
+```
+
+#### Custom NVCC Path
+If your `nvcc` is not in the default PATH, or if you want to use a specific version, you can override it using the `CMAKE_CUDA_COMPILER` environment variable:
+
+```bash
+export CMAKE_CUDA_COMPILER=/usr/local/cuda-11.8/bin/nvcc
+./build.sh gpu
+```
+
+Or as a one-liner:
+```bash
+CMAKE_CUDA_COMPILER=/path/to/nvcc ./build.sh gpu
+```
 
 ### Build Options
 
