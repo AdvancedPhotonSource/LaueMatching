@@ -1,9 +1,27 @@
+# Build artifacts
+build/
+bin/
+*.o
+*.so
+*.dylib
+*.a
+
+# External libraries
+LIBS/
+
+# Simulation outputs
+simulation/results_simulation/
+simulation/simulated_*
+simulation/*.bin
+# simulation/*.txt -> commented out because simulation/params_sim.txt is needed
+# Use whitelist for simulation txt files if needed, but params_sim.txt is tracked
+simulation/valid_hkls.csv
+
+# System
 .DS_Store
 .vscode/
-bin
-LIBS
-*.bin
-simulation/*.bin
-simulation/valid_hkls.csv
-simulation/results_simulation
-simulation/simulated_1.h5*
+
+# Large data
+*.h5
+*.tif
+100MilOrients.bin
