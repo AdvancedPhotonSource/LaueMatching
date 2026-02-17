@@ -2110,7 +2110,7 @@ class EnhancedImageProcessor:
                     x=unique_spots_array[:, 0], y=unique_spots_array[:, 1], # X=col0, Y=col1
                     mode='markers', name=f"Sim Grain {grain_nr}", legendgroup=f'grain_{grain_nr}',
                     marker=dict(color=color, size=8, symbol='x', line=dict(width=2, color=color)),
-                    hovertext=[f"Grain: {grain_nr}<br>Pos: ({s[0]:.1f}, {s[1]:.1f})<br>Energy: {s[7]:.2f} keV<br>Source: Sim" for s in unique_spots_array],
+                    hovertext=[f"Grain: {grain_nr}<br>Pos: ({s[0]:.1f}, {s[1]:.1f})<br>Energy: {s[7]:.2f} keV<br>Source: Sim" if s.shape[0] > 7 else f"Grain: {grain_nr}<br>Pos: ({s[0]:.1f}, {s[1]:.1f})<br>Source: Sim" for s in unique_spots_array],
                     hoverinfo="text"
                 )
                 fig.add_trace(sim_trace, row=1, col=2)
@@ -3270,12 +3270,13 @@ class EnhancedImageProcessor:
             <h2>Key Processing Parameters</h2>
             <table><thead><tr><th>Parameter Group</th><th>Parameter</th><th>Value</th></tr></thead><tbody>"""
 
+        cfg = self.config.config  # Access the underlying LaueConfig object
         core_params = [
-            ("Space Group", self.config.space_group), ("Symmetry", self.config.symmetry),
-            ("Lattice Parameters", self.config.lattice_parameter), ("Detector Size (px)", f"{self.config.nr_px_x} x {self.config.nr_px_y}"),
-            ("Pixel Size (mm)", f"{self.config.px_x} x {self.config.px_y}"), ("Distance (mm?)", self.config.distance)
+            ("Space Group", cfg.space_group), ("Symmetry", cfg.symmetry),
+            ("Lattice Parameters", cfg.lattice_parameter), ("Detector Size (px)", f"{cfg.nr_px_x} x {cfg.nr_px_y}"),
+            ("Pixel Size (mm)", f"{cfg.px_x} x {cfg.px_y}"), ("Distance (mm?)", cfg.distance)
         ]
-        img_proc = self.config.image_processing
+        img_proc = cfg.image_processing
         img_params = [
             ("Threshold Method", img_proc.threshold_method), ("Threshold Value (Fixed)", img_proc.threshold_value),
             ("Threshold Percentile", img_proc.threshold_percentile), ("Min Area", img_proc.min_area),
@@ -3283,16 +3284,16 @@ class EnhancedImageProcessor:
             ("Watershed", img_proc.watershed_enabled), ("Enhance Contrast", img_proc.enhance_contrast),
             ("Denoise", img_proc.denoise_image), ("Edge Enhance", img_proc.edge_enhancement)
         ]
-        filt_params = [("Min Unique Spots", self.config.min_good_spots)]
+        filt_params = [("Min Unique Spots", cfg.min_good_spots)]
         exec_params = [
-             ("Processing Type", self.config.processing_type), ("CPUs Used", self.config.num_cpus),
-             ("Do Forward Sim?", self.config.do_forward), ("Min Nr Spots (Exec)", self.config.min_nr_spots),
-             ("Max Laue Spots (Exec)", self.config.max_laue_spots), ("Max Angle (Exec)", self.config.maxAngle)
+             ("Processing Type", cfg.processing_type), ("CPUs Used", cfg.num_cpus),
+             ("Do Forward Sim?", cfg.do_forward), ("Min Nr Spots (Exec)", cfg.min_nr_spots),
+             ("Max Laue Spots (Exec)", cfg.max_laue_spots), ("Max Angle (Exec)", cfg.maxAngle)
         ]
         sim_params = [
-            ("Enable Sim (Python)", self.config.simulation.enable_simulation),
-            ("Skip Percentage", self.config.simulation.skip_percentage),
-            ("Simulation Energies", self.config.simulation.energies)
+            ("Enable Sim (Python)", cfg.simulation.enable_simulation),
+            ("Skip Percentage", cfg.simulation.skip_percentage),
+            ("Simulation Energies", cfg.simulation.energies)
         ]
 
         def add_param_rows(group_name, params):
