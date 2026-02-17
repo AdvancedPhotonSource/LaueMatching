@@ -2097,20 +2097,20 @@ class EnhancedImageProcessor:
             unique_sim_spots_for_grain = []
             seen_sim_positions = set()
             if grain_sim_spots.size > 0:
-                 for spot in grain_sim_spots:
-                      # IMPORTANT: GenerateSimulation.py output: X=col0, Y=col1. Plotly: x=X, y=Y.
-                      pos_key = (round(float(spot[0])), round(float(spot[1]))) # Use X, Y from file
-                      if pos_key not in seen_sim_positions:
-                           unique_sim_spots_for_grain.append(spot)
-                           seen_sim_positions.add(pos_key)
+                  for spot in grain_sim_spots:
+                       # GenerateSimulation.py output: Y=col0, X=col1, GrainID=col2, Matched=col3
+                       pos_key = (round(float(spot[1])), round(float(spot[0]))) # X, Y
+                       if pos_key not in seen_sim_positions:
+                            unique_sim_spots_for_grain.append(spot)
+                            seen_sim_positions.add(pos_key)
 
             if unique_sim_spots_for_grain:
                 unique_spots_array = np.array(unique_sim_spots_for_grain)
                 sim_trace = go.Scatter(
-                    x=unique_spots_array[:, 0], y=unique_spots_array[:, 1], # X=col0, Y=col1
+                    x=unique_spots_array[:, 1], y=unique_spots_array[:, 0], # X=col1, Y=col0
                     mode='markers', name=f"Sim Grain {grain_nr}", legendgroup=f'grain_{grain_nr}',
                     marker=dict(color=color, size=8, symbol='x', line=dict(width=2, color=color)),
-                    hovertext=[f"Grain: {grain_nr}<br>Pos: ({s[0]:.1f}, {s[1]:.1f})<br>Energy: {s[7]:.2f} keV<br>Source: Sim" if s.shape[0] > 7 else f"Grain: {grain_nr}<br>Pos: ({s[0]:.1f}, {s[1]:.1f})<br>Source: Sim" for s in unique_spots_array],
+                    hovertext=[f"Grain: {grain_nr}<br>Pos: ({s[1]:.1f}, {s[0]:.1f})<br>Source: Sim" for s in unique_spots_array],
                     hoverinfo="text"
                 )
                 fig.add_trace(sim_trace, row=1, col=2)
@@ -2122,7 +2122,7 @@ class EnhancedImageProcessor:
                 exp_positions = matched_exp_spots_dict.get(grain_nr, set())
 
                 for spot in unique_spots_array:
-                    sim_pos = (round(float(spot[0])), round(float(spot[1]))) # X, Y
+                    sim_pos = (round(float(spot[1])), round(float(spot[0]))) # X=col1, Y=col0
                     is_matched = False
                     min_dist_sq = float('inf')
                     # Check proximity to any experimental spot for this grain
@@ -2149,10 +2149,10 @@ class EnhancedImageProcessor:
                  color = 'grey' # Fallback color
 
             missing_trace = go.Scatter(
-                 x=missing_array[:, 0], y=missing_array[:, 1], # X=col0, Y=col1
+                 x=missing_array[:, 1], y=missing_array[:, 0], # X=col1, Y=col0
                  mode='markers', name=f"Missing Sim {grain_nr}", legendgroup=f'grain_{grain_nr}',
                  marker=dict(color=color, size=10, symbol='diamond-open', line=dict(width=2, color='black')),
-                 hovertext=[f"Grain: {grain_nr}<br>Pos: ({s[0]:.1f}, {s[1]:.1f})<br>Energy: {s[7]:.2f} keV<br>Source: Missing Sim" for s in missing_array],
+                 hovertext=[f"Grain: {grain_nr}<br>Pos: ({s[1]:.1f}, {s[0]:.1f})<br>Source: Missing Sim" for s in missing_array],
                  hoverinfo="text",
                  showlegend=False # Avoid cluttering legend too much
             )
