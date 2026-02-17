@@ -43,6 +43,34 @@ echo "  Jobs:  ${NPROC}"
 echo "  Build: ${BUILD_DIR}"
 echo ""
 
+# Download 100MilOrients.bin if missing
+ORIENT_FILE="${SCRIPT_DIR}/100MilOrients.bin"
+ORIENT_URL="https://anl.box.com/shared/static/qhao454ub2nh5t89zymj1bhlxw1q4obu.bin"
+
+if [ ! -f "${ORIENT_FILE}" ]; then
+  echo "----------------------------------------------------------------"
+  echo "Orientation file not found: ${ORIENT_FILE}"
+  echo "Downloading default orientation database (~6.7 GB)..."
+  echo "This may take a while."
+  echo "----------------------------------------------------------------"
+  
+  if command -v wget &> /dev/null; then
+    wget -O "${ORIENT_FILE}" "${ORIENT_URL}"
+  elif command -v curl &> /dev/null; then
+    curl -L -o "${ORIENT_FILE}" "${ORIENT_URL}"
+  else
+    echo "Error: Neither wget nor curl found. Please download manually from:"
+    echo "  ${ORIENT_URL}"
+    echo "and save to: ${ORIENT_FILE}"
+    exit 1
+  fi
+  echo "Download complete."
+else
+  echo "Found orientation file: ${ORIENT_FILE}"
+fi
+
+echo ""
+
 mkdir -p "${BUILD_DIR}"
 cd "${BUILD_DIR}"
 
