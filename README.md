@@ -1,76 +1,121 @@
-# LaueMatching v1.0
+<p align="center">
+  <img src="logos/logo.png" alt="LaueMatching Logo" width="400">
+</p>
 
-LaueMatching is a software package for indexing orientations in Laue diffraction images.
+# LaueMatching
 
-## Version History
+[![License](https://img.shields.io/badge/License-UChicago_Argonne-blue.svg)](LICENSE)
 
-### v1.0 (2026-02-17)
-- **Code Refactor**: Consolidated ~700 lines of duplicated code into shared `LaueMatchingHeaders.h`.
-- **Bug Fixes**:
-  - Fixed c/a ratio fitting (was integer division `1/3`).
-  - Fixed negative pixel handling (uint16_t underflow).
-  - Fixed trigonal symmetry definition (consistent between CPU/GPU).
-  - Fixed memory leaks and file descriptor handling.
-  - Fixed GPU unique-solution indexing bug.
-- **Build System**: Improved CMake configuration with working strict warning flags.
+**LaueMatching** is a high-performance tool for indexing crystal orientations from polychromatic (Laue) X-ray diffraction images. It matches experimentally observed diffraction spot patterns against a pre-computed database of 100 million candidate orientations to rapidly determine the crystallographic orientation of each illuminated grain.
 
-## Features
+Developed at the [Advanced Photon Source](https://www.aps.anl.gov/) at Argonne National Laboratory.
 
-- Fast indexing of Laue diffraction patterns from polychromatic X-ray data
-- CPU (OpenMP) and GPU (CUDA) implementations
-- Orientation matching with configurable tolerance and crystal symmetry support
-- Optional lattice-parameter refinement (including c/a ratio fitting)
-- Python utilities for HKL generation, image cleanup, simulation, and analysis
+**Contact:** [Hemant Sharma](mailto:hsharma@anl.gov?subject=[LaueMatching]%20From%20Github) (hsharma@anl.gov)
+
+---
+
+## Key Features
+
+- **Fast Orientation Indexing** — matches Laue patterns against 100 million pre-computed orientations
+- **CPU & GPU** — parallel implementations via OpenMP (CPU) and CUDA (GPU)
+- **Crystal Symmetry** — supports all crystal systems (cubic through triclinic, including trigonal)
+- **Lattice Parameter Refinement** — optional c/a ratio fitting via NLopt optimization
+- **End-to-End Pipeline** — Python wrappers for image preprocessing, indexing, and forward simulation validation
+
+---
+
+## How It Works
+
+```mermaid
+graph TD
+    Input["Input Image (H5)"] --> Load{"Load & Validate"}
+    Load --> BgSub["Background Subtraction"]
+    BgSub --> Preproc["Enhance & Threshold"]
+    Preproc --> Blobs["Find Blobs (Connected Components)"]
+    Blobs --> Filter["Filter Small Spots"]
+    Filter --> Blur["Gaussian Blur"]
+
+    Blur --> Indexer("LaueMatching Binary")
+    Config[Params] --> Indexer
+    Orients["Orientation DB (100M)"] --> Indexer
+    HKLs["HKL List"] --> Indexer
+
+    Indexer --> Results["Raw Solutions"]
+    Results --> PostProc["Filter & Refine"]
+    PostProc --> Sim{"Forward Simulation?"}
+
+    Sim -- Yes --> FwdSim["Forward Simulation"]
+    FwdSim --> Output["Final HDF5 Output"]
+    Sim -- No --> Output
+```
+
+The `RunImage.py` script orchestrates a multi-stage workflow:
+
+1. **Load Image** — reads HDF5 detector frames
+2. **Background Subtraction** — computes or loads a median background
+3. **Preprocessing** — denoising (non-local means), contrast enhancement (CLAHE), edge sharpening (unsharp mask), and thresholding (adaptive/Otsu/percentile/fixed)
+4. **Spot Finding** — identifies connected components and filters by area
+5. **Blurring** — Gaussian blur to connect fragmented spots for robust matching
+6. **Indexing** — calls the compiled `LaueMatchingCPU` or `LaueMatchingGPU` binary
+7. **Post-Processing** — filters by unique spot count, refines orientations
+8. **Forward Simulation** — (optional) validates solutions against the original image
+9. **Output** — aggregates results, logs, and simulations into a comprehensive HDF5 file
+
+---
 
 ## Project Structure
 
 ```
-├── src/                     # C / CUDA source code
-│   ├── LaueMatchingCPU.c    # CPU implementation (OpenMP)
-│   ├── LaueMatchingGPU.cu   # GPU implementation (CUDA)
-│   └── LaueMatchingHeaders.h
-├── bin/                     # Compiled binaries (created by build)
-├── LIBS/NLOPT/              # NLopt dependency (auto-downloaded)
-├── simulation/              # Example data and parameter files
-├── GenerateHKLs.py          # Generate valid HKL list for a crystal
-├── GenerateSimulation.py    # Create synthetic Laue patterns
-├── ImageCleanup.py          # Pre-process raw detector images
-├── RunImage.py              # End-to-end indexing pipeline
-├── CMakeLists.txt           # CMake build system
-├── build.sh                 # Convenience build script
-├── Makefile                 # Legacy Makefile (deprecated)
-└── 100MilOrients.bin        # Pre-computed candidate orientations (~6.7 GB)
+LaueMatching/
+├── src/                       # C / CUDA source code
+│   ├── LaueMatchingCPU.c      # CPU implementation (OpenMP)
+│   ├── LaueMatchingGPU.cu     # GPU implementation (CUDA)
+│   └── LaueMatchingHeaders.h  # Shared definitions and utilities
+├── bin/                       # Compiled binaries (created by build)
+├── logos/                     # Project logo
+├── LIBS/NLOPT/                # NLopt dependency (auto-downloaded)
+├── simulation/                # Example data and parameter files
+├── GenerateHKLs.py            # Generate valid HKL list for a crystal
+├── GenerateSimulation.py      # Create synthetic Laue patterns
+├── ImageCleanup.py            # Pre-process raw detector images
+├── RunImage.py                # End-to-end indexing pipeline
+├── CMakeLists.txt             # CMake build system
+├── build.sh                   # Convenience build script
+├── requirements.txt           # Python dependencies
+└── 100MilOrients.bin          # Pre-computed candidate orientations (~6.7 GB)
 ```
+
+---
 
 ## Prerequisites
 
-- **C compiler** with C99 support (GCC recommended)
-- **CMake** ≥ 3.18
-- **OpenMP** (usually bundled with GCC; on macOS use `brew install gcc`)
-- **CUDA toolkit** (optional, only needed for the GPU build)
-- **Python 3** with packages listed in `requirements.txt`
+| Requirement | Details |
+|-------------|---------|
+| **C compiler** | C99 support (GCC recommended) |
+| **CMake** | ≥ 3.18 |
+| **OpenMP** | Bundled with GCC; on macOS use `brew install gcc` |
+| **CUDA toolkit** | Optional, only for GPU build |
+| **Python 3** | With packages in `requirements.txt` |
 
-## Building
+---
+
+## Installation
 
 ### Quick Start (CPU Only)
 
 ```bash
+git clone https://github.com/AdvancedPhotonSource/LaueMatching.git
+cd LaueMatching
 ./build.sh
 ```
 
-**Note**: The first time you run this script, it will automatically download (~6.7 GB) and reassemble the required orientation database (`100MilOrients.bin`), if it is not already present.
+> **Note:** The first build automatically downloads (~6.7 GB) and reassembles the orientation database (`100MilOrients.bin`).
 
-### Using CMake Directly
-
-If you prefer to run CMake manually, you must ensure `100MilOrients.bin` is present in the root directory. You can download it by running `./build.sh` once or manually fetching it from the provided URL.
+### Python Dependencies
 
 ```bash
-mkdir -p build && cd build
-cmake .. -DUSE_CUDA=OFF -DCMAKE_BUILD_TYPE=Release
-make -j$(nproc)
+pip install -r requirements.txt
 ```
-
-NLOPT is automatically downloaded and built into `LIBS/NLOPT/` if not already present.
 
 ### GPU Build (Requires CUDA)
 
@@ -79,30 +124,23 @@ NLOPT is automatically downloaded and built into `LIBS/NLOPT/` if not already pr
 ```
 
 Or manually:
+
 ```bash
 mkdir -p build && cd build
 cmake .. -DUSE_CUDA=ON -DCMAKE_BUILD_TYPE=Release
 make -j$(nproc)
 ```
 
-Default CUDA architectures: sm_70, sm_80, sm_86, sm_90. Override with `CMAKE_CUDA_ARCHITECTURES="75;80;86"`.
+Default CUDA architectures: sm_70, sm_80, sm_86, sm_90.
 
 #### Custom CUDA Architectures
-To build for specific GPU architectures (e.g., Turing sm_75 and Ampere sm_80), set the `CMAKE_CUDA_ARCHITECTURES` environment variable:
 
 ```bash
 CMAKE_CUDA_ARCHITECTURES="75;80" ./build.sh gpu
 ```
 
 #### Custom NVCC Path
-If your `nvcc` is not in the default PATH, or if you want to use a specific version, you can override it using the `CMAKE_CUDA_COMPILER` environment variable:
 
-```bash
-export CMAKE_CUDA_COMPILER=/usr/local/cuda-11.8/bin/nvcc
-./build.sh gpu
-```
-
-Or as a one-liner:
 ```bash
 CMAKE_CUDA_COMPILER=/path/to/nvcc ./build.sh gpu
 ```
@@ -120,29 +158,35 @@ CMAKE_CUDA_COMPILER=/path/to/nvcc ./build.sh gpu
 ./build.sh clean
 ```
 
-## Python Requirements
+### Using CMake Directly
 
-Install the Python dependencies:
+Ensure `100MilOrients.bin` is present (run `./build.sh` once to download it):
 
 ```bash
-pip install -r requirements.txt
+mkdir -p build && cd build
+cmake .. -DUSE_CUDA=OFF -DCMAKE_BUILD_TYPE=Release
+make -j$(nproc)
 ```
+
+NLOPT is automatically downloaded and built into `LIBS/NLOPT/` if not already present.
+
+---
 
 ## Usage
 
-LaueMatching is designed to be run via the Python wrapper scripts.
+LaueMatching is designed to be run via its Python wrapper scripts.
 
-**See the `simulation/` directory for a complete example.**
+### Quick Example
 
 ```bash
 cd simulation
-cat README.md    # Instructions for generating data and running the pipeline
+cat README.md    # Full instructions for generating data and running the pipeline
 ```
 
-The typical workflow using `RunImage.py` (which wraps the C binary):
+### Running the Pipeline
 
 ```bash
-../RunImage.py process \
+./RunImage.py process \
     -c params_sim.txt \
     -i simulated_1.h5 \
     -n <nCPUs>
@@ -162,13 +206,20 @@ The typical workflow using `RunImage.py` (which wraps the C binary):
 
 See `simulation/params_sim.txt` for a complete example.
 
-## Best Practices
+---
+
+## Performance Tips
 
 - **Linux** is the primary platform. macOS CPU builds work with `brew install gcc`.
 - Place `OrientationFile` and `ForwardFile` in `/dev/shm` (tmpfs) for dramatically faster memory-mapped I/O.
 - Ensure ≥ 8 GB RAM for the full 100-million orientation file.
+- Use the GPU build for large-scale datasets — it provides significant speedup over CPU.
+
+---
 
 ## Citation
+
+If you use LaueMatching in your research, please cite:
 
 ```bibtex
 @article{LaueMatching,
@@ -180,60 +231,28 @@ See `simulation/params_sim.txt` for a complete example.
 }
 ```
 
+---
+
+## Version History
+
+### v1.0 (2026-02-17)
+
+- **Code Refactor**: Consolidated ~700 lines of duplicated code into shared `LaueMatchingHeaders.h`.
+- **Bug Fixes**:
+  - Fixed c/a ratio fitting (was integer division `1/3`).
+  - Fixed negative pixel handling (uint16_t underflow).
+  - Fixed trigonal symmetry definition (consistent between CPU/GPU).
+  - Fixed memory leaks and file descriptor handling.
+  - Fixed GPU unique-solution indexing bug.
+- **Build System**: Improved CMake configuration with working strict warning flags.
+- **Performance**: Hoisted memory allocations out of critical loops; added `gpuErrchk` macro for CUDA error handling.
+
+---
+
 ## License
 
 See the [LICENSE](LICENSE) file for details.
 
+Copyright © UChicago Argonne, LLC. All rights reserved.
 
-## Detailed RunImage Pipeline
-
-The `RunImage.py` script executes a multi-stage workflow:
-
-1. **Load Image**: Supports HDF5 paths, with fallback to raw binary loading.
-2. **Background Subtraction**: Computes or loads a median background and subtracts it from the raw image.
-3. **Preprocessing**: 
-    - **Denoising**: Non-local means filter to reduce noise.
-    - **Contrast Enhancement**: CLAHE to improve peak visibility.
-    - **Edge Enhancement**: Unsharp masking to sharpen diffraction spots.
-    - **Thresholding**: Adaptive, Otsu, Percentile, or Fixed thresholding.
-4. **Spot Finding**: Identifies connected components (blobs) in the thresholded image and filters them by meaningful area.
-5. **Blurring**: Applies a Gaussian blink based on spot spacing to connect fragmented spots for indexing.
-6. **Indexing (Binary Execution)**: Calls the compiled `LaueMatchingCPU` (or GPU) executable with the blurred image, configuration, and orientation database.
-7. **Post-Processing**: Parses the output solutions, filters by unique spot counts, and refines orientations.
-8. **Forward Simulation**: If enabled, simulates the final orientations to verify the solution against the original image.
-9. **Final Output**: Aggregates all results, logs, and simulated data into a comprehensive HDF5 file.
-
-```mermaid
-graph TD
-    Input["Input Image (H5)"] --> Load{"Load & Validate"}
-    Load --> BgSub["Background Subtraction"]
-    BgSub --> Preproc["Enhance & Threshold"]
-    Preproc --> blobs["Find Blobs (Connected Components)"]
-    blobs --> Filter["Filter Small Spots"]
-    Filter --> Blur["Gaussian Blur"]
-    
-    Blur --> Indexer("LaueMatching Binary")
-    Config[Params] --> Indexer
-    Orients["Orientation DB"] --> Indexer
-    HKLs["HKL List"] --> Indexer
-    
-    Indexer --> Results["Raw Solutions"]
-    Results --> PostProc["Filter & Refine"]
-    PostProc --> Sim{"Simulation Enabled?"}
-    
-    Sim -- Yes --> FwdSim["Forward Simulation"]
-    Sim -- No --> Output["Final HDF5 Output"]
-   If you have any questions or meaningful contributions, please feel free to contact Hemant Sharma (hsharma@anl.gov).
-
-## Optimization Updates (2024)
-
-### Memory & Performance
-- **Fixed Memory Leaks**: Resolved `outArrThisFit` memory leaks in both CPU and GPU optimization loops.
-- **Hoisted Allocations**: Moved memory allocations out of critical loops to reduce overhead.
-- **CUDA Error Checking**: Added `gpuErrchk` macro for robust error handling in `LaueMatchingGPU.cu`.
-```
-
-## Contact
-
-Hemant Sharma — hsharma@anl.gov
-```
+> This product includes software produced by UChicago Argonne, LLC under Contract No. DE-AC02-06CH11357 with the Department of Energy.
