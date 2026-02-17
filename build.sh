@@ -89,7 +89,8 @@ cd "${BUILD_DIR}"
 
 cmake .. \
   -DUSE_CUDA="${USE_CUDA}" \
-  -DCMAKE_BUILD_TYPE=Release
+  -DCMAKE_BUILD_TYPE=Release \
+  ${CMAKE_CUDA_COMPILER:+-DCMAKE_CUDA_COMPILER="${CMAKE_CUDA_COMPILER}"}
 
 cmake --build . -j "${NPROC}"
 
