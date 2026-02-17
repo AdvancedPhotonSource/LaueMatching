@@ -106,24 +106,23 @@ pip install -r requirements.txt
 
 ## Usage
 
-LaueMatching requires five positional arguments:
+LaueMatching is designed to be run via the Python wrapper scripts.
+
+**See the `simulation/` directory for a complete example.**
 
 ```bash
-./bin/LaueMatchingCPU \
-    parameterFile.txt \
-    orientations.bin \
-    valid_hkls.csv \
-    image.bin \
-    nCPUs
+cd simulation
+cat README.md    # Instructions for generating data and running the pipeline
 ```
 
-| Argument | Description |
-|----------|-------------|
-| `parameterFile` | Text file with experiment geometry and matching parameters |
-| `orientations.bin` | Binary file of candidate orientation matrices (doubles) |
-| `valid_hkls.csv` | Space-separated HKL list (preferably sorted by structure factor) |
-| `image.bin` | Binary detector image (doubles) |
-| `nCPUs` | Number of OpenMP threads |
+The typical workflow using `RunImage.py` (which wraps the C binary):
+
+```bash
+../RunImage.py process \
+    -c params_sim.txt \
+    -i simulated_1.h5 \
+    -n <nCPUs>
+```
 
 ### Key Parameter File Settings
 
@@ -138,15 +137,6 @@ LaueMatching requires five positional arguments:
 | `MaxAngle` | Misorientation tolerance (°) for merging candidates |
 
 See `simulation/params_sim.txt` for a complete example.
-
-## Examples
-
-Example data and parameter files are in `simulation/`:
-
-```bash
-cd simulation
-cat README.md    # Usage instructions for the example dataset
-```
 
 ## Best Practices
 
@@ -171,24 +161,45 @@ cat README.md    # Usage instructions for the example dataset
 See the [LICENSE](LICENSE) file for details.
 
 
-## Workflow
+## Detailed RunImage Pipeline
+
+The `RunImage.py` script executes a multi-stage workflow:
+
+1. **Load Image**: Supports HDF5 paths, with fallback to raw binary loading.
+2. **Background Subtraction**: Computes or loads a median background and subtracts it from the raw image.
+3. **Preprocessing**: 
+    - **Denoising**: Non-local means filter to reduce noise.
+    - **Contrast Enhancement**: CLAHE to improve peak visibility.
+    - **Edge Enhancement**: Unsharp masking to sharpen diffraction spots.
+    - **Thresholding**: Adaptive, Otsu, Percentile, or Fixed thresholding.
+4. **Spot Finding**: Identifies connected components (blobs) in the thresholded image and filters them by meaningful area.
+5. **Blurring**: Applies a Gaussian blink based on spot spacing to connect fragmented spots for indexing.
+6. **Indexing (Binary Execution)**: Calls the compiled `LaueMatchingCPU` (or GPU) executable with the blurred image, configuration, and orientation database.
+7. **Post-Processing**: Parses the output solutions, filters by unique spot counts, and refines orientations.
+8. **Forward Simulation**: If enabled, simulates the final orientations to verify the solution against the original image.
+9. **Final Output**: Aggregates all results, logs, and simulated data into a comprehensive HDF5 file.
 
 ```mermaid
 graph TD
-    A[Parameter File] --> LM(LaueMatching Binary)
-    B[Orientation List] --> LM
-    C[Valid HKLs] --> LM
-    D[Detector Image] --> LM
+    Input["Input Image (H5)"] --> Load{"Load & Validate"}
+    Load --> BgSub["Background Subtraction"]
+    BgSub --> Preproc["Enhance & Threshold"]
+    Preproc --> blobs["Find Blobs (Connected Components)"]
+    blobs --> Filter["Filter Small Spots"]
+    Filter --> Blur["Gaussian Blur"]
     
-    LM --> E{Found Forward Simulation?}
-    E -- No --> F[Run Forward Simulation]
-    E -- Yes --> G[Load Forward Simulation]
-    F --> G
+    Blur --> Indexer("LaueMatching Binary")
+    Config[Params] --> Indexer
+    Orients["Orientation DB"] --> Indexer
+    HKLs["HKL List"] --> Indexer
     
-    G --> H[Parallel Matching]
-    H --> I[Unique Solutions]
-    I --> J[Refinement (Nelder-Mead)]
-    J --> K[Output: .solutions.txt]
+    Indexer --> Results["Raw Solutions"]
+    Results --> PostProc["Filter & Refine"]
+    PostProc --> Sim{"Simulation Enabled?"}
+    
+    Sim -- Yes --> FwdSim["Forward Simulation"]
+    Sim -- No --> Output
+    FwdSim --> Output["Final HDF5 Output"]
 ```
 
 ## Contact
