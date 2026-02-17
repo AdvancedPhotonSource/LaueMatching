@@ -23,7 +23,7 @@ graph TD
 
 Create a synthetic Laue pattern using ground-truth orientations and the experimental geometry defined in `params_sim.txt`.
 
-**Option A: Use 100 random orientations**
+**Option A: Use 19 random orientations**
 ```bash
 ../GenerateSimulation.py \
     -configFile params_sim.txt \
