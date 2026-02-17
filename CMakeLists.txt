@@ -158,7 +158,7 @@ add_custom_command(TARGET LaueMatchingCPU POST_BUILD
 if(USE_CUDA)
   if(NOT CMAKE_CUDA_ARCHITECTURES)
     set(CMAKE_CUDA_ARCHITECTURES 70 80 86 90)
-    message(STATUS "CMAKE_CUDA_ARCHITECTURES not set, using: ${CMAKE_CUDA_ARCHITECTURES}")
+    message(STATUS "CMAKE_CUDA_ARCHITECTURES not set, using default: ${CMAKE_CUDA_ARCHITECTURES}")
   endif()
 
   add_executable(LaueMatchingGPU src/LaueMatchingGPU.cu)
