@@ -19,6 +19,11 @@ endif()
 option(USE_CUDA  "Build LaueMatchingGPU (requires CUDA toolkit)" OFF)
 option(BUILD_OMP "Build with OpenMP support"                      ON)
 
+# Set default CUDA architectures if using CUDA
+if(USE_CUDA AND NOT CMAKE_CUDA_ARCHITECTURES)
+  set(CMAKE_CUDA_ARCHITECTURES 70 80 86 90)
+endif()
+
 # Project definition
 if(USE_CUDA)
   project(LaueMatching LANGUAGES C CUDA)
@@ -156,10 +161,7 @@ add_custom_command(TARGET LaueMatchingCPU POST_BUILD
 # LaueMatchingGPU  (optional — requires USE_CUDA=ON)
 # ---------------------------------------------------------------------------
 if(USE_CUDA)
-  if(NOT CMAKE_CUDA_ARCHITECTURES)
-    set(CMAKE_CUDA_ARCHITECTURES 70 80 86 90)
-    message(STATUS "CMAKE_CUDA_ARCHITECTURES not set, using default: ${CMAKE_CUDA_ARCHITECTURES}")
-  endif()
+
 
   add_executable(LaueMatchingGPU src/LaueMatchingGPU.cu)
 
