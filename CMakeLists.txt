@@ -92,14 +92,14 @@ file(MAKE_DIRECTORY "${NLOPT_INCLUDE_DIR}")
 
 # Create an imported target for NLOPT so we can use target_link_libraries()
 add_library(NLOPT::NLOPT STATIC IMPORTED GLOBAL)
-# On some distros the lib goes to lib64/ instead of lib/
+# Check lib64 first, then lib
 if(EXISTS "${NLOPT_LIB64_DIR}/libnlopt.a")
   set(_NLOPT_LIB "${NLOPT_LIB64_DIR}/libnlopt.a")
 elseif(EXISTS "${NLOPT_LIB_DIR}/libnlopt.a")
   set(_NLOPT_LIB "${NLOPT_LIB_DIR}/libnlopt.a")
 else()
-  # Library will exist after build; set the expected path
-  set(_NLOPT_LIB "${NLOPT_LIB_DIR}/libnlopt.a")
+  # Default fallback if neither exists (yet)
+  set(_NLOPT_LIB "${NLOPT_LIB64_DIR}/libnlopt.a")
 endif()
 set_target_properties(NLOPT::NLOPT PROPERTIES
   IMPORTED_LOCATION             "${_NLOPT_LIB}"
