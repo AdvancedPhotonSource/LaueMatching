@@ -329,6 +329,9 @@ class ConfigurationManager:
         Args:
             line: A line from the configuration file
         """
+        # Strip inline comments: everything after '#' is a comment
+        if '#' in line:
+            line = line[:line.index('#')].strip()
         parts = line.split()
         if not parts: return
         key = parts[0]
@@ -481,7 +484,7 @@ class ConfigurationManager:
         # Sync simulation energies with Elo/Ehi if SimulationEnergies isn't explicitly set in text file?
         # This is tricky because they might be intentionally different.
         # Let's assume the dedicated SimulationEnergies takes precedence if present.
-        if self.config.simulation.energies == LaueConfig.simulation.energies: # If still default
+        if self.config.simulation.energies == SimulationConfig().energies: # If still default
             self.config.simulation.energies = f"{self.config.elo} {self.config.ehi}"
             logger.debug(f"Synced SimulationEnergies from Elo/Ehi to '{self.config.simulation.energies}'")
 
