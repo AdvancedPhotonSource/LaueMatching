@@ -324,6 +324,7 @@ def run_pipeline(
         "--output-dir", results_dir,
         "--mapping", os.path.abspath(mapping_file),
         "--min-unique", str(min_unique),
+        "--nprocs", str(ncpus),
     ]
     logger.info(f"Running: {' '.join(os.path.basename(c) for c in pp_cmd)}")
     pp_result = subprocess.run(pp_cmd, capture_output=True, text=True)
