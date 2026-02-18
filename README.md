@@ -18,6 +18,7 @@ Developed at the [Advanced Photon Source](https://www.aps.anl.gov/) at Argonne N
 
 - **Fast Orientation Indexing** — matches Laue patterns against 100 million pre-computed orientations
 - **CPU & GPU** — parallel implementations via OpenMP (CPU) and CUDA (GPU)
+- **Streaming Pipeline** — persistent GPU daemon processes multiple H5 images over TCP without reloading the orientation database
 - **Crystal Symmetry** — supports all crystal systems (cubic through triclinic, including trigonal)
 - **Lattice Parameter Refinement** — optional c/a ratio fitting via NLopt optimization
 - **End-to-End Pipeline** — Python wrappers for image preprocessing, indexing, and forward simulation validation
@@ -63,26 +64,79 @@ The `RunImage.py` script orchestrates a multi-stage workflow:
 
 ---
 
+## Streaming Pipeline (Multi-Image)
+
+For processing large datasets with many H5 images, LaueMatching provides a **streaming mode** that keeps the GPU daemon running and processes images via TCP — eliminating the overhead of reloading the 6.7 GB orientation database for each image.
+
+```mermaid
+flowchart LR
+    subgraph Orchestrator ["laue_orchestrator.py"]
+        direction TB
+        S1["1. Launch daemon"]
+        S2["2. Launch server"]
+        S3["3. Monitor progress"]
+        S4["4. Post-process"]
+        S1 --> S2 --> S3 --> S4
+    end
+
+    subgraph Daemon ["LaueMatchingGPUStream\n(persistent process)"]
+        GPU["GPU Indexing Engine\n100M orientations in memory"]
+    end
+
+    subgraph Server ["laue_image_server.py"]
+        direction TB
+        H5["Glob *.h5 files"] --> Pre["Preprocess\n(bg sub → threshold → filter → blur)"] --> Send["TCP send"]
+    end
+
+    subgraph PostProc ["laue_postprocess.py"]
+        direction TB
+        Parse["Parse results"] --> Filter["Filter by\nunique spots"] --> Out["Per-image H5\n+ Plotly HTML"]
+    end
+
+    Server -- "uint16 img_num + double[] pixels" --> Daemon
+    Daemon -- "solutions.txt\nspots.txt" --> PostProc
+    Server -- "frame_mapping.json" --> Orchestrator
+```
+
+**Key advantages over single-image mode:**
+
+| | Single-Image (`RunImage.py`) | Streaming (`laue_orchestrator.py`) |
+|---|---|---|
+| Orientation DB | Loaded per image (~10s) | Loaded once, reused |
+| GPU utilization | Idle between images | Continuous |
+| Throughput | ~1 image/min | Limited only by preprocessing |
+| Progress tracking | Per-image logs | Live `frame_mapping.json` with rate + ETA |
+
+---
+
 ## Project Structure
 
 ```
 LaueMatching/
-├── src/                       # C / CUDA source code
-│   ├── LaueMatchingCPU.c      # CPU implementation (OpenMP)
-│   ├── LaueMatchingGPU.cu     # GPU implementation (CUDA)
-│   └── LaueMatchingHeaders.h  # Shared definitions and utilities
-├── bin/                       # Compiled binaries (created by build)
-├── logos/                     # Project logo
-├── LIBS/NLOPT/                # NLopt dependency (auto-downloaded)
-├── simulation/                # Example data and parameter files
-├── GenerateHKLs.py            # Generate valid HKL list for a crystal
-├── GenerateSimulation.py      # Create synthetic Laue patterns
-├── ImageCleanup.py            # Pre-process raw detector images
-├── RunImage.py                # End-to-end indexing pipeline
-├── CMakeLists.txt             # CMake build system
-├── build.sh                   # Convenience build script
-├── requirements.txt           # Python dependencies
-└── 100MilOrients.bin          # Pre-computed candidate orientations (~6.7 GB)
+├── src/                              # C / CUDA source code
+│   ├── LaueMatchingCPU.c             # CPU implementation (OpenMP)
+│   ├── LaueMatchingGPU.cu            # GPU single-image (CUDA)
+│   ├── LaueMatchingGPUStream.cu      # GPU streaming daemon (CUDA + TCP)
+│   └── LaueMatchingHeaders.h         # Shared definitions and utilities
+├── scripts/                          # Python scripts (see scripts/README.md)
+│   ├── RunImage.py                   # Single-image indexing pipeline
+│   ├── laue_orchestrator.py          # Streaming pipeline entry point
+│   ├── laue_image_server.py          # H5 → preprocess → TCP sender
+│   ├── laue_postprocess.py           # Results filtering + visualization
+│   ├── laue_config.py                # Configuration dataclasses & manager
+│   ├── laue_stream_utils.py          # Shared I/O, preprocessing, TCP utilities
+│   ├── laue_visualization.py         # 8 standalone visualization functions
+│   ├── GenerateHKLs.py               # Generate valid HKL list
+│   ├── GenerateSimulation.py         # Create synthetic Laue patterns
+│   └── ImageCleanup.py               # Pre-process raw detector images
+├── bin/                              # Compiled binaries (created by build)
+├── logos/                            # Project logo
+├── LIBS/NLOPT/                       # NLopt dependency (auto-downloaded)
+├── simulation/                       # Example data and parameter files
+├── CMakeLists.txt                    # CMake build system
+├── build.sh                          # Convenience build script
+├── requirements.txt                  # Python dependencies
+└── 100MilOrients.bin                 # Pre-computed orientations (~6.7 GB)
 ```
 
 ---
@@ -174,7 +228,7 @@ NLOPT is automatically downloaded and built into `LIBS/NLOPT/` if not already pr
 
 ## Usage
 
-LaueMatching is designed to be run via its Python wrapper scripts.
+LaueMatching is designed to be run via its Python wrapper scripts (in `scripts/`). See [scripts/README.md](scripts/README.md) for full CLI reference for every script.
 
 ### Quick Example
 
@@ -183,10 +237,10 @@ cd simulation
 cat README.md    # Full instructions for generating data and running the pipeline
 ```
 
-### Running the Pipeline
+### Single-Image Processing
 
 ```bash
-./RunImage.py process \
+python scripts/RunImage.py process \
     -c params_sim.txt \
     -i simulated_1.h5 \
     -n <nCPUs>
@@ -194,10 +248,41 @@ cat README.md    # Full instructions for generating data and running the pipelin
 
 On GPU:
 ```bash
-./RunImage.py process \
+python scripts/RunImage.py process \
     -c params_sim.txt \
     -i simulated_1.h5 \
     -n <nCPUs> -g
+```
+
+### Streaming Pipeline (Multi-Image, GPU)
+
+Process an entire folder of H5 files through the persistent GPU daemon:
+
+```bash
+python scripts/laue_orchestrator.py \
+    --config params.txt \
+    --folder /path/to/h5_images/ \
+    --h5-location /entry/data/data \
+    --ncpus 8
+```
+
+This will:
+1. Start the `LaueMatchingGPUStream` daemon
+2. Pre-process and send each image over TCP
+3. Monitor progress in real time
+4. Terminate the daemon and run post-processing
+5. Generate per-image H5 files and an interactive HTML visualization
+
+Output appears in a timestamped `laue_stream_YYYYMMDD_HHMMSS/` directory.
+
+You can also run the components individually:
+
+```bash
+# Just the image server (daemon must already be running)
+python scripts/laue_image_server.py --config params.txt --folder h5s/
+
+# Just the post-processing (on existing results)
+python scripts/laue_postprocess.py --solutions solutions.txt --spots spots.txt --config params.txt
 ```
 
 ### Key Parameter File Settings
@@ -244,6 +329,17 @@ If you use LaueMatching in your research, please cite:
 ---
 
 ## Version History
+
+### v2.0 (2026-02-18)
+
+- **Streaming Pipeline**: New `LaueMatchingGPUStream` CUDA daemon + Python orchestrator for multi-image processing over TCP.
+- **Scripts Reorganization**: All Python scripts moved to `scripts/` directory with comprehensive `scripts/README.md`.
+- **Module Decomposition**: Decomposed `RunImage.py` (3,553 → 1,673 lines) into reusable modules:
+  - `laue_config.py` (782 lines) — configuration dataclasses and parameter file parser.
+  - `laue_stream_utils.py` (1,108 lines) — image I/O, preprocessing, TCP wire protocol, orientation sorting/filtering.
+  - `laue_visualization.py` (937 lines) — 8 standalone visualization functions (Plotly interactive, simulation comparison, reports, etc.).
+- **Post-Processing**: `laue_postprocess.py` now sorts filtered orientations by quality and supports optional per-image interactive visualization.
+- **Streaming Utilities**: `laue_image_server.py` for TCP image sending with live progress tracking; `laue_orchestrator.py` for full pipeline management.
 
 ### v1.0 (2026-02-17)
 

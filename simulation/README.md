@@ -1,6 +1,6 @@
 # LaueMatching Simulation Example
 
-This folder contains example scripts and data to demonstrate the LaueMatching workflow:
+This folder contains example data to demonstrate the LaueMatching workflow:
 1. **Simulation**: Generate synthetic diffraction patterns from known orientations.
 2. **Indexing**: Process the synthetic data to recover the orientations.
 
@@ -17,15 +17,15 @@ This folder contains example scripts and data to demonstrate the LaueMatching wo
 
 ```mermaid
 graph TD
-    A[GenerateSimulation.py] -->|Creates| B("simulated_1.h5 / .tif")
+    A["scripts/GenerateSimulation.py"] -->|Creates| B("simulated_1.h5 / .tif")
     A -->|Calculates| C(simulated_recips.txt)
     
-    B --> D[RunImage.py]
+    B --> D["scripts/RunImage.py"]
     E[params_sim.txt] --> D
     F[valid_hkls.csv] --> D
     
     D --> G[LaueMatching Binary]
-    G --> H[Output: results_simulation/]
+    G --> H["Output: results_simulation/"]
 ```
 
 ## 1. Generate Simulated Image
@@ -34,7 +34,7 @@ Create a synthetic Laue pattern using ground-truth orientations and the experime
 
 **Option A: Use 19 random orientations**
 ```bash
-../GenerateSimulation.py \
+python ../scripts/GenerateSimulation.py \
     -configFile params_sim.txt \
     -orientationFile simulationOrientationMatrices.csv \
     -outputFile simulated_1.h5
@@ -42,7 +42,7 @@ Create a synthetic Laue pattern using ground-truth orientations and the experime
 
 **Option B: Use 4 specific orientations**
 ```bash
-../GenerateSimulation.py \
+python ../scripts/GenerateSimulation.py \
     -configFile params_sim.txt \
     -orientationFile fourOrientations.csv \
     -outputFile simulated_1.h5
@@ -58,7 +58,7 @@ Create a synthetic Laue pattern using ground-truth orientations and the experime
 Process the simulated image to recover the orientations using the `RunImage.py` wrapper.
 
 ```bash
-../RunImage.py process \
+python ../scripts/RunImage.py process \
     -c params_sim.txt \
     -i simulated_1.h5 \
     -n <nCPUs>  # e.g., -n 4
@@ -66,7 +66,7 @@ Process the simulated image to recover the orientations using the `RunImage.py` 
 
 On GPU:
 ```bash
-../RunImage.py process \
+python ../scripts/RunImage.py process \
     -c params_sim.txt \
     -i simulated_1.h5 \
     -n <nCPUs> -g  # e.g., -n 4
@@ -125,3 +125,17 @@ If you are using a very large orientation library (e.g., 100 million points), re
 3. LaueMatching will automatically use `mmap` instead of `fread`.
 
 *(Note: `/dev/shm` is a Linux feature. On macOS, use a standard path, though the OS file cache often helps.)*
+
+## Streaming Mode (Multiple Images)
+
+If you have many simulated images to process, use the streaming pipeline instead of running `RunImage.py` on each one individually:
+
+```bash
+# Generate multiple images first, then:
+python ../scripts/laue_orchestrator.py \
+    --config params_sim.txt \
+    --folder /path/to/simulated_images/ \
+    --ncpus 8
+```
+
+See [scripts/README.md](../scripts/README.md) for full streaming pipeline documentation.

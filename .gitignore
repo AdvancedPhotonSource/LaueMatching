@@ -25,3 +25,4 @@ simulation/valid_hkls.csv
 *.h5
 *.tif
 100MilOrients.bin
+__pycache__/

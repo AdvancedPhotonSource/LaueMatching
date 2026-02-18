@@ -707,10 +707,10 @@ int main(int argc, char *argv[]) {
     // outArrThisFit = calloc(3 * maxNrSpots,
     // sizeof(*outArrThisFit)); // Hoisted
     memset(outArrThisFit, 0, 3 * maxNrSpots * sizeof(*outArrThisFit));
-    int nrSps =
-        writeCalcOverlap(image, eulerFit, hkls, nhkls, nrPxX, nrPxY, recipFit,
-                         outArrThisFit, maxNrSpots, rotTranspose, pArr, pxX,
-                         pxY, Elo, Ehi, ExtraInfo, saveExtraInfo, &simulNrSps);
+    int nrSps = writeCalcOverlap(image, eulerFit, hkls, nhkls, nrPxX, nrPxY,
+                                 recipFit, outArrThisFit, maxNrSpots,
+                                 rotTranspose, pArr, pxX, pxY, Elo, Ehi,
+                                 ExtraInfo, saveExtraInfo, &simulNrSps, 0);
     // free(outArrThisFit); // Hoisted
     if (nrSps >= minNrSpots) {
       int bs = bsArr[iterNr];
@@ -720,7 +720,7 @@ int main(int argc, char *argv[]) {
       memset(outArrThisFit, 0, 3 * maxNrSpots * sizeof(*outArrThisFit));
       writeCalcOverlap(image, eulerFit, hkls, nhkls, nrPxX, nrPxY, recipFit,
                        outArrThisFit, maxNrSpots, rotTranspose, pArr, pxX, pxY,
-                       Elo, Ehi, ExtraInfo, saveExtraInfo, &simulNrSps);
+                       Elo, Ehi, ExtraInfo, saveExtraInfo, &simulNrSps, 0);
       // free(outArrThisFit); // Hoisted
       double OF[3][3];
       MatrixMultF33(orientFit, recipFit, OF);

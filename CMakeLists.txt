@@ -196,6 +196,43 @@ if(USE_CUDA)
     COMMENT "Copied LaueMatchingGPU → ${CMAKE_CURRENT_SOURCE_DIR}/bin/"
     VERBATIM
   )
+
+  # -------------------------------------------------------------------------
+  # LaueMatchingGPUStream  (persistent GPU daemon — socket-based streaming)
+  # -------------------------------------------------------------------------
+  add_executable(LaueMatchingGPUStream src/LaueMatchingGPUStream.cu)
+
+  set_target_properties(LaueMatchingGPUStream PROPERTIES
+    CUDA_SEPARABLE_COMPILATION ON
+    CUDA_RESOLVE_DEVICE_SYMBOLS ON
+  )
+
+  target_compile_options(LaueMatchingGPUStream PRIVATE
+    $<$<COMPILE_LANGUAGE:CUDA>:-O3 -w>
+  )
+
+  target_link_libraries(LaueMatchingGPUStream PRIVATE NLOPT::NLOPT m pthread)
+
+  if(OpenMP_C_FOUND AND BUILD_OMP)
+    target_compile_options(LaueMatchingGPUStream PRIVATE
+      $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-fopenmp>
+    )
+    target_link_libraries(LaueMatchingGPUStream PRIVATE gomp)
+  endif()
+
+  if(TARGET nlopt_ext)
+    add_dependencies(LaueMatchingGPUStream nlopt_ext)
+  endif()
+
+  install(TARGETS LaueMatchingGPUStream RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+
+  add_custom_command(TARGET LaueMatchingGPUStream POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_SOURCE_DIR}/bin"
+    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:LaueMatchingGPUStream>
+            "${CMAKE_CURRENT_SOURCE_DIR}/bin/"
+    COMMENT "Copied LaueMatchingGPUStream → ${CMAKE_CURRENT_SOURCE_DIR}/bin/"
+    VERBATIM
+  )
 endif()
 
 # ---------------------------------------------------------------------------
