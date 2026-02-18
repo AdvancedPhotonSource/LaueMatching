@@ -172,7 +172,9 @@ def serve_images(
                 break
             image_num, pix_bytes, mapping_entry, filt_labels = item
             try:
-                lsu.send_image(sock, image_num, pix_bytes)
+                header = struct.pack("<H", image_num)
+                sock.sendall(header)
+                sock.sendall(pix_bytes)
                 mapping_entry["skipped"] = False
                 with sent_count_lock:
                     counters["sent"] += 1
