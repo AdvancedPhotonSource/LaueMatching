@@ -79,22 +79,22 @@ flowchart LR
         S1 --> S2 --> S3 --> S4
     end
 
-    subgraph Daemon ["LaueMatchingGPUStream\n(persistent process)"]
-        GPU["GPU Indexing Engine\n100M orientations in memory"]
+    subgraph Daemon ["LaueMatchingGPUStream<br/>(persistent process)"]
+        GPU["GPU Indexing Engine<br/>100M orientations in memory"]
     end
 
     subgraph Server ["laue_image_server.py"]
         direction TB
-        H5["Glob *.h5 files"] --> Pre["Preprocess\n(bg sub → threshold → filter → blur)"] --> Send["TCP send"]
+        H5["Glob *.h5 files"] --> Pre["Preprocess<br/>(bg sub → threshold → filter → blur)"] --> Send["TCP send"]
     end
 
     subgraph PostProc ["laue_postprocess.py"]
         direction TB
-        Parse["Parse results"] --> Filter["Filter by\nunique spots"] --> Out["Per-image H5\n+ Plotly HTML"]
+        Parse["Parse results"] --> Filter["Filter by<br/>unique spots"] --> Out["Per-image H5<br/>+ Plotly HTML"]
     end
 
     Server -- "uint16 img_num + float[] pixels" --> Daemon
-    Daemon -- "solutions.txt\nspots.txt" --> PostProc
+    Daemon -- "solutions.txt<br/>spots.txt" --> PostProc
     Server -- "frame_mapping.json" --> Orchestrator
 ```
 
