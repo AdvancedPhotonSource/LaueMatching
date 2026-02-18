@@ -192,6 +192,14 @@ cat README.md    # Full instructions for generating data and running the pipelin
     -n <nCPUs>
 ```
 
+On GPU:
+```bash
+./RunImage.py process \
+    -c params_sim.txt \
+    -i simulated_1.h5 \
+    -n <nCPUs> -g
+```
+
 ### Key Parameter File Settings
 
 | Parameter | Description |
