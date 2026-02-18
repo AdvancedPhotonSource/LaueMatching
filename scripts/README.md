@@ -11,11 +11,11 @@ Python scripts for image preprocessing, orientation indexing, streaming pipeline
 | Script | Lines | Description |
 |--------|------:|-------------|
 | `RunImage.py` | 1,673 | **Single-image indexing pipeline** — load, preprocess, index, refine, and export results for one H5 image. |
-| `laue_orchestrator.py` | 412 | **Streaming pipeline entry-point** — launches the GPU daemon, image server, monitors progress, and runs post-processing. |
-| `laue_image_server.py` | 341 | **TCP image sender** — reads H5 files, preprocesses frames, and sends them to the GPU daemon over TCP. |
+| `laue_orchestrator.py` | 465 | **Streaming pipeline entry-point** — launches the GPU daemon, image server, monitors progress with tqdm bar, and runs post-processing. |
+| `laue_image_server.py` | 389 | **TCP image sender** — reads H5 files, preprocesses frames, and sends them to the GPU daemon over TCP with pipelined threading. |
 | `laue_postprocess.py` | 598 | **Stream results post-processor** — splits daemon output by image, filters by unique spots, saves per-image HDF5 + Plotly HTML. |
 | `laue_config.py` | 782 | **Configuration module** — dataclasses for processing, visualization, and optimizer settings; parameter file parser. |
-| `laue_stream_utils.py` | 1,108 | **Shared utilities** — image I/O, preprocessing, TCP wire protocol, HDF5 helpers, orientation sort/filter. |
+| `laue_stream_utils.py` | 1,108 | **Shared utilities** — image I/O, preprocessing, TCP wire protocol (float32), HDF5 helpers, orientation sort/filter. |
 | `laue_visualization.py` | 937 | **Visualization library** — 8 standalone Plotly/Matplotlib functions for interactive spot maps, 3D views, reports, and simulation comparisons. |
 | `GenerateSimulation.py` | 532 | **Forward simulation** — generates synthetic Laue patterns from known orientation matrices. |
 | `GenerateHKLs.py` | 396 | **HKL generator** — computes valid Miller indices for a crystal's space group and energy range. |
@@ -182,10 +182,10 @@ python scripts/laue_postprocess.py \
 Each frame is sent as:
 
 ```
-| uint16_t image_num (2 bytes, little-endian) | double[NrPxX×NrPxY] pixel data |
+| uint16_t image_num (2 bytes, little-endian) | float[NrPxX×NrPxY] pixel data |
 ```
 
-The daemon reads frames sequentially and appends results to `solutions.txt` and `spots.txt`.
+The daemon receives float32 pixels (4 bytes each, halving bandwidth vs. double) and converts to double internally for GPU matching. Results are appended to `solutions.txt` and `spots.txt`.
 
 ### `laue_postprocess.py` — CLI Reference
 

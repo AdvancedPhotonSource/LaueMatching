@@ -93,7 +93,7 @@ flowchart LR
         Parse["Parse results"] --> Filter["Filter by\nunique spots"] --> Out["Per-image H5\n+ Plotly HTML"]
     end
 
-    Server -- "uint16 img_num + double[] pixels" --> Daemon
+    Server -- "uint16 img_num + float[] pixels" --> Daemon
     Daemon -- "solutions.txt\nspots.txt" --> PostProc
     Server -- "frame_mapping.json" --> Orchestrator
 ```
@@ -333,6 +333,10 @@ If you use LaueMatching in your research, please cite:
 ### v2.0 (2026-02-18)
 
 - **Streaming Pipeline**: New `LaueMatchingGPUStream` CUDA daemon + Python orchestrator for multi-image processing over TCP.
+- **Float32 Wire Protocol**: Image transfer uses float32 (16 MB/frame for 2048×2048) instead of float64, halving bandwidth with no precision loss in GPU matching.
+- **Pipelined Image Server**: Producer-consumer threading overlaps H5 loading/preprocessing with TCP sending.
+- **Progress Bar**: Real-time tqdm progress bar with throughput (img/s) and ETA.
+- **Graceful Daemon Shutdown**: Handles unresponsive GPU processes without crashing the pipeline.
 - **Scripts Reorganization**: All Python scripts moved to `scripts/` directory with comprehensive `scripts/README.md`.
 - **Module Decomposition**: Decomposed `RunImage.py` (3,553 → 1,673 lines) into reusable modules:
   - `laue_config.py` (782 lines) — configuration dataclasses and parameter file parser.
