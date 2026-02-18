@@ -18,6 +18,7 @@ double cellVol;
 double phiVol;
 int nSym;
 double Symm[24][4];
+int useBobyqa = 1; // default: BOBYQA
 
 // ── Usage ───────────────────────────────────────────────────────────────
 static void usageCPU() {
@@ -179,6 +180,14 @@ int main(int argc, char *argv[]) {
       sscanf(aline, "%s %lf %lf %lf %lf %lf %lf", dummy, &tol_LatC[0],
              &tol_LatC[1], &tol_LatC[2], &tol_LatC[3], &tol_LatC[4],
              &tol_LatC[5]);
+      continue;
+    }
+    str = "Optimizer";
+    LowNr = strncmp(aline, str, strlen(str));
+    if (LowNr == 0) {
+      sscanf(aline, "%s %s", dummy, dummy);
+      if (strncmp(dummy, "NelderMead", 10) == 0)
+        useBobyqa = 0;
       continue;
     }
   }
@@ -679,15 +688,15 @@ int main(int argc, char *argv[]) {
                    outArrThisFit, maxNrSpots, rotTranspose, pArr, pxX, pxY, Elo,
                    Ehi, tol, LatticeParameter, eulerFit, latCFit, &mv,
                    doCrystalFit);
+    // Second fit: orientation + crystal parameters (tighter bounds)
     doCrystalFit = 1;
     for (iK = 0; iK < 3; iK++)
       eulerBest[iK] = eulerFit[iK];
-    // outArrThisFit = calloc(3 * maxNrSpots,
-    // sizeof(*outArrThisFit)); // Hoisted
     memset(outArrThisFit, 0, 3 * maxNrSpots * sizeof(*outArrThisFit));
+    double tol2 = tol / 3.0;
     FitOrientation(image, eulerBest, hkls, nhkls, nrPxX, nrPxY, recip,
                    outArrThisFit, maxNrSpots, rotTranspose, pArr, pxX, pxY, Elo,
-                   Ehi, tol, LatticeParameter, eulerFit, latCFit, &mv,
+                   Ehi, tol2, LatticeParameter, eulerFit, latCFit, &mv,
                    doCrystalFit);
     // free(outArrThisFit); // Hoisted
     Euler2OrientMat(eulerFit, orientFit);
@@ -707,9 +716,7 @@ int main(int argc, char *argv[]) {
       int bs = bsArr[iterNr];
       double miso = GetMisOrientation(q1, q2);
       saveExtraInfo = iterNr + 1;
-      calcRecipArray(latCFit, sg_num, recipFit);
-      // outArrThisFit = calloc(3 * maxNrSpots,
-      // sizeof(*outArrThisFit)); // Hoisted
+      // Reuse recipFit (already computed above) — skip redundant calcRecipArray
       memset(outArrThisFit, 0, 3 * maxNrSpots * sizeof(*outArrThisFit));
       writeCalcOverlap(image, eulerFit, hkls, nhkls, nrPxX, nrPxY, recipFit,
                        outArrThisFit, maxNrSpots, rotTranspose, pArr, pxX, pxY,
