@@ -736,10 +736,14 @@ def calculate_unique_spots(
     """
     Calculate unique spots per orientation, prioritized by quality score.
 
-    This mirrors RunImage.py's _calculate_unique_spots_per_orientation.
+    Orientations are sorted by quality (descending) using a stable sort so
+    that ties preserve the original input order.  Higher-quality orientations
+    claim spots first; once a label or pixel position is assigned, lower-
+    quality orientations cannot reuse it.
 
     Returns:
-        {grain_nr: {"count": int, "unique_label_count": int, ...}}
+        {grain_nr: {"count": int, "unique_label_count": int,
+                     "unique_labels": set, "positions": set}}
     """
     results: Dict[int, Dict] = {}
     if orientations.size == 0:
@@ -748,8 +752,9 @@ def calculate_unique_spots(
     if orientations.ndim == 1:
         orientations = np.expand_dims(orientations, 0)
 
-    # Sort by quality descending
-    sorted_idx = np.argsort(orientations[:, quality_col])[::-1]
+    # Sort by quality descending with *stable* tie-breaking (matches the
+    # original Python list .sort() used in RunImage._calculate_unique_spots).
+    sorted_idx = np.argsort(orientations[:, quality_col], kind='stable')[::-1]
 
     assigned_labels: set = set()
     assigned_positions: set = set()
@@ -786,6 +791,11 @@ def calculate_unique_spots(
                 if lbl > 0:
                     results[gn]["unique_labels"].add(lbl)
                     assigned_labels.add(lbl)
+            else:
+                # Out-of-bounds: still claim the position so lower-quality
+                # orientations cannot reuse it (matches original behaviour).
+                results[gn]["positions"].add(pos)
+                assigned_positions.add(pos)
 
         results[gn]["count"] = len(results[gn]["positions"])
         results[gn]["unique_label_count"] = len(results[gn]["unique_labels"])
