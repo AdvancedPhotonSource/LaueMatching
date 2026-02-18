@@ -196,9 +196,18 @@ void *handle_client(void *arg) {
   int client_socket = *((int *)arg);
   free(arg);
   uint8_t header_buf[HEADER_SIZE];
-  size_t payload_size = g_imagePixels * sizeof(double);
-  printf("Client handler started (socket %d), payload=%zu bytes\n",
-         client_socket, payload_size);
+  // Wire protocol: float pixels (4 bytes each), not double
+  size_t wire_payload_size = g_imagePixels * sizeof(float);
+  printf("Client handler started (socket %d), wire_payload=%zu bytes\n",
+         client_socket, wire_payload_size);
+
+  // Reusable receive buffer for float data
+  float *recv_buf = (float *)malloc(wire_payload_size);
+  if (!recv_buf) {
+    perror("malloc recv_buf");
+    close(client_socket);
+    return NULL;
+  }
 
   while (keep_running) {
     // Read header: 2 bytes (uint16_t image_num)
@@ -213,24 +222,27 @@ void *handle_client(void *arg) {
     uint16_t image_num;
     memcpy(&image_num, header_buf, 2);
 
-    // Read payload: image data
-    double *data = (double *)malloc(payload_size);
-    if (!data) {
-      perror("malloc image");
-      goto done;
-    }
+    // Read payload: float image data
     size_t total_payload = 0;
-    while (total_payload < payload_size) {
-      int n = recv(client_socket, (char *)data + total_payload,
-                   payload_size - total_payload, 0);
-      if (n <= 0) {
-        free(data);
+    while (total_payload < wire_payload_size) {
+      int n = recv(client_socket, (char *)recv_buf + total_payload,
+                   wire_payload_size - total_payload, 0);
+      if (n <= 0)
         goto done;
-      }
       total_payload += n;
     }
 
-    printf("Received image %u (%zu bytes)\n", image_num, payload_size);
+    // Convert float → double for GPU processing
+    double *data = (double *)malloc(g_imagePixels * sizeof(double));
+    if (!data) {
+      perror("malloc image double");
+      goto done;
+    }
+    for (size_t p = 0; p < g_imagePixels; p++)
+      data[p] = (double)recv_buf[p];
+
+    printf("Received image %u (%zu bytes wire, %zu pixels)\n", image_num,
+           wire_payload_size, g_imagePixels);
     if (queue_push(&process_queue, image_num, data) < 0) {
       printf("Queue push failed for image %u\n", image_num);
       free(data);
@@ -238,6 +250,7 @@ void *handle_client(void *arg) {
     }
   }
 done:
+  free(recv_buf);
   close(client_socket);
   printf("Client handler finished (socket %d)\n", client_socket);
   return NULL;

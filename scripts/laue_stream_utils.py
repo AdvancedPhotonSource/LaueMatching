@@ -1080,10 +1080,10 @@ def send_image(
     """
     Send one image to the LaueMatchingGPUStream daemon.
 
-    Wire format: uint16_t image_num  +  double[NrPxX*NrPxY] pixels
+    Wire format: uint16_t image_num  +  float[NrPxX*NrPxY] pixels
     """
     header = struct.pack("<H", image_num)  # little-endian uint16
-    pixels = image_data.astype(np.float64).tobytes()
+    pixels = image_data.astype(np.float32).tobytes()
     sock.sendall(header + pixels)
 
 

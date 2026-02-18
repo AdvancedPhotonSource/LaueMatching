@@ -7,7 +7,7 @@ subtraction → enhancement → thresholding → component filtering → Gaussia
 blur), and sends processed images to the GPU daemon over TCP port 60517.
 
 Wire protocol (must match LaueMatchingGPUStream.cu handle_client):
-    | uint16_t image_num (2 bytes, LE) | double[NrPxX*NrPxY] pixel data |
+    | uint16_t image_num (2 bytes, LE) | float[NrPxX*NrPxY] pixel data |
 
 Usage:
     python laue_image_server.py \
@@ -250,9 +250,9 @@ def serve_images(
                     image_num += 1
                     continue
 
-                # Prepare bytes (avoid copy in send thread)
+                # Prepare bytes as float32 (wire protocol uses float, not double)
                 pixels_bytes = np.ascontiguousarray(
-                    blurred, dtype=np.float64
+                    blurred, dtype=np.float32
                 ).tobytes()
 
                 mapping_entry = {
