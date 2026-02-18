@@ -24,8 +24,11 @@ import argparse
 import glob
 import logging
 import os
+import queue
 import socket
+import struct
 import sys
+import threading
 import time
 
 import numpy as np
@@ -128,6 +131,7 @@ def serve_images(
     # --- 4. Connect to daemon ---
     logger.info(f"Connecting to daemon at {host}:{port}...")
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
     sock.settimeout(30.0)
     try:
         sock.connect((host, port))
@@ -136,10 +140,53 @@ def serve_images(
         return {}
     logger.info("Connected to daemon.")
 
-    # --- 5. Process & send loop ---
+    # --- 5. Pipelined process & send loop ---
+    #
+    # Producer thread: load H5 + preprocess (CPU-bound)
+    # Consumer thread: send over TCP (I/O-bound)
+    # This overlaps compute with network I/O for ~2x throughput.
+    #
+    SEND_QUEUE_SIZE = 4  # buffer up to 4 frames
+    send_q: queue.Queue = queue.Queue(maxsize=SEND_QUEUE_SIZE)
+    send_error: list = []  # shared error flag
+
     frame_mapping: dict = {}
+    sent_count_lock = threading.Lock()
+    counters = {"sent": 0, "skip": 0}
+
+    def _sender_thread(sock, send_q, send_error, frame_mapping, counters):
+        """Drain the queue and send frames over TCP."""
+        while True:
+            item = send_q.get()
+            if item is None:  # Sentinel: done
+                send_q.task_done()
+                break
+            image_num, pixels_bytes, mapping_entry = item
+            try:
+                header = struct.pack("<H", image_num)
+                sock.sendall(header)
+                sock.sendall(pixels_bytes)
+                mapping_entry["skipped"] = False
+                with sent_count_lock:
+                    counters["sent"] += 1
+            except Exception as e:
+                logger.error(f"  Send error for image_num={image_num}: {e}")
+                mapping_entry["skipped"] = True
+                mapping_entry["reason"] = f"send_error: {e}"
+                with sent_count_lock:
+                    counters["skip"] += 1
+                send_error.append(e)
+            frame_mapping[str(image_num)] = mapping_entry
+            send_q.task_done()
+
+    sender = threading.Thread(
+        target=_sender_thread,
+        args=(sock, send_q, send_error, frame_mapping, counters),
+        daemon=True,
+    )
+    sender.start()
+
     image_num = 1    # 1-based, uint16
-    sent_count = 0
     skip_count = 0
     t_start = time.time()
 
@@ -157,6 +204,9 @@ def serve_images(
                 if image_num > 65535:
                     logger.warning("Reached uint16 image_num limit, stopping.")
                     break
+                if send_error:
+                    logger.error("Send thread error, aborting.")
+                    break
 
                 # Load raw frame
                 try:
@@ -166,6 +216,7 @@ def serve_images(
                         f"  Frame {frame_idx} of {h5_basename}: load error: {e}"
                     )
                     skip_count += 1
+                    image_num += 1
                     continue
 
                 # Validate dimensions
@@ -175,6 +226,7 @@ def serve_images(
                         f"expected ({nr_px_y},{nr_px_x}), skipping."
                     )
                     skip_count += 1
+                    image_num += 1
                     continue
 
                 # Preprocess (steps 1-6)
@@ -189,7 +241,6 @@ def serve_images(
                         f"no spots after filtering, skipping."
                     )
                     skip_count += 1
-                    # Still record in mapping but mark as skipped
                     frame_mapping[str(image_num)] = {
                         "file": h5_basename,
                         "frame": frame_idx,
@@ -199,50 +250,40 @@ def serve_images(
                     image_num += 1
                     continue
 
-                # Send to daemon
-                try:
-                    lsu.send_image(sock, image_num, blurred)
-                    sent_count += 1
-                except Exception as e:
-                    logger.error(f"  Send error for image_num={image_num}: {e}")
-                    skip_count += 1
-                    frame_mapping[str(image_num)] = {
-                        "file": h5_basename,
-                        "frame": frame_idx,
-                        "skipped": True,
-                        "reason": f"send_error: {e}",
-                    }
-                    image_num += 1
-                    continue
+                # Prepare bytes (avoid copy in send thread)
+                pixels_bytes = np.ascontiguousarray(
+                    blurred, dtype=np.float64
+                ).tobytes()
 
-                # Record mapping
-                frame_mapping[str(image_num)] = {
+                mapping_entry = {
                     "file": h5_basename,
                     "frame": frame_idx,
                     "n_spots": len(centers),
-                    "skipped": False,
                 }
 
-                # Progress
-                elapsed = time.time() - t_start
-                rate = sent_count / elapsed if elapsed > 0 else 0
-                remaining = (total_frames - (sent_count + skip_count)) / rate if rate > 0 else 0
-                if sent_count % 10 == 0 or sent_count == 1:
+                # Enqueue for sender thread (blocks if queue full, backpressure)
+                send_q.put((image_num, pixels_bytes, mapping_entry))
+
+                # Progress (read counters safely)
+                with sent_count_lock:
+                    sc = counters["sent"]
+                processed = sc + skip_count
+                if processed > 0 and (processed % 10 == 0 or processed == 1):
+                    elapsed = time.time() - t_start
+                    rate = processed / elapsed if elapsed > 0 else 0
+                    remaining = (total_frames - processed) / rate if rate > 0 else 0
                     logger.info(
-                        f"  Sent image_num={image_num} "
-                        f"({sent_count}/{total_frames} done, "
-                        f"{rate:.1f} img/s, ETA {remaining:.0f}s)"
+                        f"  Progress: {processed}/{total_frames} "
+                        f"({rate:.1f} img/s, ETA {remaining:.0f}s)"
                     )
 
-                # Periodic save
-                if sent_count % save_interval == 0:
+                # Periodic mapping save
+                if processed > 0 and processed % save_interval == 0:
                     lsu.save_frame_mapping(frame_mapping, mapping_file)
-                    logger.debug(f"  Saved mapping ({sent_count} entries)")
 
                 image_num += 1
 
-            # Break outer loop too if limit reached
-            if image_num > 65535:
+            if image_num > 65535 or send_error:
                 break
 
     except KeyboardInterrupt:
@@ -252,6 +293,10 @@ def serve_images(
     except Exception as e:
         logger.error(f"Unexpected error: {e}", exc_info=True)
     finally:
+        # Signal sender thread to finish and wait
+        send_q.put(None)  # sentinel
+        sender.join(timeout=60)
+
         # Final mapping save
         lsu.save_frame_mapping(frame_mapping, mapping_file)
         logger.info(f"Final mapping saved to {mapping_file}")
@@ -266,9 +311,11 @@ def serve_images(
 
     # Summary
     elapsed = time.time() - t_start
+    with sent_count_lock:
+        sc = counters["sent"]
     logger.info(
-        f"Done: {sent_count} sent, {skip_count} skipped, "
-        f"{elapsed:.1f}s total ({sent_count/elapsed:.1f} img/s)"
+        f"Done: {sc} sent, {skip_count + counters['skip']} skipped, "
+        f"{elapsed:.1f}s total ({sc/elapsed:.1f} img/s)"
     )
     return frame_mapping
 
