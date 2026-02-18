@@ -358,8 +358,11 @@ int main(int argc, char *argv[]) {
   // Forward simulation & matching
   // Use pinned memory for matchedArr to enable async GPU<->CPU transfers
   double *matchedArr;
+  double t_pin0 = omp_get_wtime();
   gpuErrchk(cudaMallocHost(&matchedArr, nrOrients * sizeof(*matchedArr)));
   memset(matchedArr, 0, nrOrients * sizeof(*matchedArr));
+  printf("Time to pin matchedArr (%.1f MB): %lf s\n",
+         nrOrients * sizeof(*matchedArr) / 1e6, omp_get_wtime() - t_pin0);
   int numProcs = atoi(argv[5]);
   printf("Now running using %d threads.\n", numProcs);
   fflush(stdout);
@@ -538,7 +541,7 @@ int main(int argc, char *argv[]) {
     free(pxImgAll);
   } else {
     // ── Read forward simulation ────────────────────────────────────────
-    clock_t start = clock();
+    double wt0 = omp_get_wtime();
     size_t stride = (size_t)(1 + 2 * maxNrSpots);
     size_t szArr = nrOrients * stride;
     uint16_t *outArr;
@@ -575,13 +578,12 @@ int main(int argc, char *argv[]) {
       }
       fclose(fwdFN);
     }
-    clock_t end = clock();
-    printf("Time elapsed to read the forward simulation: %lf\n",
-           (double)(end - start) / CLOCKS_PER_SEC);
+    double wt_read = omp_get_wtime() - wt0;
+    printf("Time elapsed to read the forward simulation: %lf s\n", wt_read);
 
     // ── Chunked + streamed CUDA matching ───────────────────────────────
     // Double-buffer chunks across 2 streams to overlap H2D, kernel, D2H.
-    start = clock();
+    wt0 = omp_get_wtime();
     const int NUM_STREAMS = 2;
     // Size chunks: use available GPU memory but cap pinned buffers at 1 GB
     // each to avoid slow page-locking of huge regions.
@@ -634,10 +636,8 @@ int main(int argc, char *argv[]) {
     gpuErrchk(cudaMemcpy(d_image, image, nrPxX * nrPxY * sizeof(double),
                          cudaMemcpyHostToDevice));
 
-    end = clock();
-    printf("Time elapsed to prepare the GPU: %lf\n",
-           (double)(end - start) / CLOCKS_PER_SEC);
-    start = clock();
+    printf("Time elapsed to prepare the GPU: %lf s\n", omp_get_wtime() - wt0);
+    wt0 = omp_get_wtime();
 
     // ── Pipeline loop ──────────────────────────────────────────────────
     for (size_t c = 0; c < nChunks; c++) {
@@ -681,9 +681,8 @@ int main(int argc, char *argv[]) {
     // Wait for all streams to drain
     gpuErrchk(cudaDeviceSynchronize());
 
-    end = clock();
-    printf("Time elapsed to match on the GPU: %lf\n",
-           (double)(end - start) / CLOCKS_PER_SEC);
+    printf("Time elapsed to match on the GPU: %lf s\n", omp_get_wtime() - wt0);
+    wt0 = omp_get_wtime();
 
     // Cleanup GPU resources
     for (int s = 0; s < NUM_STREAMS; s++) {
@@ -697,6 +696,8 @@ int main(int argc, char *argv[]) {
       munmap(outArr, szArr * sizeof(uint16_t));
     else
       free(outArr);
+    printf("Time elapsed to cleanup GPU chunks: %lf s\n",
+           omp_get_wtime() - wt0);
 
     // Count results
     for (int i = 0; i < (int)nrOrients; i++) {
@@ -890,7 +891,9 @@ int main(int argc, char *argv[]) {
   fclose(outF);
 
   // Cleanup
+  double t_cleanup = omp_get_wtime();
   cudaFreeHost(matchedArr);
+  printf("Time to unpin matchedArr: %lf s\n", omp_get_wtime() - t_cleanup);
   free(mA);
   free(rowNrs);
   free(doneArr);
