@@ -494,7 +494,7 @@ def main():
     # Parse command line arguments
     args = parse_arguments()
     
-    # Get installation path
+    # Get installation path (scripts/ directory, where GenerateHKLs.py lives)
     install_path = os.path.dirname(os.path.abspath(__file__))
     logger.info(f"Installation path: {install_path}")
     

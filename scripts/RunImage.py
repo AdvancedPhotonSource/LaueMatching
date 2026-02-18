@@ -40,8 +40,9 @@ from plotly.subplots import make_subplots
 # Configure matplotlib
 plt.rcParams['font.size'] = 3
 
-# Get installation path for relative imports
-INSTALL_PATH = os.path.dirname(os.path.abspath(__file__))
+# Get installation path — repo root is one level above scripts/
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+INSTALL_PATH = os.path.dirname(SCRIPT_DIR)  # repo root (contains bin/, LIBS/, etc.)
 PYTHON_PATH = sys.executable
 
 # Shared streaming utilities (also used by laue_image_server / laue_postprocess)
@@ -541,9 +542,10 @@ class EnhancedImageProcessor:
         compute_type = self.config.get("processing_type", "CPU").upper()
         ncpus = self.config.get("num_cpus", 1)
 
-        # Find executable path relative to script location
+        # Find executable path relative to repo root (one level above scripts/)
         script_dir = os.path.dirname(os.path.realpath(__file__))
-        build_dir = os.path.join(script_dir, 'bin')
+        repo_root = os.path.dirname(script_dir)
+        build_dir = os.path.join(repo_root, 'bin')
 
         # Choose the appropriate executable
         do_forward = self.config.get("do_forward", False)
@@ -593,8 +595,8 @@ class EnhancedImageProcessor:
 
         # --- Set up environment for executable (LD_LIBRARY_PATH) ---
         env = dict(os.environ)
-        lib_path_nlopt = os.path.join(script_dir, 'LIBS', 'NLOPT', 'lib')
-        lib_path_nlopt64 = os.path.join(script_dir, 'LIBS', 'NLOPT', 'lib64')
+        lib_path_nlopt = os.path.join(repo_root, 'LIBS', 'NLOPT', 'lib')
+        lib_path_nlopt64 = os.path.join(repo_root, 'LIBS', 'NLOPT', 'lib64')
         current_ld_path = env.get('LD_LIBRARY_PATH', '')
         # Prepend NLopt paths
         env['LD_LIBRARY_PATH'] = f"{lib_path_nlopt}:{lib_path_nlopt64}:{current_ld_path}"
@@ -708,7 +710,7 @@ class EnhancedImageProcessor:
             skip_percentage = sim_config.skip_percentage
 
             # --- Construct and Run the Simulation Command ---
-            sim_script_path = os.path.join(INSTALL_PATH, 'GenerateSimulation.py')
+            sim_script_path = os.path.join(SCRIPT_DIR, 'GenerateSimulation.py')
             if not os.path.exists(sim_script_path):
                  logger.error(f"Simulation script not found: {sim_script_path}")
                  return {"success": False, "error": "GenerateSimulation.py not found"}
@@ -840,7 +842,7 @@ class EnhancedImageProcessor:
         ehi = self.config.get("ehi")
 
         logger.info("Attempting to generate HKL file...")
-        genhkl_script = os.path.join(INSTALL_PATH, 'GenerateHKLs.py')
+        genhkl_script = os.path.join(SCRIPT_DIR, 'GenerateHKLs.py')
         if not os.path.exists(genhkl_script):
              logger.error(f"GenerateHKLs.py script not found at {genhkl_script}")
              return {"success": False, "error": "GenerateHKLs.py not found"}
