@@ -90,7 +90,7 @@ flowchart LR
 
     subgraph PostProc ["laue_postprocess.py"]
         direction TB
-        Parse["Parse results"] --> Filter["Filter by<br/>unique spots"] --> Out["Per-image H5<br/>+ Plotly HTML"]
+        Parse["Parse results"] --> Filter["Filter by<br/>unique spots"] --> Out["Per-image H5<br/>(results + image data)"]
     end
 
     Server -- "uint16 img_num + float[] pixels" --> Daemon
@@ -125,7 +125,7 @@ LaueMatching/
 │   ├── RunImage.py                   # Single-image indexing pipeline
 │   ├── laue_orchestrator.py          # Streaming pipeline entry point
 │   ├── laue_image_server.py          # H5 → preprocess → TCP sender
-│   ├── laue_postprocess.py           # Results filtering + visualization
+│   ├── laue_postprocess.py           # Results filtering + per-image HDF5
 │   ├── laue_config.py                # Configuration dataclasses & manager
 │   ├── laue_stream_utils.py          # Shared I/O, preprocessing, TCP utilities
 │   ├── laue_visualization.py         # 8 standalone visualization functions

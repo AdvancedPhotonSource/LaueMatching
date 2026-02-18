@@ -13,7 +13,7 @@ Python scripts for image preprocessing, orientation indexing, streaming pipeline
 | `RunImage.py` | 1,673 | **Single-image indexing pipeline** — load, preprocess, index, refine, and export results for one H5 image. |
 | `laue_orchestrator.py` | 465 | **Streaming pipeline entry-point** — launches the GPU daemon, image server, monitors progress with tqdm bar, and runs post-processing. |
 | `laue_image_server.py` | 389 | **TCP image sender** — reads H5 files, preprocesses frames, and sends them to the GPU daemon over TCP with pipelined threading. |
-| `laue_postprocess.py` | 598 | **Stream results post-processor** — splits daemon output by image, filters by unique spots, saves per-image HDF5 + Plotly HTML. |
+| `laue_postprocess.py` | 580 | **Stream results post-processor** — splits daemon output by image, filters by unique spots, embeds raw/processed image data, saves per-image HDF5. |
 | `laue_config.py` | 782 | **Configuration module** — dataclasses for processing, visualization, and optimizer settings; parameter file parser. |
 | `laue_stream_utils.py` | 1,108 | **Shared utilities** — image I/O, preprocessing, TCP wire protocol (float32), HDF5 helpers, orientation sort/filter. |
 | `laue_visualization.py` | 937 | **Visualization library** — 8 standalone Plotly/Matplotlib functions for interactive spot maps, 3D views, reports, and simulation comparisons. |
@@ -127,7 +127,7 @@ This will:
 2. **Start** the image server (preprocesses and sends frames over TCP)
 3. **Monitor** progress with live rate + ETA
 4. **Terminate** the daemon after all images are processed
-5. **Post-process** results (filter, sort, save per-image HDF5 + interactive HTML)
+5. **Post-process** results (filter, sort, embed image data, save per-image HDF5)
 
 Output is written to a timestamped `laue_stream_YYYYMMDD_HHMMSS/` directory.
 
@@ -147,7 +147,9 @@ python scripts/laue_postprocess.py \
     --solutions solutions.txt \
     --spots spots.txt \
     --config params.txt \
-    --output-dir results/
+    --output-dir results/ \
+    --labels labels.h5 \
+    --folder /path/to/h5s/
 ```
 
 ### `laue_orchestrator.py` — CLI Reference
@@ -199,6 +201,7 @@ The daemon receives float32 pixels (4 bytes each, halving bandwidth vs. double) 
 | `--output-dir` | `results` | Output directory for per-image HDF5 + HTML |
 | `--mapping` | `frame_mapping.json` | Frame mapping JSON from image server |
 | `--labels` | *(none)* | Path to `labels.h5` with real image segmentation labels |
+| `--folder` | *(none)* | Source H5 image folder (enables raw/processed data in output H5) |
 | `--image-nr` | `0` | Process specific image (0 = all) |
 | `--min-unique` | `2` | Minimum unique spots to keep an orientation |
 | `--nprocs` | `1` | Number of parallel processes for per-image processing |

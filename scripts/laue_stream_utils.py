@@ -515,6 +515,7 @@ def preprocess_image(
     cfg: Dict[str, Any],
     background: Optional[np.ndarray] = None,
     override_thresh: float = 0.0,
+    return_intermediates: bool = False,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List]:
     """
     Full preprocessing pipeline (RunImage.py steps 1-6).
@@ -531,13 +532,15 @@ def preprocess_image(
         cfg:             Config dict (from parse_config).
         background:      Optional pre-loaded background array.
         override_thresh: If > 0, override threshold method with this value.
+        return_intermediates: If True, return a dict with all intermediate
+            arrays instead of the standard 4-tuple.
 
     Returns:
-        (blurred_image, filtered_thresholded_image, filtered_labels, centers)
-
-        blurred_image is what should be sent to the GPU daemon (double[]).
-        filtered_thresholded_image and filtered_labels are kept for
-        post-processing / visualization.
+        If return_intermediates is False (default):
+            (blurred_image, filtered_thresholded_image, filtered_labels, centers)
+        If return_intermediates is True:
+            dict with keys: background, thresholded, labels_unfiltered,
+            filt_img, filt_labels, blurred, centers
     """
     nr_px_x = cfg["nr_px_x"]
     nr_px_y = cfg["nr_px_y"]
@@ -585,6 +588,12 @@ def preprocess_image(
     if nlabels <= 1:
         # No components — return zero image
         blurred = np.zeros_like(raw_image, dtype=np.float64)
+        if return_intermediates:
+            return {
+                "background": background, "thresholded": thresholded_u16,
+                "labels_unfiltered": labels, "filt_img": thresholded_u16,
+                "filt_labels": labels, "blurred": blurred, "centers": [],
+            }
         return blurred, thresholded_u16, labels, []
 
     # --- Step 5: Filter small components ---
@@ -594,6 +603,12 @@ def preprocess_image(
     )
     if not centers:
         blurred = np.zeros_like(raw_image, dtype=np.float64)
+        if return_intermediates:
+            return {
+                "background": background, "thresholded": thresholded_u16,
+                "labels_unfiltered": labels, "filt_img": filt_img,
+                "filt_labels": filt_labels, "blurred": blurred, "centers": centers,
+            }
         return blurred, filt_img, filt_labels, centers
 
     # --- Step 6: Gaussian blur ---
@@ -605,6 +620,12 @@ def preprocess_image(
     )
     blurred = ndimg.gaussian_filter(filt_img.astype(np.float64), sigma)
 
+    if return_intermediates:
+        return {
+            "background": background, "thresholded": thresholded_u16,
+            "labels_unfiltered": labels, "filt_img": filt_img,
+            "filt_labels": filt_labels, "blurred": blurred, "centers": centers,
+        }
     return blurred, filt_img, filt_labels, centers
 
 

@@ -326,6 +326,7 @@ def run_pipeline(
         "--output-dir", results_dir,
         "--mapping", os.path.abspath(mapping_file),
         "--labels", os.path.abspath(labels_file),
+        "--folder", os.path.abspath(folder),
         "--min-unique", str(min_unique),
         "--nprocs", str(ncpus),
     ]
