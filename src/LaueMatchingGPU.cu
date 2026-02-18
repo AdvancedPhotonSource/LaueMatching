@@ -356,13 +356,12 @@ int main(int argc, char *argv[]) {
   printf("Pixels with intensity: %d\n", nonZeroPx);
 
   // Forward simulation & matching
-  // Use pinned memory for matchedArr to enable async GPU<->CPU transfers
-  double *matchedArr;
-  double t_pin0 = omp_get_wtime();
-  gpuErrchk(cudaMallocHost(&matchedArr, nrOrients * sizeof(*matchedArr)));
-  memset(matchedArr, 0, nrOrients * sizeof(*matchedArr));
-  printf("Time to pin matchedArr (%.1f MB): %lf s\n",
-         nrOrients * sizeof(*matchedArr) / 1e6, omp_get_wtime() - t_pin0);
+  double *matchedArr = (double *)calloc(nrOrients, sizeof(*matchedArr));
+  if (matchedArr == NULL) {
+    printf("Could not allocate matchedArr (%zu bytes).\n",
+           nrOrients * sizeof(*matchedArr));
+    return 1;
+  }
   int numProcs = atoi(argv[5]);
   printf("Now running using %d threads.\n", numProcs);
   fflush(stdout);
@@ -581,67 +580,47 @@ int main(int argc, char *argv[]) {
     double wt_read = omp_get_wtime() - wt0;
     printf("Time elapsed to read the forward simulation: %lf s\n", wt_read);
 
-    // ── Chunked + streamed CUDA matching ───────────────────────────────
-    // Double-buffer chunks across 2 streams to overlap H2D, kernel, D2H.
+    // ── Chunked CUDA matching ─────────────────────────────────────────
+    // Process orientations in chunks that fit in GPU memory.
+    // Synchronous transfers avoid the massive cost of cudaMallocHost
+    // page-locking (>10 s for large pinned regions on this system).
     wt0 = omp_get_wtime();
-    const int NUM_STREAMS = 2;
-    // Size chunks: use available GPU memory but cap pinned buffers at 1 GB
-    // each to avoid slow page-locking of huge regions.
     size_t freeMem = 0, totalMem = 0;
     gpuErrchk(cudaMemGetInfo(&freeMem, &totalMem));
     size_t imageBytes = (size_t)nrPxX * nrPxY * sizeof(double);
+    // Use up to 80% of free GPU memory for the outArr chunk buffer
     size_t usable = (freeMem > imageBytes + (freeMem / 5))
                         ? freeMem - imageBytes - (freeMem / 5)
                         : freeMem / 2;
-    size_t maxChunkOutBytes = usable / NUM_STREAMS;
-    const size_t PINNED_CAP = 1ULL * 1024 * 1024 * 1024; // 1 GB per buffer
-    if (maxChunkOutBytes > PINNED_CAP)
-      maxChunkOutBytes = PINNED_CAP;
-    size_t chunkSize = maxChunkOutBytes / (stride * sizeof(uint16_t));
+    size_t chunkSize = usable / (stride * sizeof(uint16_t));
     if (chunkSize < 1024)
       chunkSize = 1024;
     if (chunkSize > nrOrients)
       chunkSize = nrOrients;
     size_t nChunks = (nrOrients + chunkSize - 1) / chunkSize;
-    printf("GPU chunked matching: %zu orientations in %zu chunks of %zu "
-           "(stride=%zu, %d streams, GPU mem: %.1f/%.1f GB free)\n",
-           nrOrients, nChunks, chunkSize, stride, NUM_STREAMS, freeMem / 1e9,
-           totalMem / 1e9);
-    fflush(stdout);
-
     size_t chunkOutBytes = chunkSize * stride * sizeof(uint16_t);
     size_t chunkMatchBytes = chunkSize * sizeof(double);
+    printf("GPU chunked matching: %zu orientations in %zu chunks of %zu "
+           "(stride=%zu, GPU mem: %.1f/%.1f GB free)\n",
+           nrOrients, nChunks, chunkSize, stride,
+           freeMem / 1e9, totalMem / 1e9);
+    fflush(stdout);
 
-    // Create CUDA streams
-    cudaStream_t streams[NUM_STREAMS];
-    for (int s = 0; s < NUM_STREAMS; s++)
-      gpuErrchk(cudaStreamCreate(&streams[s]));
-
-    // Allocate pinned host staging buffers (double-buffered)
-    uint16_t *h_outChunk[NUM_STREAMS];
-    for (int s = 0; s < NUM_STREAMS; s++)
-      gpuErrchk(cudaMallocHost(&h_outChunk[s], chunkOutBytes));
-
-    // Allocate device buffers (double-buffered for outArr and matchedArr)
-    uint16_t *d_outChunk[NUM_STREAMS];
-    double *d_matchChunk[NUM_STREAMS];
-    for (int s = 0; s < NUM_STREAMS; s++) {
-      gpuErrchk(cudaMalloc(&d_outChunk[s], chunkOutBytes));
-      gpuErrchk(cudaMalloc(&d_matchChunk[s], chunkMatchBytes));
-    }
-
-    // Image: copy once to device (resident)
-    double *d_image;
-    gpuErrchk(cudaMalloc(&d_image, nrPxX * nrPxY * sizeof(double)));
-    gpuErrchk(cudaMemcpy(d_image, image, nrPxX * nrPxY * sizeof(double),
+    // Allocate device buffers (single set — no double-buffering needed)
+    uint16_t *d_outChunk;
+    double *d_matchChunk, *d_image;
+    gpuErrchk(cudaMalloc(&d_outChunk, chunkOutBytes));
+    gpuErrchk(cudaMalloc(&d_matchChunk, chunkMatchBytes));
+    gpuErrchk(cudaMalloc(&d_image, imageBytes));
+    gpuErrchk(cudaMemcpy(d_image, image, imageBytes,
                          cudaMemcpyHostToDevice));
 
-    printf("Time elapsed to prepare the GPU: %lf s\n", omp_get_wtime() - wt0);
+    printf("Time elapsed to prepare the GPU: %lf s\n",
+           omp_get_wtime() - wt0);
     wt0 = omp_get_wtime();
 
-    // ── Pipeline loop ──────────────────────────────────────────────────
+    // ── Chunk loop ─────────────────────────────────────────────────────
     for (size_t c = 0; c < nChunks; c++) {
-      int s = (int)(c % NUM_STREAMS);
       size_t offset = c * chunkSize;
       size_t thisChunk = chunkSize;
       if (offset + thisChunk > nrOrients)
@@ -649,55 +628,32 @@ int main(int argc, char *argv[]) {
       size_t thisOutBytes = thisChunk * stride * sizeof(uint16_t);
       size_t thisMatchBytes = thisChunk * sizeof(double);
 
-      // Wait for this stream's previous iteration to finish D2H
-      gpuErrchk(cudaStreamSynchronize(streams[s]));
+      // Synchronous H2D directly from outArr (mmap'd or malloc'd)
+      gpuErrchk(cudaMemcpy(d_outChunk, outArr + offset * stride,
+                           thisOutBytes, cudaMemcpyHostToDevice));
+      gpuErrchk(cudaMemset(d_matchChunk, 0, thisMatchBytes));
 
-      // Copy previous results from pinned matchedArr (already there via async)
-      // (matchedArr is pinned, so cudaMemcpyAsync writes directly into it)
-
-      // Stage: CPU memcpy from outArr (possibly mmap'd) to pinned buffer
-      memcpy(h_outChunk[s], outArr + offset * stride, thisOutBytes);
-
-      // Async H2D: pinned staging buffer → device
-      gpuErrchk(cudaMemcpyAsync(d_outChunk[s], h_outChunk[s], thisOutBytes,
-                                cudaMemcpyHostToDevice, streams[s]));
-
-      // Zero the device match buffer for this chunk
-      gpuErrchk(
-          cudaMemsetAsync(d_matchChunk[s], 0, thisMatchBytes, streams[s]));
-
-      // Launch kernel for this chunk (thread index is local to chunk)
+      // Launch kernel
       int blocks = (int)((thisChunk + 1023) / 1024);
-      compare<<<blocks, 1024, 0, streams[s]>>>(
-          nrPxX, thisChunk, maxNrSpots, minIntensity, minNrSpots, d_outChunk[s],
-          d_image, d_matchChunk[s]);
+      compare<<<blocks, 1024>>>(nrPxX, thisChunk, maxNrSpots, minIntensity,
+                                minNrSpots, d_outChunk, d_image, d_matchChunk);
 
-      // Async D2H: results directly into pinned matchedArr at correct offset
-      gpuErrchk(cudaMemcpyAsync(matchedArr + offset, d_matchChunk[s],
-                                thisMatchBytes, cudaMemcpyDeviceToHost,
-                                streams[s]));
+      // Synchronous D2H into matchedArr
+      gpuErrchk(cudaMemcpy(matchedArr + offset, d_matchChunk,
+                           thisMatchBytes, cudaMemcpyDeviceToHost));
     }
 
-    // Wait for all streams to drain
-    gpuErrchk(cudaDeviceSynchronize());
+    printf("Time elapsed to match on the GPU: %lf s\n",
+           omp_get_wtime() - wt0);
 
-    printf("Time elapsed to match on the GPU: %lf s\n", omp_get_wtime() - wt0);
-    wt0 = omp_get_wtime();
-
-    // Cleanup GPU resources
-    for (int s = 0; s < NUM_STREAMS; s++) {
-      cudaFreeHost(h_outChunk[s]);
-      cudaFree(d_outChunk[s]);
-      cudaFree(d_matchChunk[s]);
-      cudaStreamDestroy(streams[s]);
-    }
+    // Cleanup
+    cudaFree(d_outChunk);
+    cudaFree(d_matchChunk);
     cudaFree(d_image);
     if (outArrMapped)
       munmap(outArr, szArr * sizeof(uint16_t));
     else
       free(outArr);
-    printf("Time elapsed to cleanup GPU chunks: %lf s\n",
-           omp_get_wtime() - wt0);
 
     // Count results
     for (int i = 0; i < (int)nrOrients; i++) {
@@ -891,9 +847,7 @@ int main(int argc, char *argv[]) {
   fclose(outF);
 
   // Cleanup
-  double t_cleanup = omp_get_wtime();
-  cudaFreeHost(matchedArr);
-  printf("Time to unpin matchedArr: %lf s\n", omp_get_wtime() - t_cleanup);
+  free(matchedArr);
   free(mA);
   free(rowNrs);
   free(doneArr);
