@@ -259,9 +259,16 @@ def run_pipeline(
     )
     logger.info(f"Image server started (pid {server_proc.pid}), log → {server_log}")
 
+    # Count total frames for progress bar
+    import glob
+    total_frames = len(glob.glob(os.path.join(folder, "*.h5"))) + \
+                   len(glob.glob(os.path.join(folder, "*.hdf5")))
+    logger.info(f"Total frames to process: {total_frames}")
+
     # --- 5. Monitor progress ---
     try:
-        _monitor(server_proc, daemon_proc, mapping_file, daemon_log)
+        _monitor(server_proc, daemon_proc, mapping_file, daemon_log,
+                 total_frames=total_frames)
     except KeyboardInterrupt:
         logger.warning("Pipeline interrupted by user.")
         _terminate_process(server_proc, "image server")
@@ -351,38 +358,68 @@ def _monitor(
     daemon_proc: subprocess.Popen,
     mapping_file: str,
     daemon_log: str,
-    poll_interval: float = 5.0,
+    total_frames: int = 0,
+    poll_interval: float = 1.0,
 ) -> None:
     """Monitor server progress and daemon health until server exits."""
+    try:
+        from tqdm import tqdm
+        has_tqdm = True
+    except ImportError:
+        has_tqdm = False
+
     last_count = 0
-    t0 = time.time()
 
-    while server_proc.poll() is None:
-        # Check daemon is still running
-        if daemon_proc.poll() is not None:
-            logger.error(
-                f"Daemon exited unexpectedly (code {daemon_proc.returncode}). "
-                f"Aborting."
-            )
-            _print_log_tail(daemon_log)
-            _terminate_process(server_proc, "image server")
-            raise RuntimeError("Daemon died")
+    if has_tqdm and total_frames > 0:
+        pbar = tqdm(
+            total=total_frames,
+            desc="Streaming",
+            unit="img",
+            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]",
+            dynamic_ncols=True,
+        )
+    else:
+        pbar = None
 
-        # Read mapping for progress
+    try:
+        while server_proc.poll() is None:
+            # Check daemon is still running
+            if daemon_proc.poll() is not None:
+                logger.error(
+                    f"Daemon exited unexpectedly (code {daemon_proc.returncode}). "
+                    f"Aborting."
+                )
+                _print_log_tail(daemon_log)
+                _terminate_process(server_proc, "image server")
+                raise RuntimeError("Daemon died")
+
+            # Read mapping for progress
+            mapping = lsu.load_frame_mapping(mapping_file)
+            count = len(mapping)
+            if count > last_count:
+                delta = count - last_count
+                if pbar is not None:
+                    pbar.update(delta)
+                else:
+                    sent = sum(1 for v in mapping.values()
+                               if not v.get("skipped", False))
+                    skipped = count - sent
+                    logger.info(
+                        f"Progress: {count}/{total_frames} frames "
+                        f"({sent} sent, {skipped} skipped)"
+                    )
+                last_count = count
+
+            time.sleep(poll_interval)
+
+        # Final update — pick up any frames written after last poll
         mapping = lsu.load_frame_mapping(mapping_file)
         count = len(mapping)
-        if count > last_count:
-            elapsed = time.time() - t0
-            rate = count / elapsed if elapsed > 0 else 0
-            sent = sum(1 for v in mapping.values() if not v.get("skipped", False))
-            skipped = count - sent
-            logger.info(
-                f"Progress: {count} frames ({sent} sent, {skipped} skipped), "
-                f"{rate:.1f} frames/s"
-            )
-            last_count = count
-
-        time.sleep(poll_interval)
+        if count > last_count and pbar is not None:
+            pbar.update(count - last_count)
+    finally:
+        if pbar is not None:
+            pbar.close()
 
 
 def _print_log_tail(log_path: str, n: int = 2000) -> None:
