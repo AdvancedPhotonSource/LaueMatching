@@ -173,22 +173,36 @@ def run_pipeline(
     logger.info(f"Orientation DB : {orient_file}")
     logger.info(f"HKL file       : {hkl_file}")
 
+    # Read the daemon's ResultDir from config (the subdirectory where it
+    # writes solutions.txt / spots.txt inside its CWD).
+    daemon_result_dir = "results_stream"  # C-code default
+    try:
+        import laue_config
+        cfg_mgr = laue_config.ConfigurationManager(config_file)
+        daemon_result_dir = getattr(cfg_mgr.config, "result_dir", daemon_result_dir)
+    except Exception:
+        pass
+    logger.info(f"Daemon ResultDir: {daemon_result_dir}")
+
     # --- 1. Create output directory ---
     if not output_dir:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         output_dir = f"laue_stream_{ts}"
     os.makedirs(output_dir, exist_ok=True)
 
-    # Paths inside output dir
+    # Paths inside output dir.
+    # The daemon writes solutions/spots to <CWD>/<ResultDir>/.
     daemon_log = os.path.join(output_dir, "daemon.log")
     server_log = os.path.join(output_dir, "server.log")
-    solutions_file = os.path.join(output_dir, "solutions.txt")
-    spots_file = os.path.join(output_dir, "spots.txt")
+    daemon_out_dir = os.path.join(output_dir, daemon_result_dir)
+    solutions_file = os.path.join(daemon_out_dir, "solutions.txt")
+    spots_file = os.path.join(daemon_out_dir, "spots.txt")
     mapping_file = os.path.join(output_dir, "frame_mapping.json")
     results_dir = os.path.join(output_dir, "results")
     os.makedirs(results_dir, exist_ok=True)
 
     logger.info(f"Output directory: {output_dir}")
+    logger.info(f"Daemon output  : {daemon_out_dir}")
 
     # --- 2. Start GPU daemon ---
     daemon_bin = _find_daemon_binary()
@@ -256,10 +270,23 @@ def run_pipeline(
         server_logf.close()
         sys.exit(130)
 
-    # --- 6. Server finished — give daemon time to flush ---
+    # --- 6. Server finished — wait for daemon to flush output ---
     logger.info(f"Image server exited (code {server_proc.returncode}). "
-                f"Waiting {flush_time}s for daemon to flush...")
-    time.sleep(flush_time)
+                f"Waiting for daemon to write results...")
+
+    # Poll for solutions.txt (mirrors integrator_batch_process.py pattern)
+    flush_deadline = time.time() + flush_time + 60
+    while time.time() < flush_deadline:
+        if os.path.isfile(solutions_file) and os.path.getsize(solutions_file) > 0:
+            logger.info(f"solutions.txt detected ({os.path.getsize(solutions_file)} bytes)")
+            time.sleep(2.0)  # extra wait for file to be fully flushed
+            break
+        if daemon_proc.poll() is not None:
+            logger.info("Daemon exited on its own.")
+            break
+        time.sleep(1.0)
+    else:
+        logger.warning("Timed out waiting for daemon to write solutions.txt")
 
     # --- 7. Terminate daemon ---
     _terminate_process(daemon_proc, "daemon")
@@ -273,7 +300,6 @@ def run_pipeline(
         "laue_postprocess.py",
     )
 
-    # The daemon writes solutions.txt and spots.txt in its cwd (output_dir)
     if not os.path.isfile(solutions_file):
         logger.error(f"solutions.txt not found at {solutions_file}. Check daemon log.")
         _print_log_tail(daemon_log)
