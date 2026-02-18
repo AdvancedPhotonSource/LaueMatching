@@ -109,6 +109,8 @@ def _terminate_process(proc: subprocess.Popen, name: str, timeout: float = 10.0)
 def run_pipeline(
     config_file: str,
     folder: str,
+    orient_file: str = "",
+    hkl_file: str = "",
     h5_location: str = "/entry/data/data",
     ncpus: int = 1,
     output_dir: str = "",
@@ -123,6 +125,10 @@ def run_pipeline(
     Args:
         config_file:  Path to params.txt.
         folder:       Folder with H5 image files.
+        orient_file:  Path to orientation database (.bin). Resolved from
+                      CWD if relative.  Looked up in config if empty.
+        hkl_file:     Path to HKL file (.csv/.bin). Resolved from CWD if
+                      relative.  Looked up in config if empty.
         h5_location:  Internal H5 dataset path.
         ncpus:        Number of CPUs (passed to daemon).
         output_dir:   Output directory (auto-generated if empty).
@@ -132,6 +138,31 @@ def run_pipeline(
         min_unique:   Minimum unique spots for orientation filtering.
     """
     t_pipeline_start = time.time()
+
+    # Resolve to absolute paths so they remain valid when the daemon
+    # subprocess runs with cwd=output_dir.
+    config_file = os.path.abspath(config_file)
+    folder = os.path.abspath(folder)
+
+    # Resolve orient / HKL files — fall back to defaults read from config.
+    if not orient_file or not hkl_file:
+        try:
+            import laue_config
+            cfg_mgr = laue_config.ConfigurationManager(config_file)
+            if not orient_file:
+                orient_file = cfg_mgr.get("orientation_file", "orientations.bin")
+            if not hkl_file:
+                hkl_file = cfg_mgr.get("hkl_file", "hkls.bin")
+        except Exception as exc:
+            logger.warning(f"Could not read config to resolve orient/hkl files: {exc}")
+            if not orient_file:
+                orient_file = "orientations.bin"
+            if not hkl_file:
+                hkl_file = "hkls.bin"
+    orient_file = os.path.abspath(orient_file)
+    hkl_file = os.path.abspath(hkl_file)
+    logger.info(f"Orientation DB : {orient_file}")
+    logger.info(f"HKL file       : {hkl_file}")
 
     # --- 1. Create output directory ---
     if not output_dir:
@@ -155,6 +186,8 @@ def run_pipeline(
     daemon_cmd = [
         daemon_bin,
         config_file,
+        orient_file,
+        hkl_file,
         str(ncpus),
     ]
     logger.info(f"Starting daemon: {' '.join(daemon_cmd)}")
@@ -379,6 +412,14 @@ def main() -> None:
         help="Minimum unique spots for orientation filtering (default: 2)"
     )
     parser.add_argument(
+        "--orient-file", default="",
+        help="Path to orientation database file (default: from config or orientations.bin)"
+    )
+    parser.add_argument(
+        "--hkl-file", default="",
+        help="Path to HKL file (default: from config or hkls.bin)"
+    )
+    parser.add_argument(
         "--log-level", default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         help="Logging verbosity (default: INFO)"
@@ -398,6 +439,8 @@ def main() -> None:
     run_pipeline(
         config_file=args.config,
         folder=args.folder,
+        orient_file=args.orient_file,
+        hkl_file=args.hkl_file,
         h5_location=args.h5_location,
         ncpus=args.ncpus,
         output_dir=args.output_dir,
