@@ -115,23 +115,31 @@ def process_single_image(
     # Each unique (x,y) location gets a distinct label.
     labels = np.zeros((nr_px_y, nr_px_x), dtype=np.int32)
     label_counter = 1
-    # Determine spot x,y column indices (typically col 5=x, col 6=y in
-    # the original RunImage format, but spots from the stream daemon may
-    # have ImageNr prepended as col 0, pushing everything right by one).
-    # We need to detect this based on the number of columns.
+    # Determine column indices for spots and orientations.
+    # Stream format: ImageNr=col0, GrainNr=col1, ..., X=col6, Y=col7 (12 cols)
+    # RunImage format: GrainNr=col0, ..., X=col5, Y=col6 (11 cols)
     n_cols = spots.shape[1] if spots.ndim == 2 else 0
-    # Standard spots: GrainNr=0, ..., x=5, y=6
-    # Stream spots:   ImageNr=0, GrainNr=1, ..., x=6, y=7
-    # The split_spots_by_image already removed the ImageNr column or we
-    # get spots pre-split. For safety, check col count.
-    spot_x_col = 5
-    spot_y_col = 6
-    spot_grain_col = 0
+    n_sol_cols = orientations.shape[1] if orientations.ndim == 2 else 0
+
+    # Stream spots have ImageNr prepended (12 cols vs 11)
     if n_cols > 10:
-        # Likely has ImageNr prepended — shift columns
         spot_x_col = 6
         spot_y_col = 7
         spot_grain_col = 1
+    else:
+        spot_x_col = 5
+        spot_y_col = 6
+        spot_grain_col = 0
+
+    # Stream solutions have ImageNr prepended (>30 cols typical)
+    # RunImage solutions have GrainNr at col 0; stream has ImageNr at col 0,
+    # GrainNr at col 1.  Use same heuristic as spots.
+    if n_sol_cols > 30:
+        orient_grain_col = 1
+        orient_quality_col = 5  # NMatches*sqrt(Intensity)
+    else:
+        orient_grain_col = 0
+        orient_quality_col = 4
 
     for spot in spots:
         try:
@@ -146,18 +154,20 @@ def process_single_image(
     # Calculate unique spots per orientation
     unique_info = lsu.calculate_unique_spots(
         orientations, spots, labels,
-        grain_col=0, spot_grain_col=spot_grain_col,
+        grain_col=orient_grain_col, spot_grain_col=spot_grain_col,
         spot_x_col=spot_x_col, spot_y_col=spot_y_col,
+        quality_col=orient_quality_col,
     )
 
     # Filter orientations
     filtered_orient = lsu.filter_orientations(
         orientations, unique_info, min_unique=min_unique,
+        grain_col=orient_grain_col, quality_col=orient_quality_col,
     )
 
     # Filter spots to only those belonging to filtered orientations
     if filtered_orient.size > 0:
-        kept_grains = set(filtered_orient[:, 0].astype(int))
+        kept_grains = set(filtered_orient[:, orient_grain_col].astype(int))
         mask = np.array([
             int(s[spot_grain_col]) in kept_grains for s in spots
         ])
@@ -168,7 +178,7 @@ def process_single_image(
     # Sort filtered orientations by quality (descending)
     if filtered_orient.size > 0:
         filtered_orient = lsu.sort_orientations_by_quality(
-            filtered_orient, unique_info,
+            filtered_orient, quality_col=orient_quality_col,
         )
 
     result["n_filtered"] = len(filtered_orient)
@@ -487,7 +497,7 @@ def postprocess(
     spots_by_image = lsu.split_spots_by_image(spots, image_col=0)
     solutions_by_image = lsu.split_solutions_by_image(
         solutions, spots, image_col=0,
-        grain_col_spots=1, grain_col_solutions=0,
+        grain_col_spots=1, grain_col_solutions=1,
     )
 
     if image_nr > 0:
