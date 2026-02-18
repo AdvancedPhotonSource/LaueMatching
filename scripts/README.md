@@ -40,6 +40,7 @@ graph TD
         Orch -->|launches| Server
         Orch -->|runs| Post
         Server -->|TCP| Daemon
+        Server -->|labels.h5| Post
     end
 
     subgraph "Shared Modules"
@@ -172,6 +173,7 @@ python scripts/laue_postprocess.py \
 | `--folder` | *(required)* | Folder containing `.h5` image files |
 | `--h5-location` | `/entry/data/data` | Internal HDF5 dataset path |
 | `--mapping-file` | `frame_mapping.json` | Output JSON mapping image numbers to source files/frames |
+| `--labels-file` | `labels.h5` | Output HDF5 file for image segmentation labels (connected components) |
 | `--save-interval` | `50` | Save mapping every N frames |
 | `--host` | `127.0.0.1` | Daemon host address |
 | `--port` | `60517` | Daemon TCP port |
@@ -196,8 +198,10 @@ The daemon receives float32 pixels (4 bytes each, halving bandwidth vs. double) 
 | `--config` | *(required)* | Path to `params.txt` |
 | `--output-dir` | `results` | Output directory for per-image HDF5 + HTML |
 | `--mapping` | `frame_mapping.json` | Frame mapping JSON from image server |
+| `--labels` | *(none)* | Path to `labels.h5` with real image segmentation labels |
 | `--image-nr` | `0` | Process specific image (0 = all) |
 | `--min-unique` | `2` | Minimum unique spots to keep an orientation |
+| `--nprocs` | `1` | Number of parallel processes for per-image processing |
 | `--log-level` | `INFO` | Logging verbosity |
 
 ---
