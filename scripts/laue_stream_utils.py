@@ -624,7 +624,10 @@ def read_solutions(path: str) -> Tuple[np.ndarray, str]:
     with open(path, "r") as f:
         header = f.readline().strip()
 
-    data = np.genfromtxt(path, skip_header=1)
+    try:
+        data = np.loadtxt(path, skiprows=1)
+    except ValueError:
+        data = np.genfromtxt(path, skip_header=1)
     if data.size == 0:
         data = np.empty((0, 31))
     elif data.ndim == 1:
@@ -644,7 +647,10 @@ def read_spots(path: str) -> Tuple[np.ndarray, str]:
     with open(path, "r") as f:
         header = f.readline().strip()
 
-    data = np.genfromtxt(path, skip_header=1)
+    try:
+        data = np.loadtxt(path, skiprows=1)
+    except ValueError:
+        data = np.genfromtxt(path, skip_header=1)
     if data.size == 0:
         ncols = len(header.split()) if header else 8
         data = np.empty((0, ncols))

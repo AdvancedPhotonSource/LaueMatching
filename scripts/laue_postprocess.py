@@ -22,6 +22,7 @@ import argparse
 import logging
 import os
 import sys
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -113,8 +114,8 @@ def process_single_image(
 
     # Build a simple label image from spot positions for unique-spot calc.
     # Each unique (x,y) location gets a distinct label.
-    labels = np.zeros((nr_px_y, nr_px_x), dtype=np.int32)
-    label_counter = 1
+    # Use a compact array covering just the bounding box of spot positions
+    # to avoid allocating a full 2048×2048 image (16MB) per frame.
     # Determine column indices for spots and orientations.
     # Stream format: ImageNr=col0, GrainNr=col1, ..., X=col6, Y=col7 (12 cols)
     # RunImage format: GrainNr=col0, ..., X=col5, Y=col6 (11 cols)
@@ -141,15 +142,15 @@ def process_single_image(
         orient_grain_col = 0
         orient_quality_col = 4
 
-    for spot in spots:
-        try:
-            x, y = int(spot[spot_x_col]), int(spot[spot_y_col])
-            if 0 <= x < nr_px_x and 0 <= y < nr_px_y:
-                if labels[y, x] == 0:
-                    labels[y, x] = label_counter
-                    label_counter += 1
-        except (IndexError, ValueError):
-            continue
+    labels = np.zeros((nr_px_y, nr_px_x), dtype=np.int32)
+    label_counter = 1
+    spot_xs = spots[:, spot_x_col].astype(int)
+    spot_ys = spots[:, spot_y_col].astype(int)
+    valid = (spot_xs >= 0) & (spot_xs < nr_px_x) & (spot_ys >= 0) & (spot_ys < nr_px_y)
+    for x, y in zip(spot_xs[valid], spot_ys[valid]):
+        if labels[y, x] == 0:
+            labels[y, x] = label_counter
+            label_counter += 1
 
     # Calculate unique spots per orientation
     unique_info = lsu.calculate_unique_spots(
@@ -168,9 +169,8 @@ def process_single_image(
     # Filter spots to only those belonging to filtered orientations
     if filtered_orient.size > 0:
         kept_grains = set(filtered_orient[:, orient_grain_col].astype(int))
-        mask = np.array([
-            int(s[spot_grain_col]) in kept_grains for s in spots
-        ])
+        grain_ids = spots[:, spot_grain_col].astype(int)
+        mask = np.isin(grain_ids, list(kept_grains))
         filtered_spots = spots[mask] if mask.any() else np.empty((0, n_cols))
     else:
         filtered_spots = np.empty((0, n_cols))
@@ -272,8 +272,8 @@ def generate_visualization(
 ) -> None:
     """
     Generate an interactive HTML visualization with an image-selector
-    dropdown.  Each image's filtered orientations and spots are shown
-    as separate Plotly traces toggled by the dropdown.
+    dropdown.  Uses a single pair of traces with data-swap buttons
+    to keep the HTML file small regardless of the number of images.
     """
     if not HAS_PLOTLY:
         logger.warning("Plotly not available — skipping visualization.")
@@ -292,84 +292,88 @@ def generate_visualization(
         horizontal_spacing=0.12,
     )
 
-    # Build traces per image (all hidden initially; buttons toggle them)
-    trace_groups: Dict[int, List[int]] = {}  # image_nr → list of trace indices
-    trace_idx = 0
-
+    # Detect column indices from the first non-empty result
+    orient_cols = (1, 2, 4, 0)  # phi1, Phi, quality, grain (RunImage default)
+    spot_sx, spot_sy = 5, 6
     for res in all_results:
-        img_nr = res["image_nr"]
-        trace_groups[img_nr] = []
+        o = res.get("filtered_orientations", np.empty((0,)))
+        s = res.get("filtered_spots", np.empty((0,)))
+        if o.ndim == 2 and o.shape[1] > 30:
+            orient_cols = (2, 3, 5, 1)  # stream format: shifted by 1
+        if s.ndim == 2 and s.shape[1] > 10:
+            spot_sx, spot_sy = 6, 7
+        break
 
+    phi1_col, phi_col, q_col, g_col = orient_cols
+
+    # Sort results by image number
+    sorted_results = sorted(all_results, key=lambda r: r["image_nr"])
+
+    # Start with the first image's data
+    first = sorted_results[0] if sorted_results else {}
+    first_orient = first.get("filtered_orientations", np.empty((0,)))
+    first_spots = first.get("filtered_spots", np.empty((0,)))
+
+    # Orientation scatter (single trace, data swapped by buttons)
+    if first_orient.ndim == 2 and first_orient.size > 0:
+        ox, oy, oc = first_orient[:, phi1_col], first_orient[:, phi_col], first_orient[:, q_col]
+        otext = [
+            f"Grain {int(o[g_col])}<br>φ₁={o[phi1_col]:.1f} Φ={o[phi_col]:.1f}<br>Q={o[q_col]:.2f}"
+            for o in first_orient
+        ]
+    else:
+        ox, oy, oc, otext = [], [], [], []
+
+    fig.add_trace(
+        go.Scatter(
+            x=ox, y=oy, mode="markers",
+            marker=dict(size=8, color=oc, colorscale="Viridis",
+                        showscale=True, colorbar=dict(title="Quality", x=0.45)),
+            text=otext, hoverinfo="text", name="Orientations",
+        ),
+        row=1, col=1,
+    )
+
+    # Spot scatter (single trace)
+    if first_spots.ndim == 2 and first_spots.size > 0:
+        spx, spy = first_spots[:, spot_sx], first_spots[:, spot_sy]
+    else:
+        spx, spy = [], []
+
+    fig.add_trace(
+        go.Scatter(
+            x=spx, y=spy, mode="markers",
+            marker=dict(size=4, color="red", opacity=0.6),
+            name="Spots",
+        ),
+        row=1, col=2,
+    )
+
+    # Build dropdown buttons that swap data via restyle
+    buttons = []
+    for res in sorted_results:
+        img_nr = res["image_nr"]
         orient = res.get("filtered_orientations", np.empty((0,)))
         spots = res.get("filtered_spots", np.empty((0,)))
 
-        # Orientation scatter (Euler angles in columns 1, 2, 3)
-        if orient.size > 0 and orient.ndim == 2 and orient.shape[1] > 4:
-            fig.add_trace(
-                go.Scatter(
-                    x=orient[:, 1],
-                    y=orient[:, 2],
-                    mode="markers",
-                    marker=dict(
-                        size=8,
-                        color=orient[:, 4],  # quality score
-                        colorscale="Viridis",
-                        showscale=(trace_idx == 0),
-                        colorbar=dict(title="Quality", x=0.45),
-                    ),
-                    text=[
-                        f"Grain {int(o[0])}<br>φ₁={o[1]:.1f} Φ={o[2]:.1f} φ₂={o[3]:.1f}<br>Q={o[4]:.2f}"
-                        for o in orient
-                    ],
-                    hoverinfo="text",
-                    name=f"Image {img_nr} Orient",
-                    visible=False,
-                ),
-                row=1, col=1,
-            )
+        # Orientation data
+        if orient.ndim == 2 and orient.size > 0:
+            bx = orient[:, phi1_col].tolist()
+            by = orient[:, phi_col].tolist()
+            bc = orient[:, q_col].tolist()
+            bt = [
+                f"Grain {int(o[g_col])}<br>φ₁={o[phi1_col]:.1f} Φ={o[phi_col]:.1f}<br>Q={o[q_col]:.2f}"
+                for o in orient
+            ]
         else:
-            fig.add_trace(
-                go.Scatter(x=[], y=[], mode="markers", name=f"Image {img_nr} Orient", visible=False),
-                row=1, col=1,
-            )
-        trace_groups[img_nr].append(trace_idx)
-        trace_idx += 1
+            bx, by, bc, bt = [[]], [[]], [[]], [[]]
 
-        # Spot scatter
-        # Detect column indices
-        n_cols = spots.shape[1] if spots.ndim == 2 else 0
-        sx, sy = 5, 6
-        if n_cols > 10:
-            sx, sy = 6, 7
-
-        if spots.size > 0 and spots.ndim == 2 and n_cols > sy:
-            fig.add_trace(
-                go.Scatter(
-                    x=spots[:, sx],
-                    y=spots[:, sy],
-                    mode="markers",
-                    marker=dict(size=4, color="red", opacity=0.6),
-                    name=f"Image {img_nr} Spots",
-                    visible=False,
-                ),
-                row=1, col=2,
-            )
+        # Spot data
+        if spots.ndim == 2 and spots.size > 0:
+            sx_data = spots[:, spot_sx].tolist()
+            sy_data = spots[:, spot_sy].tolist()
         else:
-            fig.add_trace(
-                go.Scatter(x=[], y=[], mode="markers", name=f"Image {img_nr} Spots", visible=False),
-                row=1, col=2,
-            )
-        trace_groups[img_nr].append(trace_idx)
-        trace_idx += 1
-
-    # Build dropdown buttons
-    buttons = []
-    sorted_imgs = sorted(trace_groups.keys())
-
-    for img_nr in sorted_imgs:
-        visibility = [False] * trace_idx
-        for ti in trace_groups[img_nr]:
-            visibility[ti] = True
+            sx_data, sy_data = [[]], [[]]
 
         # Build label
         map_entry = frame_mapping.get(str(img_nr), {})
@@ -382,21 +386,18 @@ def generate_visualization(
                 label += f" f{src_frame}"
             label += ")"
 
-        # Find result for this image
-        img_res = next((r for r in all_results if r["image_nr"] == img_nr), {})
-        n_orient = img_res.get("n_filtered", 0)
-        n_spots = len(img_res.get("filtered_spots", []))
+        n_orient = res.get("n_filtered", 0)
+        n_spots = len(res.get("filtered_spots", []))
 
         buttons.append(dict(
-            method="update",
-            args=[{"visible": visibility}],
+            method="restyle",
+            args=[
+                {"x": [bx, sx_data], "y": [by, sy_data],
+                 "text": [bt, [None]], "marker.color": [bc, ["red"]]},
+                [0, 1],  # trace indices to update
+            ],
             label=f"{label} — {n_orient} orient, {n_spots} spots",
         ))
-
-    # Show first image by default
-    if sorted_imgs:
-        for ti in trace_groups[sorted_imgs[0]]:
-            fig.data[ti].visible = True
 
     fig.update_layout(
         title="LaueMatching Stream Results",
@@ -461,6 +462,7 @@ def postprocess(
     mapping_file: str = "frame_mapping.json",
     image_nr: int = 0,
     min_unique: int = 2,
+    nprocs: int = 1,
 ) -> None:
     """
     Main post-processing entry point.
@@ -473,6 +475,7 @@ def postprocess(
         mapping_file:   Path to frame_mapping.json.
         image_nr:       0 = process all images, N = specific image only.
         min_unique:     Minimum unique spots to keep an orientation.
+        nprocs:         Number of parallel processes (default: 1 = serial).
     """
     cfg = lsu.parse_config(config_file)
     os.makedirs(output_dir, exist_ok=True)
@@ -493,12 +496,18 @@ def postprocess(
         logger.error("No solutions or spots — nothing to post-process.")
         return
 
-    # Split by ImageNr
+    # Split by ImageNr — solutions already have ImageNr in col 0 in stream
+    # format, so split directly with vectorized groupby.
     spots_by_image = lsu.split_spots_by_image(spots, image_col=0)
-    solutions_by_image = lsu.split_solutions_by_image(
-        solutions, spots, image_col=0,
-        grain_col_spots=1, grain_col_solutions=1,
-    )
+
+    # Solutions: split directly by ImageNr (col 0) — much faster than the
+    # indirect grain→spots→image path used by split_solutions_by_image.
+    sol_img_ids = solutions[:, 0].astype(int)
+    unique_sol_imgs = np.unique(sol_img_ids)
+    solutions_by_image = {
+        int(img): solutions[sol_img_ids == img]
+        for img in unique_sol_imgs
+    }
 
     if image_nr > 0:
         # Process only a specific image
@@ -511,23 +520,65 @@ def postprocess(
 
     logger.info(f"Processing {len(target_images)} image(s): {target_images[:10]}{'...' if len(target_images) > 10 else ''}")
 
-    # Process each image
+    # Process each image (parallel or serial)
     all_results: List[Dict[str, Any]] = []
-    for img in target_images:
-        img_solutions = solutions_by_image.get(img, np.empty((0, solutions.shape[1])))
-        img_spots = spots_by_image.get(img, np.empty((0, spots.shape[1])))
-        map_info = frame_mapping.get(str(img), None)
+    n_images = len(target_images)
 
-        res = process_single_image(
-            image_nr=img,
-            orientations=img_solutions,
-            spots=img_spots,
-            cfg=cfg,
-            output_dir=output_dir,
-            min_unique=min_unique,
-            mapping_info=map_info,
-        )
-        all_results.append(res)
+    if nprocs > 1 and n_images > 1:
+        effective_procs = min(nprocs, n_images)
+        logger.info(f"Using {effective_procs} parallel workers")
+
+        # Build argument tuples for each image
+        futures = {}
+        with ProcessPoolExecutor(max_workers=effective_procs) as pool:
+            for img in target_images:
+                img_solutions = solutions_by_image.get(
+                    img, np.empty((0, solutions.shape[1]))
+                )
+                img_spots = spots_by_image.get(
+                    img, np.empty((0, spots.shape[1]))
+                )
+                map_info = frame_mapping.get(str(img), None)
+
+                fut = pool.submit(
+                    process_single_image,
+                    image_nr=img,
+                    orientations=img_solutions,
+                    spots=img_spots,
+                    cfg=cfg,
+                    output_dir=output_dir,
+                    min_unique=min_unique,
+                    mapping_info=map_info,
+                )
+                futures[fut] = img
+
+            for fut in as_completed(futures):
+                try:
+                    res = fut.result()
+                    all_results.append(res)
+                except Exception as e:
+                    img = futures[fut]
+                    logger.error(f"Image {img} failed: {e}")
+    else:
+        for img in target_images:
+            img_solutions = solutions_by_image.get(
+                img, np.empty((0, solutions.shape[1]))
+            )
+            img_spots = spots_by_image.get(
+                img, np.empty((0, spots.shape[1]))
+            )
+            map_info = frame_mapping.get(str(img), None)
+
+            res = process_single_image(
+                image_nr=img,
+                orientations=img_solutions,
+                spots=img_spots,
+                cfg=cfg,
+                output_dir=output_dir,
+                min_unique=min_unique,
+                mapping_info=map_info,
+            )
+            all_results.append(res)
 
     # Summary
     _write_summary(all_results, output_dir, frame_mapping)
@@ -579,6 +630,10 @@ def main() -> None:
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         help="Logging verbosity (default: INFO)"
     )
+    parser.add_argument(
+        "--nprocs", type=int, default=1,
+        help="Number of parallel processes for per-image processing (default: 1)"
+    )
     args = parser.parse_args()
 
     _setup_logging(args.log_level)
@@ -601,6 +656,7 @@ def main() -> None:
         mapping_file=args.mapping,
         image_nr=args.image_nr,
         min_unique=args.min_unique,
+        nprocs=args.nprocs,
     )
 
 
