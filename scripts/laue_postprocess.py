@@ -28,7 +28,6 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 
 import laue_stream_utils as lsu
-import laue_visualization as lv
 
 # Optional imports
 try:
@@ -36,13 +35,6 @@ try:
     HAS_H5PY = True
 except ImportError:
     HAS_H5PY = False
-
-try:
-    import plotly.graph_objects as go
-    from plotly.subplots import make_subplots
-    HAS_PLOTLY = True
-except ImportError:
-    HAS_PLOTLY = False
 
 
 # ---------------------------------------------------------------------------
@@ -72,8 +64,8 @@ def process_single_image(
     output_dir: str,
     min_unique: int = 2,
     mapping_info: Optional[Dict] = None,
-    generate_per_image_viz: bool = False,
     labels: Optional[np.ndarray] = None,
+    folder: str = "",
 ) -> Dict[str, Any]:
     """
     Process results for a single image number.
@@ -82,13 +74,12 @@ def process_single_image(
     2. Calculate unique spots per orientation.
     3. Filter orientations by minimum unique spots.
     4. Sort filtered orientations by quality (descending).
-    5. Save per-image H5 output.
-    6. Optionally generate per-image interactive visualization.
-    7. Return summary dict for visualization.
+    5. Save per-image H5 output (with raw/processed image data if folder given).
+    6. Return summary dict.
 
     Args:
-        generate_per_image_viz: If True, produce a per-image interactive
-            Plotly HTML via ``lv.create_interactive_visualization``.
+        folder: Path to folder containing source H5 images (for embedding
+            raw/processed data in the per-image output H5).
 
     Returns:
         Dict with keys: image_nr, n_orientations, n_filtered, n_spots,
@@ -206,23 +197,8 @@ def process_single_image(
             orientations, filtered_orient,
             spots, filtered_spots,
             unique_info, mapping_info,
+            cfg=cfg, folder=folder,
         )
-
-    # --- Optional per-image interactive visualization ---
-    if generate_per_image_viz and filtered_orient.size > 0:
-        try:
-            from laue_config import VisualizationConfig
-            vis_cfg = VisualizationConfig()
-            out_base = os.path.join(output_dir, f"image_{image_nr:05d}")
-            # Build a simple filtered image (label mask) for background
-            bg_image = labels.astype(float)
-            lv.create_interactive_visualization(
-                out_base, filtered_orient, filtered_spots, labels,
-                bg_image, vis_cfg, labels.shape, unique_info,
-            )
-            logger.info(f"  Per-image viz saved: {out_base}.interactive.html")
-        except Exception as e:
-            logger.warning(f"  Per-image viz failed for image {image_nr}: {e}")
 
     return result
 
@@ -236,8 +212,10 @@ def _save_image_h5(
     filtered_spots: np.ndarray,
     unique_info: Dict[int, Dict],
     mapping_info: Optional[Dict] = None,
+    cfg: Optional[Dict[str, Any]] = None,
+    folder: str = "",
 ) -> None:
-    """Save per-image results to HDF5 file."""
+    """Save per-image results + image data to HDF5 file."""
     h5_path = os.path.join(output_dir, f"image_{image_nr:05d}.output.h5")
 
     # Build unique counts array [GrainNr, UniqueLabels]
@@ -248,6 +226,7 @@ def _save_image_h5(
 
     try:
         with h5py.File(h5_path, "w") as hf:
+            # --- Results group ---
             grp = hf.require_group("/entry/results")
             grp.create_dataset("orientations", data=orientations)
             grp.create_dataset("filtered_orientations", data=filtered_orientations)
@@ -261,177 +240,69 @@ def _save_image_h5(
                 grp.attrs["source_file"] = mapping_info.get("file", "")
                 grp.attrs["source_frame"] = mapping_info.get("frame", -1)
 
+            # --- Image data group (matching RunImage.py structure) ---
+            if cfg and mapping_info and folder:
+                try:
+                    src_file = mapping_info.get("file", "")
+                    src_frame = mapping_info.get("frame", 0)
+                    h5_path_src = os.path.join(folder, src_file)
+
+                    if os.path.isfile(h5_path_src):
+                        raw = lsu.load_h5_image(
+                            h5_path_src, frame_idx=src_frame,
+                            h5_location=cfg.get("h5_location", "/entry/data/data"),
+                        )
+                        if raw is not None:
+                            intermediates = lsu.preprocess_image(
+                                raw, cfg, return_intermediates=True,
+                            )
+
+                            data_grp = hf.require_group("/entry/data")
+                            data_grp.create_dataset(
+                                "raw_data", data=raw,
+                            )
+                            data_grp.create_dataset(
+                                "cleaned_data_threshold",
+                                data=intermediates["thresholded"], dtype=np.uint16,
+                            )
+                            data_grp.create_dataset(
+                                "cleaned_data_threshold_labels_unfiltered",
+                                data=intermediates["labels_unfiltered"], dtype=np.int32,
+                            )
+                            data_grp.create_dataset(
+                                "cleaned_data_threshold_filtered",
+                                data=intermediates["filt_img"], dtype=np.uint16,
+                            )
+                            data_grp.create_dataset(
+                                "cleaned_data_threshold_filtered_labels",
+                                data=intermediates["filt_labels"], dtype=np.int32,
+                            )
+                            data_grp.create_dataset(
+                                "input_blurred",
+                                data=intermediates["blurred"],
+                            )
+                            centers = intermediates["centers"]
+                            if centers:
+                                centers_arr = np.array(
+                                    [[float(c[0]), float(c[1][0]), float(c[1][1]), float(c[2])]
+                                     for c in centers], dtype=np.float64,
+                                )
+                            else:
+                                centers_arr = np.empty((0, 4), dtype=np.float64)
+                            data_grp.create_dataset(
+                                "component_centers", data=centers_arr,
+                            )
+                    else:
+                        logger.debug(f"  Source H5 not found: {h5_path_src}")
+                except Exception as e:
+                    logger.warning(f"  Could not save image data for image {image_nr}: {e}")
+
         logger.info(f"  Saved {h5_path}")
 
     except Exception as e:
         logger.error(f"  Error saving H5 for image {image_nr}: {e}")
 
 
-# ---------------------------------------------------------------------------
-# Combined visualization
-# ---------------------------------------------------------------------------
-
-def generate_visualization(
-    all_results: List[Dict[str, Any]],
-    output_dir: str,
-    cfg: Dict[str, Any],
-    frame_mapping: Dict,
-) -> None:
-    """
-    Generate an interactive HTML visualization with an image-selector
-    dropdown.  Uses a single pair of traces with data-swap buttons
-    to keep the HTML file small regardless of the number of images.
-    """
-    if not HAS_PLOTLY:
-        logger.warning("Plotly not available — skipping visualization.")
-        return
-
-    if not all_results:
-        logger.warning("No results to visualize.")
-        return
-
-    nr_px_x = cfg["nr_px_x"]
-    nr_px_y = cfg["nr_px_y"]
-
-    fig = make_subplots(
-        rows=1, cols=2,
-        subplot_titles=("Orientations (Euler φ₁ vs Φ)", "Spot Positions"),
-        horizontal_spacing=0.12,
-    )
-
-    # Detect column indices from the first non-empty result
-    orient_cols = (1, 2, 4, 0)  # phi1, Phi, quality, grain (RunImage default)
-    spot_sx, spot_sy = 5, 6
-    for res in all_results:
-        o = res.get("filtered_orientations", np.empty((0,)))
-        s = res.get("filtered_spots", np.empty((0,)))
-        if o.ndim == 2 and o.shape[1] > 30:
-            orient_cols = (2, 3, 5, 1)  # stream format: shifted by 1
-        if s.ndim == 2 and s.shape[1] > 10:
-            spot_sx, spot_sy = 6, 7
-        break
-
-    phi1_col, phi_col, q_col, g_col = orient_cols
-
-    # Sort results by image number
-    sorted_results = sorted(all_results, key=lambda r: r["image_nr"])
-
-    # Start with the first image's data
-    first = sorted_results[0] if sorted_results else {}
-    first_orient = first.get("filtered_orientations", np.empty((0,)))
-    first_spots = first.get("filtered_spots", np.empty((0,)))
-
-    # Orientation scatter (single trace, data swapped by buttons)
-    if first_orient.ndim == 2 and first_orient.size > 0:
-        ox, oy, oc = first_orient[:, phi1_col], first_orient[:, phi_col], first_orient[:, q_col]
-        otext = [
-            f"Grain {int(o[g_col])}<br>φ₁={o[phi1_col]:.1f} Φ={o[phi_col]:.1f}<br>Q={o[q_col]:.2f}"
-            for o in first_orient
-        ]
-    else:
-        ox, oy, oc, otext = [], [], [], []
-
-    fig.add_trace(
-        go.Scatter(
-            x=ox, y=oy, mode="markers",
-            marker=dict(size=8, color=oc, colorscale="Viridis",
-                        showscale=True, colorbar=dict(title="Quality", x=0.45)),
-            text=otext, hoverinfo="text", name="Orientations",
-        ),
-        row=1, col=1,
-    )
-
-    # Spot scatter (single trace)
-    if first_spots.ndim == 2 and first_spots.size > 0:
-        spx, spy = first_spots[:, spot_sx], first_spots[:, spot_sy]
-    else:
-        spx, spy = [], []
-
-    fig.add_trace(
-        go.Scatter(
-            x=spx, y=spy, mode="markers",
-            marker=dict(size=4, color="red", opacity=0.6),
-            name="Spots",
-        ),
-        row=1, col=2,
-    )
-
-    # Build dropdown buttons that swap data via restyle
-    buttons = []
-    for res in sorted_results:
-        img_nr = res["image_nr"]
-        orient = res.get("filtered_orientations", np.empty((0,)))
-        spots = res.get("filtered_spots", np.empty((0,)))
-
-        # Orientation data
-        if orient.ndim == 2 and orient.size > 0:
-            bx = orient[:, phi1_col].tolist()
-            by = orient[:, phi_col].tolist()
-            bc = orient[:, q_col].tolist()
-            bt = [
-                f"Grain {int(o[g_col])}<br>φ₁={o[phi1_col]:.1f} Φ={o[phi_col]:.1f}<br>Q={o[q_col]:.2f}"
-                for o in orient
-            ]
-        else:
-            bx, by, bc, bt = [[]], [[]], [[]], [[]]
-
-        # Spot data
-        if spots.ndim == 2 and spots.size > 0:
-            sx_data = spots[:, spot_sx].tolist()
-            sy_data = spots[:, spot_sy].tolist()
-        else:
-            sx_data, sy_data = [[]], [[]]
-
-        # Build label
-        map_entry = frame_mapping.get(str(img_nr), {})
-        src_file = map_entry.get("file", "")
-        src_frame = map_entry.get("frame", "")
-        label = f"Image {img_nr}"
-        if src_file:
-            label += f" ({src_file}"
-            if src_frame != "":
-                label += f" f{src_frame}"
-            label += ")"
-
-        n_orient = res.get("n_filtered", 0)
-        n_spots = len(res.get("filtered_spots", []))
-
-        buttons.append(dict(
-            method="restyle",
-            args=[
-                {"x": [bx, sx_data], "y": [by, sy_data],
-                 "text": [bt, [None]], "marker.color": [bc, ["red"]]},
-                [0, 1],  # trace indices to update
-            ],
-            label=f"{label} — {n_orient} orient, {n_spots} spots",
-        ))
-
-    fig.update_layout(
-        title="LaueMatching Stream Results",
-        updatemenus=[dict(
-            type="dropdown",
-            direction="down",
-            active=0,
-            x=0.5,
-            xanchor="center",
-            y=1.18,
-            yanchor="top",
-            buttons=buttons,
-            pad=dict(t=10),
-        )],
-        height=600,
-        width=1200,
-        template="plotly_dark",
-        showlegend=False,
-    )
-    fig.update_xaxes(title_text="φ₁ (deg)", row=1, col=1)
-    fig.update_yaxes(title_text="Φ (deg)", row=1, col=1)
-    fig.update_xaxes(title_text="X (px)", range=[0, nr_px_x], row=1, col=2)
-    fig.update_yaxes(title_text="Y (px)", range=[0, nr_px_y], autorange="reversed", row=1, col=2)
-
-    html_path = os.path.join(output_dir, "stream_results.html")
-    fig.write_html(html_path, include_plotlyjs="cdn")
-    logger.info(f"Visualization saved to {html_path}")
 
 
 # ---------------------------------------------------------------------------
@@ -468,6 +339,7 @@ def postprocess(
     output_dir: str,
     mapping_file: str = "frame_mapping.json",
     labels_file: str = "",
+    folder: str = "",
     image_nr: int = 0,
     min_unique: int = 2,
     nprocs: int = 1,
@@ -482,6 +354,8 @@ def postprocess(
         output_dir:     Directory for output H5 and visualization files.
         mapping_file:   Path to frame_mapping.json.
         labels_file:    Path to labels.h5 (image segmentation labels).
+        folder:         Path to folder containing source H5 images (for
+                        embedding raw/processed data in output H5).
         image_nr:       0 = process all images, N = specific image only.
         min_unique:     Minimum unique spots to keep an orientation.
         nprocs:         Number of parallel processes (default: 1 = serial).
@@ -578,6 +452,7 @@ def postprocess(
                     min_unique=min_unique,
                     mapping_info=map_info,
                     labels=img_labels,
+                    folder=folder,
                 )
                 futures[fut] = img
 
@@ -608,6 +483,7 @@ def postprocess(
                 min_unique=min_unique,
                 mapping_info=map_info,
                 labels=img_labels,
+                folder=folder,
             )
             all_results.append(res)
 
@@ -617,9 +493,6 @@ def postprocess(
 
     # Summary
     _write_summary(all_results, output_dir, frame_mapping)
-
-    # Visualization
-    generate_visualization(all_results, output_dir, cfg, frame_mapping)
 
     logger.info(f"Post-processing complete. Output in {output_dir}/")
 
@@ -670,6 +543,10 @@ def main() -> None:
         help="Logging verbosity (default: INFO)"
     )
     parser.add_argument(
+        "--folder", default="",
+        help="Folder containing source H5 images (enables raw/processed data in output H5)"
+    )
+    parser.add_argument(
         "--nprocs", type=int, default=1,
         help="Number of parallel processes for per-image processing (default: 1)"
     )
@@ -694,6 +571,7 @@ def main() -> None:
         output_dir=args.output_dir,
         mapping_file=args.mapping,
         labels_file=args.labels,
+        folder=args.folder,
         image_nr=args.image_nr,
         min_unique=args.min_unique,
         nprocs=args.nprocs,
