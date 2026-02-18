@@ -356,6 +356,12 @@ int main(int argc, char *argv[]) {
   printf("Pixels with intensity: %d\n", nonZeroPx);
 
   // Forward simulation & matching
+  // Warm up CUDA context (lazy init happens on first API call — ~2 s)
+  double wt_cuda_init = omp_get_wtime();
+  gpuErrchk(cudaFree(0));
+  printf("CUDA context init: %lf s\n", omp_get_wtime() - wt_cuda_init);
+  fflush(stdout);
+
   double *matchedArr = (double *)calloc(nrOrients, sizeof(*matchedArr));
   if (matchedArr == NULL) {
     printf("Could not allocate matchedArr (%zu bytes).\n",
@@ -588,10 +594,14 @@ int main(int argc, char *argv[]) {
     size_t freeMem = 0, totalMem = 0;
     gpuErrchk(cudaMemGetInfo(&freeMem, &totalMem));
     size_t imageBytes = (size_t)nrPxX * nrPxY * sizeof(double);
-    // Use up to 80% of free GPU memory for the outArr chunk buffer
+    // Use up to 80% of free GPU memory for the outArr chunk buffer,
+    // but cap at 4 GB to keep cudaMalloc + H2D fast.
     size_t usable = (freeMem > imageBytes + (freeMem / 5))
                         ? freeMem - imageBytes - (freeMem / 5)
                         : freeMem / 2;
+    const size_t DEVICE_CAP = 4ULL * 1024 * 1024 * 1024; // 4 GB
+    if (usable > DEVICE_CAP)
+      usable = DEVICE_CAP;
     size_t chunkSize = usable / (stride * sizeof(uint16_t));
     if (chunkSize < 1024)
       chunkSize = 1024;
@@ -601,22 +611,27 @@ int main(int argc, char *argv[]) {
     size_t chunkOutBytes = chunkSize * stride * sizeof(uint16_t);
     size_t chunkMatchBytes = chunkSize * sizeof(double);
     printf("GPU chunked matching: %zu orientations in %zu chunks of %zu "
-           "(stride=%zu, GPU mem: %.1f/%.1f GB free)\n",
-           nrOrients, nChunks, chunkSize, stride,
+           "(stride=%zu, chunk=%.1f GB, GPU mem: %.1f/%.1f GB free)\n",
+           nrOrients, nChunks, chunkSize, stride, chunkOutBytes / 1e9,
            freeMem / 1e9, totalMem / 1e9);
     fflush(stdout);
 
     // Allocate device buffers (single set — no double-buffering needed)
+    double wt_alloc = omp_get_wtime();
     uint16_t *d_outChunk;
     double *d_matchChunk, *d_image;
     gpuErrchk(cudaMalloc(&d_outChunk, chunkOutBytes));
     gpuErrchk(cudaMalloc(&d_matchChunk, chunkMatchBytes));
     gpuErrchk(cudaMalloc(&d_image, imageBytes));
-    gpuErrchk(cudaMemcpy(d_image, image, imageBytes,
-                         cudaMemcpyHostToDevice));
+    printf("  cudaMalloc (%.1f GB + %.1f MB + %.1f MB): %lf s\n",
+           chunkOutBytes / 1e9, chunkMatchBytes / 1e6, imageBytes / 1e6,
+           omp_get_wtime() - wt_alloc);
+    double wt_img = omp_get_wtime();
+    gpuErrchk(cudaMemcpy(d_image, image, imageBytes, cudaMemcpyHostToDevice));
+    printf("  image H2D (%.1f MB): %lf s\n", imageBytes / 1e6,
+           omp_get_wtime() - wt_img);
 
-    printf("Time elapsed to prepare the GPU: %lf s\n",
-           omp_get_wtime() - wt0);
+    printf("Time elapsed to prepare the GPU: %lf s\n", omp_get_wtime() - wt0);
     wt0 = omp_get_wtime();
 
     // ── Chunk loop ─────────────────────────────────────────────────────
@@ -629,22 +644,31 @@ int main(int argc, char *argv[]) {
       size_t thisMatchBytes = thisChunk * sizeof(double);
 
       // Synchronous H2D directly from outArr (mmap'd or malloc'd)
-      gpuErrchk(cudaMemcpy(d_outChunk, outArr + offset * stride,
-                           thisOutBytes, cudaMemcpyHostToDevice));
+      double wt_h2d = omp_get_wtime();
+      gpuErrchk(cudaMemcpy(d_outChunk, outArr + offset * stride, thisOutBytes,
+                           cudaMemcpyHostToDevice));
       gpuErrchk(cudaMemset(d_matchChunk, 0, thisMatchBytes));
+      double h2d_time = omp_get_wtime() - wt_h2d;
 
       // Launch kernel
+      double wt_kern = omp_get_wtime();
       int blocks = (int)((thisChunk + 1023) / 1024);
       compare<<<blocks, 1024>>>(nrPxX, thisChunk, maxNrSpots, minIntensity,
                                 minNrSpots, d_outChunk, d_image, d_matchChunk);
+      gpuErrchk(cudaDeviceSynchronize());
+      double kern_time = omp_get_wtime() - wt_kern;
 
       // Synchronous D2H into matchedArr
-      gpuErrchk(cudaMemcpy(matchedArr + offset, d_matchChunk,
-                           thisMatchBytes, cudaMemcpyDeviceToHost));
+      double wt_d2h = omp_get_wtime();
+      gpuErrchk(cudaMemcpy(matchedArr + offset, d_matchChunk, thisMatchBytes,
+                           cudaMemcpyDeviceToHost));
+      double d2h_time = omp_get_wtime() - wt_d2h;
+
+      printf("  chunk %zu/%zu: H2D=%.3fs  kernel=%.3fs  D2H=%.3fs\n", c + 1,
+             nChunks, h2d_time, kern_time, d2h_time);
     }
 
-    printf("Time elapsed to match on the GPU: %lf s\n",
-           omp_get_wtime() - wt0);
+    printf("Time elapsed to match on the GPU: %lf s\n", omp_get_wtime() - wt0);
 
     // Cleanup
     cudaFree(d_outChunk);
@@ -866,5 +890,8 @@ int main(int argc, char *argv[]) {
          "Initial solutions: %zu Unique Orientations: %d\n"
          "Total time: %lf seconds.\n",
          timef, nrResults, totalSols, omp_get_wtime() - start_time);
+  double wt_exit = omp_get_wtime();
+  // CUDA context teardown happens at exit — print timing above before it.
+  fflush(stdout);
   return 0;
 }
