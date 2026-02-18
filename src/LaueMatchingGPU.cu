@@ -583,9 +583,8 @@ int main(int argc, char *argv[]) {
     // Double-buffer chunks across 2 streams to overlap H2D, kernel, D2H.
     start = clock();
     const int NUM_STREAMS = 2;
-    // Size chunks dynamically based on available GPU memory.
-    // Reserve ~20% for image + matchArr buffers + overhead; split the
-    // rest evenly across NUM_STREAMS double-buffered outArr slots.
+    // Size chunks: use available GPU memory but cap pinned buffers at 1 GB
+    // each to avoid slow page-locking of huge regions.
     size_t freeMem = 0, totalMem = 0;
     gpuErrchk(cudaMemGetInfo(&freeMem, &totalMem));
     size_t imageBytes = (size_t)nrPxX * nrPxY * sizeof(double);
@@ -593,6 +592,9 @@ int main(int argc, char *argv[]) {
                         ? freeMem - imageBytes - (freeMem / 5)
                         : freeMem / 2;
     size_t maxChunkOutBytes = usable / NUM_STREAMS;
+    const size_t PINNED_CAP = 1ULL * 1024 * 1024 * 1024; // 1 GB per buffer
+    if (maxChunkOutBytes > PINNED_CAP)
+      maxChunkOutBytes = PINNED_CAP;
     size_t chunkSize = maxChunkOutBytes / (stride * sizeof(uint16_t));
     if (chunkSize < 1024)
       chunkSize = 1024;
