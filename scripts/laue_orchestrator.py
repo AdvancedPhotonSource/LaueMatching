@@ -93,13 +93,22 @@ def _terminate_process(proc: subprocess.Popen, name: str, timeout: float = 10.0)
         proc.send_signal(signal.SIGTERM)
         proc.wait(timeout=timeout)
         logger.info(f"{name} exited (code {proc.returncode})")
+        return
     except subprocess.TimeoutExpired:
-        logger.warning(f"{name} did not exit in {timeout}s, sending SIGKILL...")
-        proc.kill()
-        proc.wait(timeout=5)
-        logger.info(f"{name} killed.")
+        logger.warning(f"{name} did not exit in {timeout}s after SIGTERM, sending SIGKILL...")
     except Exception as e:
-        logger.error(f"Error terminating {name}: {e}")
+        logger.error(f"Error sending SIGTERM to {name}: {e}")
+
+    # SIGKILL fallback
+    try:
+        proc.kill()
+        proc.wait(timeout=15)
+        logger.info(f"{name} killed (code {proc.returncode}).")
+    except subprocess.TimeoutExpired:
+        logger.error(f"{name} (pid {proc.pid}) did not exit even after SIGKILL. "
+                     "It may need to be killed manually.")
+    except Exception as e:
+        logger.error(f"Error killing {name}: {e}")
 
 
 # ---------------------------------------------------------------------------
