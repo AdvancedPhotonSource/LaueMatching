@@ -837,10 +837,10 @@ int main(int argc, char *argv[]) {
     int simulNrSps = 0;
     calcRecipArray(latCFit, sg_num, recipFit);
     memset(outArrThisFit, 0, 3 * maxNrSpots * sizeof(*outArrThisFit));
-    int nrSps =
-        writeCalcOverlap(image, eulerFit, hkls, nhkls, nrPxX, nrPxY, recipFit,
-                         outArrThisFit, maxNrSpots, rotTranspose, pArr, pxX,
-                         pxY, Elo, Ehi, ExtraInfo, saveExtraInfo, &simulNrSps);
+    int nrSps = writeCalcOverlap(image, eulerFit, hkls, nhkls, nrPxX, nrPxY,
+                                 recipFit, outArrThisFit, maxNrSpots,
+                                 rotTranspose, pArr, pxX, pxY, Elo, Ehi,
+                                 ExtraInfo, saveExtraInfo, &simulNrSps, 0);
     if (nrSps >= minNrSpots) {
       int bs = bsArr[iterNr];
       double miso = GetMisOrientation(q1, q2);
@@ -849,7 +849,7 @@ int main(int argc, char *argv[]) {
       memset(outArrThisFit, 0, 3 * maxNrSpots * sizeof(*outArrThisFit));
       writeCalcOverlap(image, eulerFit, hkls, nhkls, nrPxX, nrPxY, recipFit,
                        outArrThisFit, maxNrSpots, rotTranspose, pArr, pxX, pxY,
-                       Elo, Ehi, ExtraInfo, saveExtraInfo, &simulNrSps);
+                       Elo, Ehi, ExtraInfo, saveExtraInfo, &simulNrSps, 0);
       double OF[3][3];
       MatrixMultF33(orientFit, recipFit, OF);
 #pragma omp critical

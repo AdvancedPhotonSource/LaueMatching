@@ -666,7 +666,8 @@ static inline int writeCalcOverlap(double *image, double euler[3], int *hkls,
                                    int maxNrSpots, double rotTranspose[3][3],
                                    double pArr[3], double pxX, double pxY,
                                    double Elo, double Ehi, FILE *ExtraInfo,
-                                   int saveExtraInfo, int *simulNrSps) {
+                                   int saveExtraInfo, int *simulNrSps,
+                                   int imageNr) {
   int nrSps = 0;
   double OM[3][3], OMt[3][3];
   Euler2OrientMat(euler, OMt);
@@ -726,11 +727,18 @@ static inline int writeCalcOverlap(double *image, double euler[3], int *hkls,
         if (saveExtraInfo != 0) {
 #pragma omp critical
           {
-            fprintf(ExtraInfo,
-                    "%d\t%d\t%d\t%d\t%d\t%5d\t%5d\t%lf\t%lf\t%lf\t%lf\n",
-                    saveExtraInfo, spotNr, (int)hkl[0], (int)hkl[1],
-                    (int)hkl[2], (int)px, (int)py, qhat[0], qhat[1], qhat[2],
-                    image[(int)((int)py * nrPxX + (int)px)]);
+            if (imageNr > 0)
+              fprintf(ExtraInfo,
+                      "%d\t%d\t%d\t%d\t%d\t%d\t%5d\t%5d\t%lf\t%lf\t%lf\t%lf\n",
+                      imageNr, saveExtraInfo, spotNr, (int)hkl[0], (int)hkl[1],
+                      (int)hkl[2], (int)px, (int)py, qhat[0], qhat[1], qhat[2],
+                      image[(int)((int)py * nrPxX + (int)px)]);
+            else
+              fprintf(ExtraInfo,
+                      "%d\t%d\t%d\t%d\t%d\t%5d\t%5d\t%lf\t%lf\t%lf\t%lf\n",
+                      saveExtraInfo, spotNr, (int)hkl[0], (int)hkl[1],
+                      (int)hkl[2], (int)px, (int)py, qhat[0], qhat[1], qhat[2],
+                      image[(int)((int)py * nrPxX + (int)px)]);
           }
         }
         result += image[(int)((int)py * nrPxX + (int)px)];
