@@ -4,6 +4,15 @@ This folder contains example scripts and data to demonstrate the LaueMatching wo
 1. **Simulation**: Generate synthetic diffraction patterns from known orientations.
 2. **Indexing**: Process the synthetic data to recover the orientations.
 
+## Input Files
+
+| File | Description |
+|------|-------------|
+| `params_sim.txt` | Parameter file defining crystal, detector, energy range, and processing settings |
+| `fourOrientations.csv` | 4 orientation matrices (3×3, row-major, tab-separated). Each row is a flattened 3×3 rotation matrix mapping crystal → lab coordinates |
+| `simulationOrientationMatrices.csv` | 19 random orientation matrices (same format as above) |
+| `valid_hkls.csv` | Pre-computed list of valid Miller indices (h k l) for the crystal |
+
 ## Workflow
 
 ```mermaid
@@ -64,10 +73,46 @@ On GPU:
 ```
 
 > [!NOTE]
-> Even when using a GPU build, use multiple CPU cores (`-n <nCPUs>`) because the final Nelder-Mead refinement step runs on the CPU.
+> Even when using a GPU build, use multiple CPU cores (`-n <nCPUs>`) because the final refinement step (BOBYQA or Nelder-Mead) runs on the CPU.
 
 **Results:**
 Output files will be saved in `results_simulation/` (configured by `ResultDir` in `params_sim.txt`).
+
+## Parameter Reference (`params_sim.txt`)
+
+| Parameter | Example | Description |
+|-----------|---------|-------------|
+| **Material** | | |
+| `LatticeParameter` | `0.35238 0.35238 0.35238 90 90 90` | a, b, c (nm), α, β, γ (degrees) |
+| `SpaceGroup` | `225` | Space group number (1–230) |
+| `tol_LatC` | `0.01 0.01 0.01 0 0 0` | Fractional tolerance per lattice param for refinement (0 = fixed) |
+| `tol_c_over_a` | `0.02` | c/a ratio tolerance (overrides `tol_LatC` if nonzero) |
+| **Detector** | | |
+| `P_Array` | `0.028745 0.002788 0.513115` | Detector position [meters] (see paper) |
+| `R_Array` | `-1.20131 -1.21399 -1.21881` | Detector rotation vector [radians] (see paper) |
+| `PxX` / `PxY` | `0.0002` | Pixel size [meters] |
+| `NrPxX` / `NrPxY` | `2048` | Detector dimensions in pixels |
+| **Energy** | | |
+| `Elo` / `Ehi` | `5` / `30` | Energy range [keV] for Bragg condition filtering |
+| **Matching** | | |
+| `MinNrSpots` | `7` | Min matching spots to qualify an orientation (1st pass) |
+| `MinGoodSpots` | `5` | Min spots after refinement (2nd pass) |
+| `MinIntensity` | `50` | Min total intensity from matched pixels |
+| `MaxAngle` | `5` | Misorientation threshold [degrees] for merging candidates |
+| `MaxNrLaueSpots` | `30` | Max spots per orientation (2nd pass uses 3×) |
+| **Files** | | |
+| `OrientationFile` | `/dev/shm/100MilOrients.bin` | Binary orientation database. `/dev/shm` enables mmap |
+| `ForwardFile` | `/dev/shm/Simulated_FwdSim.bin` | Forward simulation cache |
+| `ResultDir` | `results_simulation` | Output directory |
+| `HKLFile` | `valid_hkls.csv` | Valid HKL list (auto-generated if missing) |
+| `DoFwd` | `0` | Force forward simulation (auto-set to 1 if `ForwardFile` missing) |
+| **Optimization** | | |
+| `Optimizer` | `NelderMead` | Optimizer choice: omit for BOBYQA (default, faster) or `NelderMead` |
+| **Simulation-only** | | |
+| `AStar` | `17.83` | Reciprocal lattice constant [nm⁻¹] (only for `GenerateSimulation.py`) |
+| `Symmetry` | `F` | Centering symbol: F, I, C, A, R (only for `GenerateSimulation.py`) |
+| `OrientationSpacing` | `0.4` | Approximate spacing [degrees] in orientation database |
+| `SimulationSmoothingWidth` | `2` | Gaussian peak width for simulated image |
 
 ## Performance Tips
 

@@ -38,3 +38,6 @@ ForwardFile /dev/shm/Simulated_FwdSim.bin # Location where the forward simulatio
 OrientationSpacing 0.4 # Orientation spacing for the OrientationFile in degrees. This doesn't need to be exact, but should be close to what is used. 0.4 for the 100 million points.
 DoFwd 0 # If you want to do forward simulation, put to 1. If the ForwardFile does not exist, it will automatically put this to 1 and run the simulation.
 SimulationSmoothingWidth 2 # Only for generating a synthetic simulation image, it is the width of the Gaussian diffraction peaks.
+
+# Optimization
+#Optimizer NelderMead # Uncomment to use Nelder-Mead instead of BOBYQA (default). BOBYQA is typically 2-3x faster.

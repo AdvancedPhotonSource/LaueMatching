@@ -211,6 +211,7 @@ On GPU:
 | `MinNrSpots` | Minimum matching spots to qualify a grain |
 | `MinIntensity` | Minimum total intensity threshold |
 | `MaxAngle` | Misorientation tolerance (°) for merging candidates |
+| `Optimizer` | `NelderMead` to use Nelder-Mead; default is BOBYQA (faster) |
 
 See `simulation/params_sim.txt` for a complete example.
 
@@ -222,6 +223,7 @@ See `simulation/params_sim.txt` for a complete example.
 - Place `OrientationFile` and `ForwardFile` in `/dev/shm` (tmpfs) for dramatically faster memory-mapped I/O.
 - Ensure ≥ 8 GB RAM for the full 100-million orientation file.
 - Use the GPU build for large-scale datasets — it provides significant speedup over CPU.
+- The default optimizer (BOBYQA) converges in ~2–3× fewer iterations than Nelder-Mead. Add `Optimizer NelderMead` to the parameter file only if needed.
 
 ---
 
