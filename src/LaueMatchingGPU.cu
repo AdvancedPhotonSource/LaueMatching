@@ -737,35 +737,42 @@ int main(int argc, char *argv[]) {
       eulerFit[iJ] = eulerBest[iJ];
     int saveExtraInfo = 0;
     int doCrystalFit = 0;
-    // double *outArrThisFit = (double *)calloc(3 * maxNrSpots,
-    // sizeof(*outArrThisFit)); // Hoisted
     memset(outArrThisFit, 0, 3 * maxNrSpots * sizeof(*outArrThisFit));
     double latCFit[6], recipFit[3][3], mv = 0;
+    // First fit: orientation only
     FitOrientation(image, eulerBest, hkls, nhkls, nrPxX, nrPxY, recip,
                    outArrThisFit, maxNrSpots, rotTranspose, pArr, pxX, pxY, Elo,
                    Ehi, tol, LatticeParameter, eulerFit, latCFit, &mv,
                    doCrystalFit);
-    // outArrThisFit = (double *)calloc(3 * maxNrSpots,
-    // sizeof(*outArrThisFit)); // Hoisted
+    // Second fit: orientation + crystal parameters
+    doCrystalFit = 1;
+    for (iK = 0; iK < 3; iK++)
+      eulerBest[iK] = eulerFit[iK];
     memset(outArrThisFit, 0, 3 * maxNrSpots * sizeof(*outArrThisFit));
+    FitOrientation(image, eulerBest, hkls, nhkls, nrPxX, nrPxY, recip,
+                   outArrThisFit, maxNrSpots, rotTranspose, pArr, pxX, pxY, Elo,
+                   Ehi, tol, LatticeParameter, eulerFit, latCFit, &mv,
+                   doCrystalFit);
+    // Convert fitted Euler angles to orientation matrix and quaternions
+    Euler2OrientMat(eulerFit, orientFit);
+    OrientMat2Quat33(orientBest, q1);
+    OrientMat2Quat33(orientFit, q2);
     int simulNrSps = 0;
+    calcRecipArray(latCFit, sg_num, recipFit);
+    memset(outArrThisFit, 0, 3 * maxNrSpots * sizeof(*outArrThisFit));
     int nrSps =
         writeCalcOverlap(image, eulerFit, hkls, nhkls, nrPxX, nrPxY, recipFit,
                          outArrThisFit, maxNrSpots, rotTranspose, pArr, pxX,
                          pxY, Elo, Ehi, ExtraInfo, saveExtraInfo, &simulNrSps);
-    // free(outArrThisFit); // Hoisted
     if (nrSps >= minNrSpots) {
       int bs = bsArr[iterNr];
       double miso = GetMisOrientation(q1, q2);
       saveExtraInfo = iterNr + 1;
       calcRecipArray(latCFit, sg_num, recipFit);
-      // outArrThisFit = (double *)calloc(3 * maxNrSpots,
-      // sizeof(*outArrThisFit)); // Hoisted
       memset(outArrThisFit, 0, 3 * maxNrSpots * sizeof(*outArrThisFit));
       writeCalcOverlap(image, eulerFit, hkls, nhkls, nrPxX, nrPxY, recipFit,
                        outArrThisFit, maxNrSpots, rotTranspose, pArr, pxX, pxY,
                        Elo, Ehi, ExtraInfo, saveExtraInfo, &simulNrSps);
-      // free(outArrThisFit); // Hoisted
       double OF[3][3];
       MatrixMultF33(orientFit, recipFit, OF);
 #pragma omp critical

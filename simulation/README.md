@@ -55,6 +55,14 @@ Process the simulated image to recover the orientations using the `RunImage.py` 
     -n <nCPUs>  # e.g., -n 4
 ```
 
+On GPU:
+```bash
+../RunImage.py process \
+    -c params_sim.txt \
+    -i simulated_1.h5 \
+    -n <nCPUs> -g  # e.g., -n 4
+```
+
 > [!NOTE]
 > Even when using a GPU build, use multiple CPU cores (`-n <nCPUs>`) because the final Nelder-Mead refinement step runs on the CPU.
 
