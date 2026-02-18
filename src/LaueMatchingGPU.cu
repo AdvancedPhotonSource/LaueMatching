@@ -583,16 +583,26 @@ int main(int argc, char *argv[]) {
     // Double-buffer chunks across 2 streams to overlap H2D, kernel, D2H.
     start = clock();
     const int NUM_STREAMS = 2;
-    // Target ~256 MB per chunk for the outArr data
-    size_t chunkSize = (256ULL * 1024 * 1024) / (stride * sizeof(uint16_t));
+    // Size chunks dynamically based on available GPU memory.
+    // Reserve ~20% for image + matchArr buffers + overhead; split the
+    // rest evenly across NUM_STREAMS double-buffered outArr slots.
+    size_t freeMem = 0, totalMem = 0;
+    gpuErrchk(cudaMemGetInfo(&freeMem, &totalMem));
+    size_t imageBytes = (size_t)nrPxX * nrPxY * sizeof(double);
+    size_t usable = (freeMem > imageBytes + (freeMem / 5))
+                        ? freeMem - imageBytes - (freeMem / 5)
+                        : freeMem / 2;
+    size_t maxChunkOutBytes = usable / NUM_STREAMS;
+    size_t chunkSize = maxChunkOutBytes / (stride * sizeof(uint16_t));
     if (chunkSize < 1024)
       chunkSize = 1024;
     if (chunkSize > nrOrients)
       chunkSize = nrOrients;
     size_t nChunks = (nrOrients + chunkSize - 1) / chunkSize;
     printf("GPU chunked matching: %zu orientations in %zu chunks of %zu "
-           "(stride=%zu, %d streams)\n",
-           nrOrients, nChunks, chunkSize, stride, NUM_STREAMS);
+           "(stride=%zu, %d streams, GPU mem: %.1f/%.1f GB free)\n",
+           nrOrients, nChunks, chunkSize, stride, NUM_STREAMS, freeMem / 1e9,
+           totalMem / 1e9);
     fflush(stdout);
 
     size_t chunkOutBytes = chunkSize * stride * sizeof(uint16_t);
