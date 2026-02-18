@@ -239,12 +239,14 @@ def run_pipeline(
         os.path.dirname(os.path.abspath(__file__)),
         "laue_image_server.py",
     )
+    labels_file = os.path.join(output_dir, "labels.h5")
     server_cmd = [
         python, server_script,
         "--config", os.path.abspath(config_file),
         "--folder", os.path.abspath(folder),
         "--h5-location", h5_location,
         "--mapping-file", os.path.abspath(mapping_file),
+        "--labels-file", os.path.abspath(labels_file),
         "--port", str(port),
         "--log-level", "INFO",
     ]
@@ -323,6 +325,7 @@ def run_pipeline(
         "--config", os.path.abspath(config_file),
         "--output-dir", results_dir,
         "--mapping", os.path.abspath(mapping_file),
+        "--labels", os.path.abspath(labels_file),
         "--min-unique", str(min_unique),
         "--nprocs", str(ncpus),
     ]

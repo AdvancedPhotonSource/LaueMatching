@@ -96,6 +96,7 @@ flowchart LR
     Server -- "uint16 img_num + float[] pixels" --> Daemon
     Daemon -- "solutions.txt<br/>spots.txt" --> PostProc
     Server -- "frame_mapping.json" --> Orchestrator
+    Server -- "labels.h5<br/>(segmentation)" --> PostProc
 ```
 
 **Key advantages over single-image mode:**
@@ -106,6 +107,8 @@ flowchart LR
 | GPU utilization | Idle between images | Continuous |
 | Throughput | ~1 image/min | Limited only by preprocessing |
 | Progress tracking | Per-image logs | Live `frame_mapping.json` with rate + ETA |
+| Spot filtering | Real labels from image | Real labels carried via `labels.h5` |
+| Post-processing | Serial | Parallel (`--nprocs`) |
 
 ---
 

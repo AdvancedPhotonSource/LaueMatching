@@ -35,6 +35,13 @@ import numpy as np
 
 import laue_stream_utils as lsu
 
+# Optional imports
+try:
+    import h5py
+    HAS_H5PY = True
+except ImportError:
+    HAS_H5PY = False
+
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
@@ -60,6 +67,7 @@ def serve_images(
     folder: str,
     h5_location: str = "/entry/data/data",
     mapping_file: str = "frame_mapping.json",
+    labels_file: str = "labels.h5",
     save_interval: int = 50,
     host: str = "127.0.0.1",
     port: int = lsu.LAUE_STREAM_PORT,
@@ -154,23 +162,29 @@ def serve_images(
     sent_count_lock = threading.Lock()
     counters = {"sent": 0, "skip": 0}
 
-    def _sender_thread(sock, send_q, send_error, frame_mapping, counters):
+    def _sender_thread(sock, send_q, send_error, frame_mapping, counters,
+                        labels_h5f):
         """Drain the queue and send frames over TCP."""
         while True:
             item = send_q.get()
             if item is None:  # Sentinel: done
                 send_q.task_done()
                 break
-            image_num, pixels_bytes, mapping_entry = item
+            image_num, pix_bytes, mapping_entry, filt_labels = item
             try:
-                header = struct.pack("<H", image_num)
-                sock.sendall(header)
-                sock.sendall(pixels_bytes)
+                lsu.send_image(sock, image_num, pix_bytes)
                 mapping_entry["skipped"] = False
                 with sent_count_lock:
                     counters["sent"] += 1
+                # Save label array to HDF5
+                if labels_h5f is not None and filt_labels is not None:
+                    ds_name = f"labels/{image_num}"
+                    labels_h5f.create_dataset(
+                        ds_name, data=filt_labels, dtype=np.int32,
+                        compression="gzip", compression_opts=1,
+                    )
             except Exception as e:
-                logger.error(f"  Send error for image_num={image_num}: {e}")
+                logger.error(f"  Send/save error for image_num={image_num}: {e}")
                 mapping_entry["skipped"] = True
                 mapping_entry["reason"] = f"send_error: {e}"
                 with sent_count_lock:
@@ -179,9 +193,17 @@ def serve_images(
             frame_mapping[str(image_num)] = mapping_entry
             send_q.task_done()
 
+    # Open labels HDF5 for writing
+    labels_h5f = None
+    if HAS_H5PY:
+        labels_h5f = h5py.File(labels_file, "w")
+        logger.info(f"Labels will be saved to {labels_file}")
+    else:
+        logger.warning("h5py not available — labels will not be saved.")
+
     sender = threading.Thread(
         target=_sender_thread,
-        args=(sock, send_q, send_error, frame_mapping, counters),
+        args=(sock, send_q, send_error, frame_mapping, counters, labels_h5f),
         daemon=True,
     )
     sender.start()
@@ -230,7 +252,7 @@ def serve_images(
                     continue
 
                 # Preprocess (steps 1-6)
-                blurred, _filt_img, _filt_labels, centers = lsu.preprocess_image(
+                blurred, _filt_img, filt_labels, centers = lsu.preprocess_image(
                     raw, cfg, background=background
                 )
 
@@ -262,7 +284,7 @@ def serve_images(
                 }
 
                 # Enqueue for sender thread (blocks if queue full, backpressure)
-                send_q.put((image_num, pixels_bytes, mapping_entry))
+                send_q.put((image_num, pixels_bytes, mapping_entry, filt_labels))
 
                 # Progress (read counters safely)
                 with sent_count_lock:
@@ -308,6 +330,11 @@ def serve_images(
             pass
         sock.close()
         logger.info("Socket closed.")
+
+        # Close labels HDF5
+        if labels_h5f is not None:
+            labels_h5f.close()
+            logger.info(f"Labels saved to {labels_file}")
 
     # Summary
     elapsed = time.time() - t_start
@@ -362,6 +389,10 @@ def main() -> None:
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         help="Logging verbosity (default: INFO)"
     )
+    parser.add_argument(
+        "--labels-file", default="labels.h5",
+        help="Output HDF5 file for image segmentation labels (default: labels.h5)"
+    )
     args = parser.parse_args()
 
     _setup_logging(args.log_level)
@@ -378,6 +409,7 @@ def main() -> None:
         folder=args.folder,
         h5_location=args.h5_location,
         mapping_file=args.mapping_file,
+        labels_file=args.labels_file,
         save_interval=args.save_interval,
         host=args.host,
         port=args.port,

@@ -73,11 +73,12 @@ def process_single_image(
     min_unique: int = 2,
     mapping_info: Optional[Dict] = None,
     generate_per_image_viz: bool = False,
+    labels: Optional[np.ndarray] = None,
 ) -> Dict[str, Any]:
     """
     Process results for a single image number.
 
-    1. Create dummy label image from spot positions (for unique-spot calc).
+    1. Use real image segmentation labels (if provided), else build dummy labels.
     2. Calculate unique spots per orientation.
     3. Filter orientations by minimum unique spots.
     4. Sort filtered orientations by quality (descending).
@@ -142,15 +143,21 @@ def process_single_image(
         orient_grain_col = 0
         orient_quality_col = 4
 
-    labels = np.zeros((nr_px_y, nr_px_x), dtype=np.int32)
-    label_counter = 1
-    spot_xs = spots[:, spot_x_col].astype(int)
-    spot_ys = spots[:, spot_y_col].astype(int)
-    valid = (spot_xs >= 0) & (spot_xs < nr_px_x) & (spot_ys >= 0) & (spot_ys < nr_px_y)
-    for x, y in zip(spot_xs[valid], spot_ys[valid]):
-        if labels[y, x] == 0:
-            labels[y, x] = label_counter
-            label_counter += 1
+    # Use real image segmentation labels if provided, otherwise build
+    # simple per-pixel labels as a fallback.
+    if labels is not None:
+        logger.debug(f"Image {image_nr}: using real segmentation labels")
+    else:
+        # Fallback: each unique (x,y) position gets its own label.
+        labels = np.zeros((nr_px_y, nr_px_x), dtype=np.int32)
+        label_counter = 1
+        spot_xs = spots[:, spot_x_col].astype(int)
+        spot_ys = spots[:, spot_y_col].astype(int)
+        valid = (spot_xs >= 0) & (spot_xs < nr_px_x) & (spot_ys >= 0) & (spot_ys < nr_px_y)
+        for x, y in zip(spot_xs[valid], spot_ys[valid]):
+            if labels[y, x] == 0:
+                labels[y, x] = label_counter
+                label_counter += 1
 
     # Calculate unique spots per orientation
     unique_info = lsu.calculate_unique_spots(
@@ -460,6 +467,7 @@ def postprocess(
     config_file: str,
     output_dir: str,
     mapping_file: str = "frame_mapping.json",
+    labels_file: str = "",
     image_nr: int = 0,
     min_unique: int = 2,
     nprocs: int = 1,
@@ -473,6 +481,7 @@ def postprocess(
         config_file:    Path to params.txt.
         output_dir:     Directory for output H5 and visualization files.
         mapping_file:   Path to frame_mapping.json.
+        labels_file:    Path to labels.h5 (image segmentation labels).
         image_nr:       0 = process all images, N = specific image only.
         min_unique:     Minimum unique spots to keep an orientation.
         nprocs:         Number of parallel processes (default: 1 = serial).
@@ -520,6 +529,23 @@ def postprocess(
 
     logger.info(f"Processing {len(target_images)} image(s): {target_images[:10]}{'...' if len(target_images) > 10 else ''}")
 
+    # Load image segmentation labels if available
+    labels_h5f = None
+    if labels_file and os.path.isfile(labels_file) and HAS_H5PY:
+        labels_h5f = h5py.File(labels_file, "r")
+        logger.info(f"Using image segmentation labels from {labels_file}")
+    elif labels_file and not os.path.isfile(labels_file):
+        logger.warning(f"Labels file not found: {labels_file} — using fallback per-pixel labels")
+
+    def _load_labels(img_num: int) -> Optional[np.ndarray]:
+        """Load labels for a given image number from labels.h5."""
+        if labels_h5f is None:
+            return None
+        ds_name = f"labels/{img_num}"
+        if ds_name in labels_h5f:
+            return np.array(labels_h5f[ds_name])
+        return None
+
     # Process each image (parallel or serial)
     all_results: List[Dict[str, Any]] = []
     n_images = len(target_images)
@@ -540,6 +566,8 @@ def postprocess(
                 )
                 map_info = frame_mapping.get(str(img), None)
 
+                img_labels = _load_labels(img)
+
                 fut = pool.submit(
                     process_single_image,
                     image_nr=img,
@@ -549,6 +577,7 @@ def postprocess(
                     output_dir=output_dir,
                     min_unique=min_unique,
                     mapping_info=map_info,
+                    labels=img_labels,
                 )
                 futures[fut] = img
 
@@ -568,6 +597,7 @@ def postprocess(
                 img, np.empty((0, spots.shape[1]))
             )
             map_info = frame_mapping.get(str(img), None)
+            img_labels = _load_labels(img)
 
             res = process_single_image(
                 image_nr=img,
@@ -577,8 +607,13 @@ def postprocess(
                 output_dir=output_dir,
                 min_unique=min_unique,
                 mapping_info=map_info,
+                labels=img_labels,
             )
             all_results.append(res)
+
+    # Close labels file
+    if labels_h5f is not None:
+        labels_h5f.close()
 
     # Summary
     _write_summary(all_results, output_dir, frame_mapping)
@@ -618,6 +653,10 @@ def main() -> None:
         help="Path to frame_mapping.json (default: frame_mapping.json)"
     )
     parser.add_argument(
+        "--labels", default="",
+        help="Path to labels.h5 with image segmentation labels (default: none)"
+    )
+    parser.add_argument(
         "--image-nr", type=int, default=0,
         help="Process specific image number (0 = all, default: 0)"
     )
@@ -654,6 +693,7 @@ def main() -> None:
         config_file=args.config,
         output_dir=args.output_dir,
         mapping_file=args.mapping,
+        labels_file=args.labels,
         image_nr=args.image_nr,
         min_unique=args.min_unique,
         nprocs=args.nprocs,
