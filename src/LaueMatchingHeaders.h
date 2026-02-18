@@ -49,6 +49,7 @@ extern double cellVol;
 extern double phiVol;
 extern int nSym;
 extern double Symm[24][4];
+extern int useBobyqa; // 1 = BOBYQA (default), 0 = Nelder-Mead
 
 // ── Optimization data bundle ────────────────────────────────────────────
 struct dataFit {
@@ -624,10 +625,13 @@ FitOrientation(double *image, double euler[3], int *hkls, int nhkls, int nrPxX,
   f_data.Ehi = Ehi;
   void *trp = (void *)&f_data;
   nlopt_opt opt;
-  opt = nlopt_create(NLOPT_LN_NELDERMEAD, n);
+  opt = nlopt_create(useBobyqa ? NLOPT_LN_BOBYQA : NLOPT_LN_NELDERMEAD, n);
   nlopt_set_lower_bounds(opt, xl);
   nlopt_set_upper_bounds(opt, xu);
   nlopt_set_min_objective(opt, problem_function, trp);
+  nlopt_set_ftol_rel(opt, 1e-6);
+  nlopt_set_xtol_rel(opt, 1e-6);
+  nlopt_set_maxeval(opt, 200);
   nlopt_optimize(opt, x, &minf);
   nlopt_destroy(opt);
   for (i = 0; i < 3; i++)
