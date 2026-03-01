@@ -33,7 +33,11 @@
 #define rad2deg 57.2957795130823
 #define NrValsResults 2
 #define MaxNHKLS 200000
-#define CalcLength(x, y, z) sqrt((x) * (x) + (y) * (y) + (z) * (z))
+
+static inline double CalcLength(double x, double y, double z) {
+  return sqrt(x * x + y * y + z * z);
+}
+
 #define hc_keVnm 1.2398419739
 #define EPS 1E-12
 
@@ -602,7 +606,7 @@ FitOrientation(double *image, double euler[3], int *hkls, int nhkls, int nrPxX,
     }
   }
 
-  struct dataFit f_data;
+  struct dataFit f_data = {0};
   f_data.image = image;
   f_data.hkls = hkls;
   f_data.nhkls = nhkls;
@@ -677,6 +681,15 @@ static inline int writeCalcOverlap(double *image, double euler[3], int *hkls,
   double hkl[3], qvec[3], qlen, qhat[3], dot, kf[3], xyz[3], xp, yp, px, py,
       sinTheta, E, result = 0;
   int spotNr = 0, iterNr, nrPos = 0;
+
+  char *outputBuf = NULL;
+  size_t currentOffset = 0;
+  if (saveExtraInfo != 0) {
+    outputBuf = (char *)malloc(maxNrSpots * 200);
+    if (outputBuf)
+      outputBuf[0] = '\0';
+  }
+
   for (hklnr = 0; hklnr < nhkls; hklnr++) {
     hkl[0] = hkls[hklnr * 3 + 0];
     hkl[1] = hkls[hklnr * 3 + 1];
@@ -725,20 +738,38 @@ static inline int writeCalcOverlap(double *image, double euler[3], int *hkls,
       outArrThis[3 * spotNr + 2] = qhat[2];
       if (image[(int)((int)py * nrPxX + (int)px)] > 0) {
         if (saveExtraInfo != 0) {
-#pragma omp critical
-          {
+          if (outputBuf != NULL) {
             if (imageNr > 0)
-              fprintf(ExtraInfo,
-                      "%d\t%d\t%d\t%d\t%d\t%d\t%5d\t%5d\t%lf\t%lf\t%lf\t%lf\n",
-                      imageNr, saveExtraInfo, spotNr, (int)hkl[0], (int)hkl[1],
-                      (int)hkl[2], (int)px, (int)py, qhat[0], qhat[1], qhat[2],
-                      image[(int)((int)py * nrPxX + (int)px)]);
+              currentOffset += sprintf(
+                  outputBuf + currentOffset,
+                  "%d\t%d\t%d\t%d\t%d\t%d\t%5d\t%5d\t%lf\t%lf\t%lf\t%lf\n",
+                  imageNr, saveExtraInfo, spotNr, (int)hkl[0], (int)hkl[1],
+                  (int)hkl[2], (int)px, (int)py, qhat[0], qhat[1], qhat[2],
+                  image[(int)((int)py * nrPxX + (int)px)]);
             else
-              fprintf(ExtraInfo,
-                      "%d\t%d\t%d\t%d\t%d\t%5d\t%5d\t%lf\t%lf\t%lf\t%lf\n",
-                      saveExtraInfo, spotNr, (int)hkl[0], (int)hkl[1],
-                      (int)hkl[2], (int)px, (int)py, qhat[0], qhat[1], qhat[2],
-                      image[(int)((int)py * nrPxX + (int)px)]);
+              currentOffset +=
+                  sprintf(outputBuf + currentOffset,
+                          "%d\t%d\t%d\t%d\t%d\t%5d\t%5d\t%lf\t%lf\t%lf\t%lf\n",
+                          saveExtraInfo, spotNr, (int)hkl[0], (int)hkl[1],
+                          (int)hkl[2], (int)px, (int)py, qhat[0], qhat[1],
+                          qhat[2], image[(int)((int)py * nrPxX + (int)px)]);
+          } else {
+#pragma omp critical
+            {
+              if (imageNr > 0)
+                fprintf(
+                    ExtraInfo,
+                    "%d\t%d\t%d\t%d\t%d\t%d\t%5d\t%5d\t%lf\t%lf\t%lf\t%lf\n",
+                    imageNr, saveExtraInfo, spotNr, (int)hkl[0], (int)hkl[1],
+                    (int)hkl[2], (int)px, (int)py, qhat[0], qhat[1], qhat[2],
+                    image[(int)((int)py * nrPxX + (int)px)]);
+              else
+                fprintf(ExtraInfo,
+                        "%d\t%d\t%d\t%d\t%d\t%5d\t%5d\t%lf\t%lf\t%lf\t%lf\n",
+                        saveExtraInfo, spotNr, (int)hkl[0], (int)hkl[1],
+                        (int)hkl[2], (int)px, (int)py, qhat[0], qhat[1],
+                        qhat[2], image[(int)((int)py * nrPxX + (int)px)]);
+            }
           }
         }
         result += image[(int)((int)py * nrPxX + (int)px)];
@@ -749,6 +780,17 @@ static inline int writeCalcOverlap(double *image, double euler[3], int *hkls,
         break;
     }
   }
+
+  if (saveExtraInfo != 0 && outputBuf != NULL) {
+    if (currentOffset > 0) {
+#pragma omp critical
+      {
+        fputs(outputBuf, ExtraInfo);
+      }
+    }
+    free(outputBuf);
+  }
+
   *simulNrSps = spotNr;
   nrSps = nrPos;
   return nrSps;
