@@ -827,7 +827,8 @@ int main(int argc, char *argv[]) {
     gpuErrchk(cudaStreamCreate(&streams[s].stream));
     gpuErrchk(cudaMalloc(&streams[s].d_image, imageBytes));
     gpuErrchk(cudaMalloc(&streams[s].d_matchChunk, chunkSize * sizeof(double)));
-    streams[s].matchedArr = (double *)calloc(nrOrients, sizeof(double));
+    gpuErrchk(cudaMallocHost((void **)&streams[s].matchedArr,
+                             nrOrients * sizeof(double)));
   }
 
   // ── Open output files ────────────────────────────────────────────
@@ -1207,7 +1208,7 @@ int main(int argc, char *argv[]) {
     cudaFree(streams[s].d_image);
     cudaFree(streams[s].d_matchChunk);
     cudaStreamDestroy(streams[s].stream);
-    free(streams[s].matchedArr);
+    cudaFreeHost(streams[s].matchedArr);
   }
   free(streams);
   cudaFree(d_outArr);
