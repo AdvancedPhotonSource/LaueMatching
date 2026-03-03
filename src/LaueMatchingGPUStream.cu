@@ -83,7 +83,7 @@ __global__ void compare(size_t nrPxX, size_t nOr, size_t nrMaxSpots,
       px = (size_t)oA[loc];
       loc++;
       py = (size_t)oA[loc];
-      thisInt = im[py * nrPxX + px];
+      thisInt = __ldg(&im[py * nrPxX + px]);
       if (thisInt > 0) {
         totInt += thisInt;
         nSps++;
@@ -828,8 +828,9 @@ int main(int argc, char *argv[]) {
   // Determine number of streams that fit
   gpuErrchk(cudaMemGetInfo(&freeMem, &totalMem));
   size_t perStreamCost =
-      imageBytes +                                                    // d_image
-      sizeof(int) + MAX_MATCHES * (sizeof(int) + sizeof(float)); // compact output
+      imageBytes + // d_image
+      sizeof(int) +
+      MAX_MATCHES * (sizeof(int) + sizeof(float)); // compact output
   int numStreams = (int)(freeMem / (perStreamCost + (1 << 20))); // +1MB margin
   if (numStreams > MAX_STREAMS)
     numStreams = MAX_STREAMS;
@@ -847,7 +848,8 @@ int main(int argc, char *argv[]) {
     // Compact output (device)
     gpuErrchk(cudaMalloc(&streams[s].d_matchCount, sizeof(int)));
     gpuErrchk(cudaMalloc(&streams[s].d_matchIdx, MAX_MATCHES * sizeof(int)));
-    gpuErrchk(cudaMalloc(&streams[s].d_matchScore, MAX_MATCHES * sizeof(float)));
+    gpuErrchk(
+        cudaMalloc(&streams[s].d_matchScore, MAX_MATCHES * sizeof(float)));
     // Compact output (host, pinned)
     gpuErrchk(cudaMallocHost((void **)&streams[s].h_matchCount, sizeof(int)));
     gpuErrchk(cudaMallocHost((void **)&streams[s].h_matchIdx,
@@ -957,8 +959,8 @@ int main(int argc, char *argv[]) {
     gpuErrchk(cudaEventElapsedTime(&_t_d2h, _fc->ev_kern_done, _fc->ev_end));  \
     uint16_t _img_num = _fc->pending_image_num;                                \
     float *_imageF = _fc->pending_image;                                       \
-    /* Convert float image to double for CPU fitting functions */               \
-    double *_image = (double *)malloc(g_imagePixels * sizeof(double));          \
+    /* Convert float image to double for CPU fitting functions */              \
+    double *_image = (double *)malloc(g_imagePixels * sizeof(double));         \
     for (size_t _p = 0; _p < g_imagePixels; _p++)                              \
       _image[_p] = (double)_imageF[_p];                                        \
     free(_imageF);                                                             \

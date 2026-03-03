@@ -59,7 +59,7 @@ __global__ void compare(size_t nrPxX, size_t nOr, size_t nrMaxSpots,
       px = (size_t)oA[loc];
       loc++;
       py = (size_t)oA[loc];
-      thisInt = im[py * nrPxX + px];
+      thisInt = __ldg(&im[py * nrPxX + px]);
       if (thisInt > 0) {
         totInt += thisInt;
         nSps++;
@@ -646,9 +646,8 @@ int main(int argc, char *argv[]) {
     gpuErrchk(cudaMalloc(&d_matchCount, sizeof(int)));
     gpuErrchk(cudaMalloc(&d_matchIdx, MAX_MATCHES * sizeof(int)));
     gpuErrchk(cudaMalloc(&d_matchScore, MAX_MATCHES * sizeof(float)));
-    printf("  cudaMalloc (%.1f GB + %.1f MB): %lf s\n",
-           chunkOutBytes / 1e9, imageBytes / 1e6,
-           omp_get_wtime() - wt_alloc);
+    printf("  cudaMalloc (%.1f GB + %.1f MB): %lf s\n", chunkOutBytes / 1e9,
+           imageBytes / 1e6, omp_get_wtime() - wt_alloc);
 
     // Convert image double→float and upload
     float *imageF = (float *)malloc(imageBytes);
@@ -682,13 +681,13 @@ int main(int argc, char *argv[]) {
       double wt_kern = omp_get_wtime();
       int blocks = (int)((thisChunk + 1023) / 1024);
       compare<<<blocks, 1024>>>(nrPxX, thisChunk, maxNrSpots, minIntensity,
-                                minNrSpots, d_outChunk, d_image,
-                                d_matchCount, d_matchIdx, d_matchScore, offset);
+                                minNrSpots, d_outChunk, d_image, d_matchCount,
+                                d_matchIdx, d_matchScore, offset);
       gpuErrchk(cudaDeviceSynchronize());
       double kern_time = omp_get_wtime() - wt_kern;
 
-      printf("  chunk %zu/%zu: H2D=%.3fs  kernel=%.3fs\n", c + 1,
-             nChunks, h2d_time, kern_time);
+      printf("  chunk %zu/%zu: H2D=%.3fs  kernel=%.3fs\n", c + 1, nChunks,
+             h2d_time, kern_time);
     }
 
     // D2H: compact results only
@@ -698,8 +697,8 @@ int main(int argc, char *argv[]) {
       h_matchCount = MAX_MATCHES;
     int *h_matchIdx_dev = (int *)malloc(h_matchCount * sizeof(int));
     float *h_matchScore_dev = (float *)malloc(h_matchCount * sizeof(float));
-    gpuErrchk(cudaMemcpy(h_matchIdx_dev, d_matchIdx,
-                         h_matchCount * sizeof(int), cudaMemcpyDeviceToHost));
+    gpuErrchk(cudaMemcpy(h_matchIdx_dev, d_matchIdx, h_matchCount * sizeof(int),
+                         cudaMemcpyDeviceToHost));
     gpuErrchk(cudaMemcpy(h_matchScore_dev, d_matchScore,
                          h_matchCount * sizeof(float), cudaMemcpyDeviceToHost));
 
@@ -920,8 +919,10 @@ int main(int argc, char *argv[]) {
 
   // Cleanup
   free(matchedArr);
-  if (h_matchIdx) free(h_matchIdx);
-  if (h_matchScore) free(h_matchScore);
+  if (h_matchIdx)
+    free(h_matchIdx);
+  if (h_matchScore)
+    free(h_matchScore);
   free(mA);
   free(rowNrs);
   free(doneArr);
