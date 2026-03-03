@@ -119,6 +119,11 @@ typedef struct {
   uint16_t pending_image_num;
   double *pending_image; // raw image ptr (freed after finalization)
   double wt_submission;  // wall time when GPU work was submitted
+  // GPU timing events
+  cudaEvent_t ev_start;     // before H2D
+  cudaEvent_t ev_h2d_done;  // after H2D, before kernel
+  cudaEvent_t ev_kern_done; // after kernel, before D2H
+  cudaEvent_t ev_end;       // after D2H
 } StreamContext;
 
 // ── Globals ────────────────────────────────────────────────────────────
@@ -829,6 +834,10 @@ int main(int argc, char *argv[]) {
     gpuErrchk(cudaMalloc(&streams[s].d_matchChunk, chunkSize * sizeof(double)));
     gpuErrchk(cudaMallocHost((void **)&streams[s].matchedArr,
                              nrOrients * sizeof(double)));
+    gpuErrchk(cudaEventCreate(&streams[s].ev_start));
+    gpuErrchk(cudaEventCreate(&streams[s].ev_h2d_done));
+    gpuErrchk(cudaEventCreate(&streams[s].ev_kern_done));
+    gpuErrchk(cudaEventCreate(&streams[s].ev_end));
   }
 
   // ── Open output files ────────────────────────────────────────────
@@ -920,6 +929,12 @@ int main(int argc, char *argv[]) {
       break;                                                                   \
     gpuErrchk(cudaStreamSynchronize(_fc->stream));                             \
     double _wt_gpu = omp_get_wtime() - _fc->wt_submission;                     \
+    /* GPU phase timings (ms) */                                               \
+    float _t_h2d = 0, _t_kern = 0, _t_d2h = 0;                                 \
+    gpuErrchk(cudaEventElapsedTime(&_t_h2d, _fc->ev_start, _fc->ev_h2d_done)); \
+    gpuErrchk(                                                                 \
+        cudaEventElapsedTime(&_t_kern, _fc->ev_h2d_done, _fc->ev_kern_done));  \
+    gpuErrchk(cudaEventElapsedTime(&_t_d2h, _fc->ev_kern_done, _fc->ev_end));  \
     uint16_t _img_num = _fc->pending_image_num;                                \
     double *_image = _fc->pending_image;                                       \
     /* Count results */                                                        \
@@ -928,8 +943,10 @@ int main(int argc, char *argv[]) {
       if (_fc->matchedArr[_i] > 0)                                             \
         _nrResults++;                                                          \
     }                                                                          \
-    printf("[Image %u] GPU matching: %.3f s, %zu matches\n", _img_num,         \
-           _wt_gpu, _nrResults);                                               \
+    printf("[Image %u] GPU: %.0f ms (H2D:%.0f Kern:%.0f D2H:%.0f), "           \
+           "%zu matches\n",                                                    \
+           _img_num, _t_h2d + _t_kern + _t_d2h, _t_h2d, _t_kern, _t_d2h,       \
+           _nrResults);                                                        \
     if (_nrResults == 0) {                                                     \
       printf("[Image %u] No matches, skipping fitting.\n", _img_num);          \
       free(_image);                                                            \
@@ -1068,8 +1085,10 @@ int main(int argc, char *argv[]) {
     fflush(outF);                                                              \
     fflush(ExtraInfo);                                                         \
     double _wt_total = omp_get_wtime() - _fc->wt_submission;                   \
-    printf("[Image %u] Total: %.3f s (GPU: %.3f s, CPU fitting: %.3f s)\n",    \
-           _img_num, _wt_total, _wt_gpu, _wt_total - _wt_gpu);                 \
+    float _t_gpu_total = _t_h2d + _t_kern + _t_d2h;                            \
+    printf("[Image %u] Total: %.3f s (GPU: %.0f ms, CPU fitting: %.3f s)\n",   \
+           _img_num, _wt_total, _t_gpu_total,                                  \
+           _wt_total - _t_gpu_total / 1000.0);                                 \
     fflush(stdout);                                                            \
     free(_mA);                                                                 \
     free(_rowNrs);                                                             \
@@ -1126,8 +1145,10 @@ int main(int argc, char *argv[]) {
     memset(ctx->matchedArr, 0, nrOrients * sizeof(double));
 
     // H2D: upload image
+    gpuErrchk(cudaEventRecord(ctx->ev_start, ctx->stream));
     gpuErrchk(cudaMemcpyAsync(ctx->d_image, image, imageBytes,
                               cudaMemcpyHostToDevice, ctx->stream));
+    gpuErrchk(cudaEventRecord(ctx->ev_h2d_done, ctx->stream));
 
     // GPU matching (chunked or full)
     size_t nChunks = (nrOrients + chunkSize - 1) / chunkSize;
@@ -1156,10 +1177,14 @@ int main(int argc, char *argv[]) {
           ctx->d_image, ctx->d_matchChunk);
 
       // D2H: match results for this chunk
+      if (c == 0)
+        gpuErrchk(cudaEventRecord(ctx->ev_kern_done, ctx->stream));
       gpuErrchk(cudaMemcpyAsync(ctx->matchedArr + offset, ctx->d_matchChunk,
                                 thisMatchBytes, cudaMemcpyDeviceToHost,
                                 ctx->stream));
     }
+
+    gpuErrchk(cudaEventRecord(ctx->ev_end, ctx->stream));
 
     // Record GPU gate: next submission will wait for this kernel to finish
     gpuErrchk(cudaEventRecord(gpu_gate, ctx->stream));
@@ -1205,6 +1230,10 @@ int main(int argc, char *argv[]) {
 
   // Free GPU
   for (int s = 0; s < numStreams; s++) {
+    cudaEventDestroy(streams[s].ev_start);
+    cudaEventDestroy(streams[s].ev_h2d_done);
+    cudaEventDestroy(streams[s].ev_kern_done);
+    cudaEventDestroy(streams[s].ev_end);
     cudaFree(streams[s].d_image);
     cudaFree(streams[s].d_matchChunk);
     cudaStreamDestroy(streams[s].stream);
