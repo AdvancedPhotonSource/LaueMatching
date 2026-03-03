@@ -809,28 +809,38 @@ int main(int argc, char *argv[]) {
   int iterNr = 0;
   int *dArr = (int *)calloc(nrResults, sizeof(*dArr));
   int *bsArr = (int *)calloc(nrResults, sizeof(*bsArr));
+  // Step 1: Precompute quaternions for all matches (parallel)
+  double *quats = (double *)malloc(nrResults * 4 * sizeof(double));
+#pragma omp parallel for num_threads(numProcs)
+  for (int qi = 0; qi < (int)nrResults; qi++) {
+    double or9[9];
+    for (int kk = 0; kk < 9; kk++)
+      or9[kk] = orients[rowNrs[qi] * 9 + kk];
+    OrientMat2Quat(or9, &quats[qi * 4]);
+  }
+  // Step 2: Precompute pairwise misorientations (parallel)
+  size_t nPairs = (size_t)nrResults * (nrResults - 1) / 2;
+  float *misoDist = (float *)malloc(nPairs * sizeof(float));
+#pragma omp parallel for num_threads(numProcs) schedule(dynamic)
+  for (int i = 1; i < (int)nrResults; i++) {
+    for (int j = 0; j < i; j++) {
+      size_t idx = (size_t)i * (i - 1) / 2 + j;
+      misoDist[idx] = (float)GetMisOrientation(&quats[i * 4], &quats[j * 4]);
+    }
+  }
+  // Step 3: Greedy cluster using precomputed distances (serial, fast)
   for (global_iterator = 0; global_iterator < (int)nrResults;
        global_iterator++) {
     if (doneArr[global_iterator] != 0)
       continue;
-    for (k = 0; k < 9; k++) {
-      orient1[k] = orients[rowNrs[global_iterator] * 9 + k];
-    }
-    OrientMat2Quat(orient1, quat1);
     doneArr[global_iterator] = 1;
     bestSol = rowNrs[global_iterator];
     bestIntensity = mA[global_iterator];
     for (l = global_iterator + 1; l < (int)nrResults; l++) {
       if (doneArr[l] > 0)
         continue;
-      for (m = 0; m < 9; m++) {
-        orient2[m] =
-            orients[rowNrs[l] * 9 +
-                    m]; // FIX: was orients[l*9+m] (missing rowNrs indirection)
-      }
-      OrientMat2Quat(orient2, quat2);
-      misoAngle = GetMisOrientation(quat1, quat2);
-      if (misoAngle <= maxAngle) {
+      size_t idx = (size_t)l * (l - 1) / 2 + global_iterator;
+      if (misoDist[idx] <= maxAngle) {
         doneArr[l] = 1;
         doneArr[global_iterator]++;
         if (mA[l] > bestIntensity) {
@@ -846,6 +856,8 @@ int main(int argc, char *argv[]) {
     bsArr[iterNr] = bestSol;
     iterNr++;
   }
+  free(quats);
+  free(misoDist);
   double time3 = omp_get_wtime() - start_time;
   printf("Finished finding unique solutions, took: %lf seconds.\n",
          time3 - time2);
