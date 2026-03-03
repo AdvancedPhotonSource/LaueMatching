@@ -353,7 +353,7 @@ int main(int argc, char *argv[]) {
   printf("Now running using %d threads.\n", numProcs);
   fflush(stdout);
   double start_time = omp_get_wtime();
-  int global_iterator, k, l, m, nrResults = 0;
+  int global_iterator, k, l, nrResults = 0;
   double recip[3][3];
   calcRecipArray(LatticeParameter, sg_num, recip);
 
@@ -602,7 +602,7 @@ int main(int argc, char *argv[]) {
   // for those.
   nSym = MakeSymmetries(sg_num, Symm);
 
-  double orient1[9], orient2[9], quat1[4], quat2[4], misoAngle, bestIntensity;
+  double bestIntensity;
   double tol = 3 * deg2rad;
   maxNrSpots *= 3;
   int bestSol;

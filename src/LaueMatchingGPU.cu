@@ -751,7 +751,7 @@ int main(int argc, char *argv[]) {
   // Unique solutions
   nSym = MakeSymmetries(sg_num, Symm);
 
-  double orient1[9], orient2[9], quat1[4], quat2[4], misoAngle, bestIntensity;
+  double bestIntensity;
   double tol = 3 * deg2rad;
   maxNrSpots *= 3;
   int bestSol;
