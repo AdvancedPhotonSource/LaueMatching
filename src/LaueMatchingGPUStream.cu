@@ -114,6 +114,11 @@ typedef struct {
   double *d_image;      // device image buffer
   double *d_matchChunk; // device match scores (per chunk)
   double *matchedArr;   // host match results (full nrOrients)
+  // Async pipeline state
+  int hasPendingWork; // 1 if GPU work submitted but not finalized
+  uint16_t pending_image_num;
+  double *pending_image; // raw image ptr (freed after finalization)
+  double wt_submission;  // wall time when GPU work was submitted
 } StreamContext;
 
 // ── Globals ────────────────────────────────────────────────────────────
@@ -147,10 +152,12 @@ void queue_init(ProcessQueue *q) {
   pthread_cond_init(&q->not_full, NULL);
 }
 
+static int g_queue_full_count = 0; // suppress queue-full spam
+
 int queue_push(ProcessQueue *q, uint16_t image_num, double *data) {
   pthread_mutex_lock(&q->mutex);
   while (q->count >= MAX_QUEUE_SIZE && keep_running) {
-    printf("Queue full, waiting...\n");
+    g_queue_full_count++;
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
     ts.tv_sec += 1;
@@ -176,6 +183,36 @@ int queue_pop(ProcessQueue *q, ImageChunk *chunk) {
     clock_gettime(CLOCK_REALTIME, &ts);
     ts.tv_sec += 1;
     pthread_cond_timedwait(&q->not_empty, &q->mutex, &ts);
+  }
+  if (q->count == 0 && !keep_running) {
+    pthread_mutex_unlock(&q->mutex);
+    return -1;
+  }
+  *chunk = q->chunks[q->front];
+  q->front = (q->front + 1) % MAX_QUEUE_SIZE;
+  q->count--;
+  pthread_cond_signal(&q->not_full);
+  pthread_mutex_unlock(&q->mutex);
+  return 0;
+}
+
+// Timeout variant: returns 0=success, 1=timeout, -1=shutdown
+int queue_pop_timeout(ProcessQueue *q, ImageChunk *chunk, int timeout_ms) {
+  pthread_mutex_lock(&q->mutex);
+  struct timespec ts;
+  clock_gettime(CLOCK_REALTIME, &ts);
+  ts.tv_sec += timeout_ms / 1000;
+  ts.tv_nsec += (timeout_ms % 1000) * 1000000L;
+  if (ts.tv_nsec >= 1000000000L) {
+    ts.tv_sec++;
+    ts.tv_nsec -= 1000000000L;
+  }
+  while (q->count == 0 && keep_running) {
+    int rc = pthread_cond_timedwait(&q->not_empty, &q->mutex, &ts);
+    if (rc == ETIMEDOUT && q->count == 0) {
+      pthread_mutex_unlock(&q->mutex);
+      return 1; // timeout
+    }
   }
   if (q->count == 0 && !keep_running) {
     pthread_mutex_unlock(&q->mutex);
@@ -872,31 +909,215 @@ int main(int argc, char *argv[]) {
   int maxNrSpotsFit = maxNrSpots * 3;
   double tol = 3 * deg2rad;
 
+// ═══════════════════════════════════════════════════════════════════
+// Helper: finalize a stream's pending GPU work (sync + CPU fitting)
+// ═══════════════════════════════════════════════════════════════════
+#define FINALIZE_STREAM(ctx_ptr)                                               \
+  do {                                                                         \
+    StreamContext *_fc = (ctx_ptr);                                            \
+    if (!_fc->hasPendingWork)                                                  \
+      break;                                                                   \
+    gpuErrchk(cudaStreamSynchronize(_fc->stream));                             \
+    double _wt_gpu = omp_get_wtime() - _fc->wt_submission;                     \
+    uint16_t _img_num = _fc->pending_image_num;                                \
+    double *_image = _fc->pending_image;                                       \
+    /* Count results */                                                        \
+    size_t _nrResults = 0;                                                     \
+    for (size_t _i = 0; _i < nrOrients; _i++) {                                \
+      if (_fc->matchedArr[_i] > 0)                                             \
+        _nrResults++;                                                          \
+    }                                                                          \
+    printf("[Image %u] GPU matching: %.3f s, %zu matches\n", _img_num,         \
+           _wt_gpu, _nrResults);                                               \
+    if (_nrResults == 0) {                                                     \
+      printf("[Image %u] No matches, skipping fitting.\n", _img_num);          \
+      free(_image);                                                            \
+      _fc->hasPendingWork = 0;                                                 \
+      break;                                                                   \
+    }                                                                          \
+    /* Unique solutions search */                                              \
+    double *_mA = (double *)calloc(_nrResults, sizeof(double));                \
+    size_t *_rowNrs = (size_t *)calloc(_nrResults, sizeof(size_t));            \
+    int _resultNr = 0;                                                         \
+    for (size_t _gi = 0; _gi < nrOrients; _gi++) {                             \
+      if (_fc->matchedArr[_gi] != 0) {                                         \
+        _mA[_resultNr] = _fc->matchedArr[_gi];                                 \
+        _rowNrs[_resultNr] = _gi;                                              \
+        _resultNr++;                                                           \
+      }                                                                        \
+    }                                                                          \
+    int *_doneArr = (int *)calloc(_nrResults, sizeof(int));                    \
+    double *_FinOrientArr = (double *)calloc(_nrResults * 9, sizeof(double));  \
+    int *_dArr = (int *)calloc(_nrResults, sizeof(int));                       \
+    int *_bsArr = (int *)calloc(_nrResults, sizeof(int));                      \
+    int _iterNr = 0;                                                           \
+    double _orient1[9], _orient2[9], _quat1[4], _quat2[4];                     \
+    double _misoAngle, _bestIntensity;                                         \
+    int _bestSol;                                                              \
+    for (int _gi = 0; _gi < (int)_nrResults; _gi++) {                          \
+      if (_doneArr[_gi] != 0)                                                  \
+        continue;                                                              \
+      for (int _k = 0; _k < 9; _k++)                                           \
+        _orient1[_k] = orients[_rowNrs[_gi] * 9 + _k];                         \
+      OrientMat2Quat(_orient1, _quat1);                                        \
+      _doneArr[_gi] = 1;                                                       \
+      _bestSol = _rowNrs[_gi];                                                 \
+      _bestIntensity = _mA[_gi];                                               \
+      for (int _l = _gi + 1; _l < (int)_nrResults; _l++) {                     \
+        if (_doneArr[_l] > 0)                                                  \
+          continue;                                                            \
+        for (int _m2 = 0; _m2 < 9; _m2++)                                      \
+          _orient2[_m2] = orients[_rowNrs[_l] * 9 + _m2];                      \
+        OrientMat2Quat(_orient2, _quat2);                                      \
+        _misoAngle = GetMisOrientation(_quat1, _quat2);                        \
+        if (_misoAngle <= maxAngle) {                                          \
+          _doneArr[_l] = 1;                                                    \
+          _doneArr[_gi]++;                                                     \
+          if (_mA[_l] > _bestIntensity) {                                      \
+            _bestIntensity = _mA[_l];                                          \
+            _bestSol = _rowNrs[_l];                                            \
+          }                                                                    \
+        }                                                                      \
+      }                                                                        \
+      for (int _k = 0; _k < 9; _k++)                                           \
+        _FinOrientArr[_iterNr * 9 + _k] = orients[_bestSol * 9 + _k];          \
+      _dArr[_iterNr] = _doneArr[_gi];                                          \
+      _bsArr[_iterNr] = _bestSol;                                              \
+      _iterNr++;                                                               \
+    }                                                                          \
+    int _totalSols = _iterNr;                                                  \
+    printf("[Image %u] %d unique orientations found\n", _img_num, _totalSols); \
+    /* Parallel fitting */                                                     \
+    _Pragma("omp parallel for num_threads(numProcs)") for (_iterNr = 0;        \
+                                                           _iterNr <           \
+                                                           _totalSols;         \
+                                                           _iterNr++) {        \
+      double _orientBest[3][3], _eulerBest[3], _eulerFit[3], _orientFit[3][3]; \
+      double _q1[4], _q2[4];                                                   \
+      int _iJ, _iK;                                                            \
+      double *_outArrThisFit =                                                 \
+          (double *)calloc(3 * maxNrSpotsFit, sizeof(double));                 \
+      for (_iJ = 0; _iJ < 3; _iJ++)                                            \
+        for (_iK = 0; _iK < 3; _iK++)                                          \
+          _orientBest[_iJ][_iK] = _FinOrientArr[_iterNr * 9 + 3 * _iJ + _iK];  \
+      OrientMat2Euler(_orientBest, _eulerBest);                                \
+      for (_iJ = 0; _iJ < 3; _iJ++)                                            \
+        _eulerFit[_iJ] = _eulerBest[_iJ];                                      \
+      int _saveExtraInfo = 0;                                                  \
+      int _doCrystalFit = 0;                                                   \
+      memset(_outArrThisFit, 0, 3 * maxNrSpotsFit * sizeof(double));           \
+      double _latCFit[6], _recipFit[3][3], _mv = 0;                            \
+      FitOrientation(_image, _eulerBest, hkls, nhkls, nrPxX, nrPxY, recip,     \
+                     _outArrThisFit, maxNrSpotsFit, rotTranspose, pArr, pxX,   \
+                     pxY, Elo, Ehi, tol, LatticeParameter, _eulerFit,          \
+                     _latCFit, &_mv, _doCrystalFit);                           \
+      _doCrystalFit = 1;                                                       \
+      for (_iK = 0; _iK < 3; _iK++)                                            \
+        _eulerBest[_iK] = _eulerFit[_iK];                                      \
+      memset(_outArrThisFit, 0, 3 * maxNrSpotsFit * sizeof(double));           \
+      double _tol2 = tol / 3.0;                                                \
+      FitOrientation(_image, _eulerBest, hkls, nhkls, nrPxX, nrPxY, recip,     \
+                     _outArrThisFit, maxNrSpotsFit, rotTranspose, pArr, pxX,   \
+                     pxY, Elo, Ehi, _tol2, LatticeParameter, _eulerFit,        \
+                     _latCFit, &_mv, _doCrystalFit);                           \
+      Euler2OrientMat(_eulerFit, _orientFit);                                  \
+      OrientMat2Quat33(_orientBest, _q1);                                      \
+      OrientMat2Quat33(_orientFit, _q2);                                       \
+      int _simulNrSps = 0;                                                     \
+      calcRecipArray(_latCFit, sg_num, _recipFit);                             \
+      memset(_outArrThisFit, 0, 3 * maxNrSpotsFit * sizeof(double));           \
+      int _nrSps = writeCalcOverlap(                                           \
+          _image, _eulerFit, hkls, nhkls, nrPxX, nrPxY, _recipFit,             \
+          _outArrThisFit, maxNrSpotsFit, rotTranspose, pArr, pxX, pxY, Elo,    \
+          Ehi, ExtraInfo, _saveExtraInfo, &_simulNrSps, (int)_img_num);        \
+      if (_nrSps >= minGoodSpots) {                                            \
+        int _bs = _bsArr[_iterNr];                                             \
+        double _miso = GetMisOrientation(_q1, _q2);                            \
+        _saveExtraInfo = _iterNr + 1;                                          \
+        memset(_outArrThisFit, 0, 3 * maxNrSpotsFit * sizeof(double));         \
+        writeCalcOverlap(_image, _eulerFit, hkls, nhkls, nrPxX, nrPxY,         \
+                         _recipFit, _outArrThisFit, maxNrSpotsFit,             \
+                         rotTranspose, pArr, pxX, pxY, Elo, Ehi, ExtraInfo,    \
+                         _saveExtraInfo, &_simulNrSps, (int)_img_num);         \
+        double _OF[3][3];                                                      \
+        MatrixMultF33(_orientFit, _recipFit, _OF);                             \
+        _Pragma("omp critical") {                                              \
+          fprintf(outF, "%u\t%d\t%d\t", _img_num, _iterNr + 1,                 \
+                  _dArr[_iterNr]);                                             \
+          fprintf(outF, "%-13.4lf\t", (_mv / _nrSps) * (_mv / _nrSps));        \
+          fprintf(outF, "%-13.4lf\t",                                          \
+                  _nrSps * (_mv / _nrSps) * (_mv / _nrSps));                   \
+          fprintf(outF, "%-13.4lf\t", _mv);                                    \
+          fprintf(outF, "%d\t", _nrSps);                                       \
+          fprintf(outF, "%d\t", _simulNrSps);                                  \
+          for (int _k = 0; _k < 3; _k++)                                       \
+            for (int _l = 0; _l < 3; _l++)                                     \
+              fprintf(outF, "%-13.7lf\t\t", _OF[_k][_l]);                      \
+          for (int _k = 0; _k < 6; _k++)                                       \
+            fprintf(outF, "%-13.7lf\t\t", _latCFit[_k]);                       \
+          for (int _k = 0; _k < 3; _k++)                                       \
+            for (int _l = 0; _l < 3; _l++)                                     \
+              fprintf(outF, "%-13.7lf\t\t", _orientFit[_k][_l]);               \
+          fprintf(outF, "%-13.4lf\t%-13.7lf\t%d\n", _fc->matchedArr[_bs],      \
+                  _miso, _bs);                                                 \
+        }                                                                      \
+      }                                                                        \
+      free(_outArrThisFit);                                                    \
+    }                                                                          \
+    fflush(outF);                                                              \
+    fflush(ExtraInfo);                                                         \
+    double _wt_total = omp_get_wtime() - _fc->wt_submission;                   \
+    printf("[Image %u] Total: %.3f s (GPU: %.3f s, CPU fitting: %.3f s)\n",    \
+           _img_num, _wt_total, _wt_gpu, _wt_total - _wt_gpu);                 \
+    fflush(stdout);                                                            \
+    free(_mA);                                                                 \
+    free(_rowNrs);                                                             \
+    free(_doneArr);                                                            \
+    free(_FinOrientArr);                                                       \
+    free(_dArr);                                                               \
+    free(_bsArr);                                                              \
+    free(_image);                                                              \
+    _fc->hasPendingWork = 0;                                                   \
+  } while (0)
+
   // ═══════════════════════════════════════════════════════════════════
-  // Main processing loop
+  // Main processing loop (async pipeline)
   // ═══════════════════════════════════════════════════════════════════
   int streamId = 0;
-  while (keep_running) {
-    ImageChunk chunk;
-    int rc = queue_pop(&process_queue, &chunk);
-    if (rc < 0)
-      break; // shutdown
+  for (int s = 0; s < numStreams; s++)
+    streams[s].hasPendingWork = 0;
 
-    uint16_t image_num = chunk.image_num;
-    double *image = chunk.data;
+  while (keep_running) {
     StreamContext *ctx = &streams[streamId];
 
-    printf("[Image %u] Processing on stream %d...\n", image_num, streamId);
-    double wt_img_start = omp_get_wtime();
+    // 1. FINALIZE previous work on this stream (if any)
+    FINALIZE_STREAM(ctx);
 
-    // Reset matchedArr
+    // 2. ACQUIRE new image (100ms timeout for drain support)
+    ImageChunk chunk;
+    int rc = queue_pop_timeout(&process_queue, &chunk, 100);
+    if (rc < 0)
+      break; // shutdown
+    if (rc == 1) {
+      // Timeout: no work available, advance to drain next stream
+      streamId = (streamId + 1) % numStreams;
+      continue;
+    }
+
+    // 3. SUBMIT async GPU work (no synchronize!)
+    uint16_t image_num = chunk.image_num;
+    double *image = chunk.data;
+
+    printf("[Image %u] Submitting on stream %d...\n", image_num, streamId);
+
+    // Reset matchedArr (host-side, for D2H async copy target)
     memset(ctx->matchedArr, 0, nrOrients * sizeof(double));
 
     // H2D: upload image
     gpuErrchk(cudaMemcpyAsync(ctx->d_image, image, imageBytes,
                               cudaMemcpyHostToDevice, ctx->stream));
 
-    // ── GPU matching (chunked or full) ──────────────────────────────
+    // GPU matching (chunked or full)
     size_t nChunks = (nrOrients + chunkSize - 1) / chunkSize;
     for (size_t c = 0; c < nChunks; c++) {
       size_t offset = c * chunkSize;
@@ -906,7 +1127,6 @@ int main(int argc, char *argv[]) {
       size_t thisMatchBytes = thisChunk * sizeof(double);
 
       if (!outArrOnGPU) {
-        // Need to upload this chunk of outArr
         size_t thisOutBytes = thisChunk * stride * sizeof(uint16_t);
         gpuErrchk(cudaMemcpyAsync(d_outArr, outArr + offset * stride,
                                   thisOutBytes, cudaMemcpyHostToDevice,
@@ -916,7 +1136,6 @@ int main(int argc, char *argv[]) {
       gpuErrchk(
           cudaMemsetAsync(ctx->d_matchChunk, 0, thisMatchBytes, ctx->stream));
 
-      // Launch kernel
       int blocks = (int)((thisChunk + 1023) / 1024);
       uint16_t *d_chunkPtr =
           outArrOnGPU ? d_outArr + offset * stride : d_outArr;
@@ -930,179 +1149,25 @@ int main(int argc, char *argv[]) {
                                 ctx->stream));
     }
 
-    // Synchronize stream before CPU work
-    gpuErrchk(cudaStreamSynchronize(ctx->stream));
-    double wt_gpu = omp_get_wtime() - wt_img_start;
-
-    // ── Count results ──────────────────────────────────────────────
-    size_t nrResults = 0;
-    for (size_t i = 0; i < nrOrients; i++) {
-      if (ctx->matchedArr[i] > 0)
-        nrResults++;
-    }
-    printf("[Image %u] GPU matching: %lf s, %zu matches\n", image_num, wt_gpu,
-           nrResults);
-
-    if (nrResults == 0) {
-      printf("[Image %u] No matches found, skipping fitting.\n", image_num);
-      free(image);
-      streamId = (streamId + 1) % numStreams;
-      continue;
-    }
-
-    // ── Unique solutions search ────────────────────────────────────
-    double *mA = (double *)calloc(nrResults, sizeof(double));
-    size_t *rowNrs = (size_t *)calloc(nrResults, sizeof(size_t));
-    int resultNr = 0;
-    for (size_t gi = 0; gi < nrOrients; gi++) {
-      if (ctx->matchedArr[gi] != 0) {
-        mA[resultNr] = ctx->matchedArr[gi];
-        rowNrs[resultNr] = gi;
-        resultNr++;
-      }
-    }
-
-    int *doneArr = (int *)calloc(nrResults, sizeof(int));
-    double *FinOrientArr = (double *)calloc(nrResults * 9, sizeof(double));
-    int *dArr = (int *)calloc(nrResults, sizeof(int));
-    int *bsArr = (int *)calloc(nrResults, sizeof(int));
-    int iterNr = 0;
-    double orient1[9], orient2[9], quat1[4], quat2[4], misoAngle, bestIntensity;
-    int k, l, m;
-    int bestSol;
-
-    for (int gi = 0; gi < (int)nrResults; gi++) {
-      if (doneArr[gi] != 0)
-        continue;
-      for (k = 0; k < 9; k++)
-        orient1[k] = orients[rowNrs[gi] * 9 + k];
-      OrientMat2Quat(orient1, quat1);
-      doneArr[gi] = 1;
-      bestSol = rowNrs[gi];
-      bestIntensity = mA[gi];
-      for (l = gi + 1; l < (int)nrResults; l++) {
-        if (doneArr[l] > 0)
-          continue;
-        for (m = 0; m < 9; m++)
-          orient2[m] = orients[rowNrs[l] * 9 + m];
-        OrientMat2Quat(orient2, quat2);
-        misoAngle = GetMisOrientation(quat1, quat2);
-        if (misoAngle <= maxAngle) {
-          doneArr[l] = 1;
-          doneArr[gi]++;
-          if (mA[l] > bestIntensity) {
-            bestIntensity = mA[l];
-            bestSol = rowNrs[l];
-          }
-        }
-      }
-      for (k = 0; k < 9; k++)
-        FinOrientArr[iterNr * 9 + k] = orients[bestSol * 9 + k];
-      dArr[iterNr] = doneArr[gi];
-      bsArr[iterNr] = bestSol;
-      iterNr++;
-    }
-    int totalSols = iterNr;
-    printf("[Image %u] %d unique orientations found\n", image_num, totalSols);
-
-    // ── Parallel fitting ───────────────────────────────────────────
-#pragma omp parallel for num_threads(numProcs)
-    for (iterNr = 0; iterNr < totalSols; iterNr++) {
-      double orientBest[3][3], eulerBest[3], eulerFit[3], orientFit[3][3],
-          q1[4], q2[4];
-      int iJ, iK;
-      double *outArrThisFit =
-          (double *)calloc(3 * maxNrSpotsFit, sizeof(double));
-      for (iJ = 0; iJ < 3; iJ++)
-        for (iK = 0; iK < 3; iK++)
-          orientBest[iJ][iK] = FinOrientArr[iterNr * 9 + 3 * iJ + iK];
-      OrientMat2Euler(orientBest, eulerBest);
-      for (iJ = 0; iJ < 3; iJ++)
-        eulerFit[iJ] = eulerBest[iJ];
-      int saveExtraInfo = 0;
-      int doCrystalFit = 0;
-      memset(outArrThisFit, 0, 3 * maxNrSpotsFit * sizeof(double));
-      double latCFit[6], recipFit[3][3], mv = 0;
-
-      // First fit: orientation only
-      FitOrientation(image, eulerBest, hkls, nhkls, nrPxX, nrPxY, recip,
-                     outArrThisFit, maxNrSpotsFit, rotTranspose, pArr, pxX, pxY,
-                     Elo, Ehi, tol, LatticeParameter, eulerFit, latCFit, &mv,
-                     doCrystalFit);
-
-      // Second fit: tighter bounds + crystal params
-      doCrystalFit = 1;
-      for (iK = 0; iK < 3; iK++)
-        eulerBest[iK] = eulerFit[iK];
-      memset(outArrThisFit, 0, 3 * maxNrSpotsFit * sizeof(double));
-      double tol2 = tol / 3.0;
-      FitOrientation(image, eulerBest, hkls, nhkls, nrPxX, nrPxY, recip,
-                     outArrThisFit, maxNrSpotsFit, rotTranspose, pArr, pxX, pxY,
-                     Elo, Ehi, tol2, LatticeParameter, eulerFit, latCFit, &mv,
-                     doCrystalFit);
-
-      Euler2OrientMat(eulerFit, orientFit);
-      OrientMat2Quat33(orientBest, q1);
-      OrientMat2Quat33(orientFit, q2);
-      int simulNrSps = 0;
-      calcRecipArray(latCFit, sg_num, recipFit);
-      memset(outArrThisFit, 0, 3 * maxNrSpotsFit * sizeof(double));
-      int nrSps = writeCalcOverlap(
-          image, eulerFit, hkls, nhkls, nrPxX, nrPxY, recipFit, outArrThisFit,
-          maxNrSpotsFit, rotTranspose, pArr, pxX, pxY, Elo, Ehi, ExtraInfo,
-          saveExtraInfo, &simulNrSps, (int)image_num);
-      if (nrSps >= minGoodSpots) {
-        int bs = bsArr[iterNr];
-        double miso = GetMisOrientation(q1, q2);
-        saveExtraInfo = iterNr + 1;
-        memset(outArrThisFit, 0, 3 * maxNrSpotsFit * sizeof(double));
-        writeCalcOverlap(image, eulerFit, hkls, nhkls, nrPxX, nrPxY, recipFit,
-                         outArrThisFit, maxNrSpotsFit, rotTranspose, pArr, pxX,
-                         pxY, Elo, Ehi, ExtraInfo, saveExtraInfo, &simulNrSps,
-                         (int)image_num);
-        double OF[3][3];
-        MatrixMultF33(orientFit, recipFit, OF);
-#pragma omp critical
-        {
-          fprintf(outF, "%u\t%d\t%d\t", image_num, iterNr + 1, dArr[iterNr]);
-          fprintf(outF, "%-13.4lf\t", (mv / nrSps) * (mv / nrSps));
-          fprintf(outF, "%-13.4lf\t", nrSps * (mv / nrSps) * (mv / nrSps));
-          fprintf(outF, "%-13.4lf\t", mv);
-          fprintf(outF, "%d\t", nrSps);
-          fprintf(outF, "%d\t", simulNrSps);
-          for (k = 0; k < 3; k++)
-            for (l = 0; l < 3; l++)
-              fprintf(outF, "%-13.7lf\t\t", OF[k][l]);
-          for (k = 0; k < 6; k++)
-            fprintf(outF, "%-13.7lf\t\t", latCFit[k]);
-          for (k = 0; k < 3; k++)
-            for (l = 0; l < 3; l++)
-              fprintf(outF, "%-13.7lf\t\t", orientFit[k][l]);
-          fprintf(outF, "%-13.4lf\t%-13.7lf\t%d\n", ctx->matchedArr[bs], miso,
-                  bs);
-        }
-      }
-      free(outArrThisFit);
-    }
-    fflush(outF);
-    fflush(ExtraInfo);
-
-    double wt_total = omp_get_wtime() - wt_img_start;
-    printf("[Image %u] Total: %.3f s (GPU: %.3f s, CPU fitting: %.3f s)\n",
-           image_num, wt_total, wt_gpu, wt_total - wt_gpu);
-    fflush(stdout);
-
-    // Cleanup per-image allocations
-    free(mA);
-    free(rowNrs);
-    free(doneArr);
-    free(FinOrientArr);
-    free(dArr);
-    free(bsArr);
-    free(image);
+    // Record state — NO cudaStreamSynchronize here!
+    ctx->hasPendingWork = 1;
+    ctx->pending_image_num = image_num;
+    ctx->pending_image = image;
+    ctx->wt_submission = omp_get_wtime();
 
     streamId = (streamId + 1) % numStreams;
   }
+
+  // ═══════════════════════════════════════════════════════════════════
+  // Drain: finalize any in-flight streams
+  // ═══════════════════════════════════════════════════════════════════
+  for (int s = 0; s < numStreams; s++) {
+    FINALIZE_STREAM(&streams[s]);
+  }
+
+  if (g_queue_full_count > 0)
+    printf("Note: receive queue was full %d times (backpressure from processing)\n",
+           g_queue_full_count);
 
   // ═══════════════════════════════════════════════════════════════════
   // Cleanup
