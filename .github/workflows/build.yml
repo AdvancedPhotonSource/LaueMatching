@@ -60,6 +60,8 @@ jobs:
       with:
         cuda: '12.6.0'
         method: network
+        sub-packages: '["nvcc", "cudart-dev"]'
+        non-cuda-sub-packages: '["libgomp-dev"]'
 
     - name: Install dependencies
       run: |
