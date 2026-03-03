@@ -319,13 +319,17 @@ See `simulation/params_sim.txt` for a complete example.
 
 If you use LaueMatching in your research, please cite:
 
+H. Sharma, D. Sheyfer, R. Harder and J.Z. Tischler (2026). *J. Appl. Cryst.* **59**, [https://doi.org/10.1107/S1600576726001196](https://doi.org/10.1107/S1600576726001196)
+
 ```bibtex
 @article{LaueMatching,
   author  = {Sharma, Hemant and Sheyfer, Dina and Harder, Ross and Tischler, Jonathan Z.},
   title   = {LaueMatching: A Tool for rapid and robust indexing of Laue diffraction patterns},
-  year    = {2026; in print},
+  year    = {2026},
   journal = {Journal of Applied Crystallography},
-  url     = {https://github.com/AdvancedPhotonSource/LaueMatching}
+  volume  = {59},
+  doi     = {10.1107/S1600576726001196},
+  url     = {https://doi.org/10.1107/S1600576726001196}
 }
 ```
 
