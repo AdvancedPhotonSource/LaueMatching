@@ -43,30 +43,16 @@ jobs:
 
   build-gpu:
     runs-on: ubuntu-latest
+    container: nvidia/cuda:12.6.3-devel-ubuntu24.04
+    timeout-minutes: 15
     
     steps:
     - uses: actions/checkout@v4
     
-    - name: Cache NLopt (GPU)
-      uses: actions/cache@v4
-      with:
-        path: LIBS/NLOPT
-        key: ${{ runner.os }}-nlopt-gpu-${{ hashFiles('CMakeLists.txt') }}
-        restore-keys: |
-          ${{ runner.os }}-nlopt-gpu-
-
-    - name: Install CUDA toolkit
-      uses: Jimver/cuda-toolkit@v0.2.19
-      with:
-        cuda: '12.6.0'
-        method: network
-        sub-packages: '["nvcc", "cudart-dev"]'
-        non-cuda-sub-packages: '["libgomp-dev"]'
-
     - name: Install dependencies
       run: |
-        sudo apt-get update
-        sudo apt-get install -y cmake build-essential
+        apt-get update
+        apt-get install -y cmake build-essential
 
     - name: Build (GPU)
       run: SKIP_DOWNLOAD=1 ./build.sh gpu
