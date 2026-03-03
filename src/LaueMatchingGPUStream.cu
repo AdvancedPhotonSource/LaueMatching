@@ -367,6 +367,94 @@ static void usage(const char *prog) {
          prog, PORT);
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// Helper: finalize a stream's pending GPU work (sync + CPU fitting)
+// ═══════════════════════════════════════════════════════════════════
+static void finalize_stream(StreamContext *fc, double *orients, int *hkls,
+                            int nhkls, int nrPxX, int nrPxY, double recip[3][3],
+                            double rotTranspose[3][3], double pArr[3],
+                            double pxX, double pxY, double Elo, double Ehi,
+                            double tol, double *LatticeParameter,
+                            double maxAngle, int maxNrSpots, int minGoodSpots,
+                            int numProcs, FILE *outF, FILE *ExtraInfo) {
+  if (!fc->hasPendingWork)
+    return;
+  gpuErrchk(cudaStreamSynchronize(fc->stream));
+  double wt_cpu_start = omp_get_wtime();
+  // GPU phase timings (ms)
+  float t_h2d = 0, t_kern = 0, t_d2h = 0;
+  gpuErrchk(cudaEventElapsedTime(&t_h2d, fc->ev_start, fc->ev_h2d_done));
+  gpuErrchk(cudaEventElapsedTime(&t_kern, fc->ev_h2d_done, fc->ev_kern_done));
+  gpuErrchk(cudaEventElapsedTime(&t_d2h, fc->ev_kern_done, fc->ev_end));
+  uint16_t img_num = fc->pending_image_num;
+  float *image = fc->pending_image;
+  // Read compact match count
+  int nrResults = *(fc->h_matchCount);
+  if (nrResults > MAX_MATCHES)
+    nrResults = MAX_MATCHES;
+  printf("[Image %u] GPU: %.0f ms (H2D:%.0f Kern:%.0f D2H:%.0f), "
+         "%d matches\n",
+         img_num, t_h2d + t_kern + t_d2h, t_h2d, t_kern, t_d2h, nrResults);
+  if (nrResults == 0) {
+    printf("[Image %u] No matches, skipping fitting.\n", img_num);
+    free(image);
+    fc->hasPendingWork = 0;
+    return;
+  }
+  // Build match arrays from compact GPU results
+  int *matchIdx = fc->h_matchIdx;
+  float *matchScore = fc->h_matchScore;
+  double *mA = (double *)calloc(nrResults, sizeof(double));
+  size_t *rowNrs = (size_t *)calloc(nrResults, sizeof(size_t));
+  for (int ci = 0; ci < nrResults; ci++) {
+    mA[ci] = matchScore[ci];
+    rowNrs[ci] = (size_t)matchIdx[ci];
+  }
+  // Merge duplicate orientations
+  double *FinOrientArr = (double *)calloc(nrResults * 9, sizeof(double));
+  int *dArr = (int *)calloc(nrResults, sizeof(int));
+  int *bsArr = (int *)calloc(nrResults, sizeof(int));
+  double *bsScoreArr = (double *)calloc(nrResults, sizeof(double));
+  double wt_merge = omp_get_wtime();
+  int totalSols = mergeDuplicateOrientations(orients, rowNrs, mA, nrResults,
+                                             maxAngle, numProcs, FinOrientArr,
+                                             dArr, bsArr, bsScoreArr);
+  double wt_merge_done = omp_get_wtime();
+  printf("[Image %u] %d unique orientations found\n", img_num, totalSols);
+  printf("[Image %u]   merge: %.0f ms\n", img_num,
+         (wt_merge_done - wt_merge) * 1000);
+  // Parallel fitting
+  double wt_fit_start = omp_get_wtime();
+  fitAndWriteOrientations(image, FinOrientArr, dArr, bsArr, bsScoreArr,
+                          totalSols, hkls, nhkls, nrPxX, nrPxY, recip,
+                          rotTranspose, pArr, pxX, pxY, Elo, Ehi, tol,
+                          LatticeParameter, maxNrSpots, minGoodSpots, numProcs,
+                          outF, ExtraInfo, (int)img_num);
+  double wt_flush_start = omp_get_wtime();
+  fflush(outF);
+  fflush(ExtraInfo);
+  double wt_flush_ms = (omp_get_wtime() - wt_flush_start) * 1000;
+  double wt_total = omp_get_wtime() - fc->wt_submission;
+  float t_gpu_total = t_h2d + t_kern + t_d2h;
+  double wt_fit_ms = (wt_flush_start - wt_fit_start) * 1000;
+  double wt_setup_ms = (wt_merge - wt_cpu_start) * 1000;
+  printf("[Image %u]   setup: %.0f ms, flush: %.0f ms\n", img_num, wt_setup_ms,
+         wt_flush_ms);
+  printf("[Image %u]   fitting: %.0f ms (%d orientations, %d threads)\n",
+         img_num, wt_fit_ms, totalSols, numProcs);
+  printf("[Image %u] Total: %.3f s (GPU: %.0f ms, CPU: %.0f ms)\n", img_num,
+         wt_total, t_gpu_total, (omp_get_wtime() - wt_cpu_start) * 1000);
+  fflush(stdout);
+  free(mA);
+  free(rowNrs);
+  free(FinOrientArr);
+  free(dArr);
+  free(bsArr);
+  free(bsScoreArr);
+  free(image);
+  fc->hasPendingWork = 0;
+}
+
 // ── Main ───────────────────────────────────────────────────────────────
 int main(int argc, char *argv[]) {
   if (argc != 5) {
@@ -941,103 +1029,14 @@ int main(int argc, char *argv[]) {
   int maxNrSpotsFit = maxNrSpots * 3;
   double tol = 3 * deg2rad;
 
-  // ═══════════════════════════════════════════════════════════════════
-  // Helper: finalize a stream's pending GPU work (sync + CPU fitting)
-  // ═══════════════════════════════════════════════════════════════════
-  static void finalize_stream(
-      StreamContext * fc, double *orients, int *hkls, int nhkls, int nrPxX,
-      int nrPxY, double recip[3][3], double rotTranspose[3][3], double pArr[3],
-      double pxX, double pxY, double Elo, double Ehi, double tol,
-      double *LatticeParameter, double maxAngle, int maxNrSpots,
-      int minGoodSpots, int numProcs, FILE *outF, FILE *ExtraInfo) {
-    if (!fc->hasPendingWork)
-      return;
-    gpuErrchk(cudaStreamSynchronize(fc->stream));
-    double wt_cpu_start = omp_get_wtime();
-    // GPU phase timings (ms)
-    float t_h2d = 0, t_kern = 0, t_d2h = 0;
-    gpuErrchk(cudaEventElapsedTime(&t_h2d, fc->ev_start, fc->ev_h2d_done));
-    gpuErrchk(cudaEventElapsedTime(&t_kern, fc->ev_h2d_done, fc->ev_kern_done));
-    gpuErrchk(cudaEventElapsedTime(&t_d2h, fc->ev_kern_done, fc->ev_end));
-    uint16_t img_num = fc->pending_image_num;
-    float *image = fc->pending_image;
-    // Read compact match count
-    int nrResults = *(fc->h_matchCount);
-    if (nrResults > MAX_MATCHES)
-      nrResults = MAX_MATCHES;
-    printf("[Image %u] GPU: %.0f ms (H2D:%.0f Kern:%.0f D2H:%.0f), "
-           "%d matches\n",
-           img_num, t_h2d + t_kern + t_d2h, t_h2d, t_kern, t_d2h, nrResults);
-    if (nrResults == 0) {
-      printf("[Image %u] No matches, skipping fitting.\n", img_num);
-      free(image);
-      fc->hasPendingWork = 0;
-      return;
-    }
-    // Build match arrays from compact GPU results
-    int *matchIdx = fc->h_matchIdx;
-    float *matchScore = fc->h_matchScore;
-    double *mA = (double *)calloc(nrResults, sizeof(double));
-    size_t *rowNrs = (size_t *)calloc(nrResults, sizeof(size_t));
-    for (int ci = 0; ci < nrResults; ci++) {
-      mA[ci] = matchScore[ci];
-      rowNrs[ci] = (size_t)matchIdx[ci];
-    }
-    // Merge duplicate orientations
-    double *FinOrientArr = (double *)calloc(nrResults * 9, sizeof(double));
-    int *dArr = (int *)calloc(nrResults, sizeof(int));
-    int *bsArr = (int *)calloc(nrResults, sizeof(int));
-    double *bsScoreArr = (double *)calloc(nrResults, sizeof(double));
-    double wt_merge = omp_get_wtime();
-    int totalSols = mergeDuplicateOrientations(orients, rowNrs, mA, nrResults,
-                                               maxAngle, numProcs, FinOrientArr,
-                                               dArr, bsArr, bsScoreArr);
-    double wt_merge_done = omp_get_wtime();
-    printf("[Image %u] %d unique orientations found\n", img_num, totalSols);
-    printf("[Image %u]   merge: %.0f ms\n", img_num,
-           (wt_merge_done - wt_merge) * 1000);
-    // Parallel fitting
-    double wt_fit_start = omp_get_wtime();
-    fitAndWriteOrientations(image, FinOrientArr, dArr, bsArr, bsScoreArr,
-                            totalSols, hkls, nhkls, nrPxX, nrPxY, recip,
-                            rotTranspose, pArr, pxX, pxY, Elo, Ehi, tol,
-                            LatticeParameter, maxNrSpots, minGoodSpots,
-                            numProcs, outF, ExtraInfo, (int)img_num);
-    double wt_flush_start = omp_get_wtime();
-    fflush(outF);
-    fflush(ExtraInfo);
-    double wt_flush_ms = (omp_get_wtime() - wt_flush_start) * 1000;
-    double wt_total = omp_get_wtime() - fc->wt_submission;
-    float t_gpu_total = t_h2d + t_kern + t_d2h;
-    double wt_fit_ms = (wt_flush_start - wt_fit_start) * 1000;
-    double wt_setup_ms = (wt_merge - wt_cpu_start) * 1000;
-    printf("[Image %u]   setup: %.0f ms, flush: %.0f ms\n", img_num,
-           wt_setup_ms, wt_flush_ms);
-    printf("[Image %u]   fitting: %.0f ms (%d orientations, %d threads)\n",
-           img_num, wt_fit_ms, totalSols, numProcs);
-    printf("[Image %u] Total: %.3f s (GPU: %.0f ms, CPU: %.0f ms)\n", img_num,
-           wt_total, t_gpu_total, (omp_get_wtime() - wt_cpu_start) * 1000);
-    fflush(stdout);
-    free(mA);
-    free(rowNrs);
-    free(FinOrientArr);
-    free(dArr);
-    free(bsArr);
-    free(bsScoreArr);
-    free(image);
-    fc->hasPendingWork = 0;
-  }
-
-  // ═══════════════════════════════════════════════════════════════════
-  // Main processing loop (async pipeline)
-  // ═══════════════════════════════════════════════════════════════════
   int streamId = 0;
   for (int s = 0; s < numStreams; s++)
     streams[s].hasPendingWork = 0;
 
   // GPU gate: ensures only 1 kernel runs at a time across all streams.
   // Without this, concurrent kernels on different streams compete for
-  // the same SMs, making each kernel take N× longer (GPU-saturating workload).
+  // the same SMs, making each kernel take N× longer (GPU-saturating
+  // workload).
   cudaEvent_t gpu_gate;
   gpuErrchk(cudaEventCreate(&gpu_gate));
 
