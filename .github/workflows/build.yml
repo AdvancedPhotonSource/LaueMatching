@@ -52,7 +52,7 @@ jobs:
     - name: Install dependencies
       run: |
         apt-get update
-        apt-get install -y cmake build-essential
+        apt-get install -y cmake build-essential git
 
     - name: Build (GPU)
       run: SKIP_DOWNLOAD=1 ./build.sh gpu
