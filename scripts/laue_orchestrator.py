@@ -404,11 +404,14 @@ def run_pipeline(
     logger.info(f"  Frame mapping:     {mapping_file}")
     logger.info(f"  Results:           {results_dir}/")
 
-    # List result files
-    for f in sorted(os.listdir(results_dir)):
-        fpath = os.path.join(results_dir, f)
-        sz = os.path.getsize(fpath) if os.path.isfile(fpath) else 0
-        logger.info(f"    {f}  ({sz:,} bytes)")
+    # Summarise result files
+    result_files = sorted(os.listdir(results_dir))
+    total_sz = sum(
+        os.path.getsize(os.path.join(results_dir, f))
+        for f in result_files
+        if os.path.isfile(os.path.join(results_dir, f))
+    )
+    logger.info(f"  Result files:      {len(result_files)} files, {total_sz / 1e6:.1f} MB total")
     logger.info("=" * 60)
 
 
