@@ -23,21 +23,13 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-nlopt-
 
-    # Cache the large orientation file to avoid re-downloading 6.7GB
-    - name: Cache Orientation File
-      id: cache-orients
-      uses: actions/cache@v4
-      with:
-        path: 100MilOrients.bin
-        key: orientation-file-v1
-    
     - name: Install dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y cmake build-essential
         
     - name: Build
-      run: ./build.sh
+      run: SKIP_DOWNLOAD=1 ./build.sh
       
     - name: Verify Executable
       run: |
