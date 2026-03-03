@@ -40,17 +40,19 @@ inline void gpuAssert(cudaError_t code, const char *file, int line,
   }
 }
 
-// ── CUDA kernel ─────────────────────────────────────────────────────────
+#define MAX_MATCHES 100000 // max matched orientations per image
+
 __global__ void compare(size_t nrPxX, size_t nOr, size_t nrMaxSpots,
-                        double minInt, size_t minSps, uint16_t *oA, double *im,
-                        double *mA) {
+                        float minInt, size_t minSps, uint16_t *oA, float *im,
+                        int *matchCount, int *matchIdx, float *matchScore,
+                        size_t chunkOffset) {
   size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < nOr) {
     size_t loc = i * (1 + 2 * nrMaxSpots);
     size_t nrSpots = (size_t)oA[loc];
     size_t hklnr;
     size_t px, py;
-    double thisInt, totInt = 0;
+    float thisInt, totInt = 0;
     size_t nSps = 0;
     for (hklnr = 0; hklnr < nrSpots; hklnr++) {
       loc++;
@@ -64,7 +66,11 @@ __global__ void compare(size_t nrPxX, size_t nOr, size_t nrMaxSpots,
       }
     }
     if (nSps >= minSps && totInt >= minInt) {
-      mA[i] = totInt * sqrt((double)nSps);
+      int pos = atomicAdd(matchCount, 1);
+      if (pos < MAX_MATCHES) {
+        matchIdx[pos] = (int)(i + chunkOffset);
+        matchScore[pos] = totInt * sqrtf((float)nSps);
+      }
     }
   }
 }
@@ -387,6 +393,11 @@ int main(int argc, char *argv[]) {
   double recip[3][3];
   calcRecipArray(LatticeParameter, sg_num, recip);
 
+  // Compact match results from GPU path (NULL if forward sim path)
+  int *h_matchIdx = NULL;
+  float *h_matchScore = NULL;
+  int h_matchCount = 0;
+
   if (doFwd == 0) {
     printf("Trying to see if the forward simulation exists. Looking for %s "
            "file.\n",
@@ -602,7 +613,7 @@ int main(int argc, char *argv[]) {
     wt0 = omp_get_wtime();
     size_t freeMem = 0, totalMem = 0;
     gpuErrchk(cudaMemGetInfo(&freeMem, &totalMem));
-    size_t imageBytes = (size_t)nrPxX * nrPxY * sizeof(double);
+    size_t imageBytes = (size_t)nrPxX * nrPxY * sizeof(float);
     // Use up to 80% of free GPU memory for the outArr chunk buffer,
     // but cap at 4 GB to keep cudaMalloc + H2D fast.
     size_t usable = (freeMem > imageBytes + (freeMem / 5))
@@ -618,81 +629,98 @@ int main(int argc, char *argv[]) {
       chunkSize = nrOrients;
     size_t nChunks = (nrOrients + chunkSize - 1) / chunkSize;
     size_t chunkOutBytes = chunkSize * stride * sizeof(uint16_t);
-    size_t chunkMatchBytes = chunkSize * sizeof(double);
     printf("GPU chunked matching: %zu orientations in %zu chunks of %zu "
            "(stride=%zu, chunk=%.1f GB, GPU mem: %.1f/%.1f GB free)\n",
            nrOrients, nChunks, chunkSize, stride, chunkOutBytes / 1e9,
            freeMem / 1e9, totalMem / 1e9);
     fflush(stdout);
 
-    // Allocate device buffers (single set — no double-buffering needed)
+    // Allocate device buffers
     double wt_alloc = omp_get_wtime();
     uint16_t *d_outChunk;
-    double *d_matchChunk, *d_image;
+    float *d_image;
+    int *d_matchCount, *d_matchIdx;
+    float *d_matchScore;
     gpuErrchk(cudaMalloc(&d_outChunk, chunkOutBytes));
-    gpuErrchk(cudaMalloc(&d_matchChunk, chunkMatchBytes));
     gpuErrchk(cudaMalloc(&d_image, imageBytes));
-    printf("  cudaMalloc (%.1f GB + %.1f MB + %.1f MB): %lf s\n",
-           chunkOutBytes / 1e9, chunkMatchBytes / 1e6, imageBytes / 1e6,
+    gpuErrchk(cudaMalloc(&d_matchCount, sizeof(int)));
+    gpuErrchk(cudaMalloc(&d_matchIdx, MAX_MATCHES * sizeof(int)));
+    gpuErrchk(cudaMalloc(&d_matchScore, MAX_MATCHES * sizeof(float)));
+    printf("  cudaMalloc (%.1f GB + %.1f MB): %lf s\n",
+           chunkOutBytes / 1e9, imageBytes / 1e6,
            omp_get_wtime() - wt_alloc);
+
+    // Convert image double→float and upload
+    float *imageF = (float *)malloc(imageBytes);
+    for (int p = 0; p < nrPxX * nrPxY; p++)
+      imageF[p] = (float)image[p];
     double wt_img = omp_get_wtime();
-    gpuErrchk(cudaMemcpy(d_image, image, imageBytes, cudaMemcpyHostToDevice));
+    gpuErrchk(cudaMemcpy(d_image, imageF, imageBytes, cudaMemcpyHostToDevice));
+    free(imageF);
     printf("  image H2D (%.1f MB): %lf s\n", imageBytes / 1e6,
            omp_get_wtime() - wt_img);
 
     printf("Time elapsed to prepare the GPU: %lf s\n", omp_get_wtime() - wt0);
     wt0 = omp_get_wtime();
 
-    // ── Chunk loop ─────────────────────────────────────────────────────
+    // ── Chunk loop (compact output accumulates across chunks) ────────
+    gpuErrchk(cudaMemset(d_matchCount, 0, sizeof(int)));
     for (size_t c = 0; c < nChunks; c++) {
       size_t offset = c * chunkSize;
       size_t thisChunk = chunkSize;
       if (offset + thisChunk > nrOrients)
         thisChunk = nrOrients - offset;
       size_t thisOutBytes = thisChunk * stride * sizeof(uint16_t);
-      size_t thisMatchBytes = thisChunk * sizeof(double);
 
       // Synchronous H2D directly from outArr (mmap'd or malloc'd)
       double wt_h2d = omp_get_wtime();
       gpuErrchk(cudaMemcpy(d_outChunk, outArr + offset * stride, thisOutBytes,
                            cudaMemcpyHostToDevice));
-      gpuErrchk(cudaMemset(d_matchChunk, 0, thisMatchBytes));
       double h2d_time = omp_get_wtime() - wt_h2d;
 
       // Launch kernel
       double wt_kern = omp_get_wtime();
       int blocks = (int)((thisChunk + 1023) / 1024);
       compare<<<blocks, 1024>>>(nrPxX, thisChunk, maxNrSpots, minIntensity,
-                                minNrSpots, d_outChunk, d_image, d_matchChunk);
+                                minNrSpots, d_outChunk, d_image,
+                                d_matchCount, d_matchIdx, d_matchScore, offset);
       gpuErrchk(cudaDeviceSynchronize());
       double kern_time = omp_get_wtime() - wt_kern;
 
-      // Synchronous D2H into matchedArr
-      double wt_d2h = omp_get_wtime();
-      gpuErrchk(cudaMemcpy(matchedArr + offset, d_matchChunk, thisMatchBytes,
-                           cudaMemcpyDeviceToHost));
-      double d2h_time = omp_get_wtime() - wt_d2h;
-
-      printf("  chunk %zu/%zu: H2D=%.3fs  kernel=%.3fs  D2H=%.3fs\n", c + 1,
-             nChunks, h2d_time, kern_time, d2h_time);
+      printf("  chunk %zu/%zu: H2D=%.3fs  kernel=%.3fs\n", c + 1,
+             nChunks, h2d_time, kern_time);
     }
+
+    // D2H: compact results only
+    gpuErrchk(cudaMemcpy(&h_matchCount, d_matchCount, sizeof(int),
+                         cudaMemcpyDeviceToHost));
+    if (h_matchCount > MAX_MATCHES)
+      h_matchCount = MAX_MATCHES;
+    int *h_matchIdx_dev = (int *)malloc(h_matchCount * sizeof(int));
+    float *h_matchScore_dev = (float *)malloc(h_matchCount * sizeof(float));
+    gpuErrchk(cudaMemcpy(h_matchIdx_dev, d_matchIdx,
+                         h_matchCount * sizeof(int), cudaMemcpyDeviceToHost));
+    gpuErrchk(cudaMemcpy(h_matchScore_dev, d_matchScore,
+                         h_matchCount * sizeof(float), cudaMemcpyDeviceToHost));
+
+    // Transfer to outer-scope pointers
+    h_matchIdx = h_matchIdx_dev;
+    h_matchScore = h_matchScore_dev;
 
     printf("Time elapsed to match on the GPU: %lf s\n", omp_get_wtime() - wt0);
 
-    // Cleanup
+    // Cleanup GPU
     cudaFree(d_outChunk);
-    cudaFree(d_matchChunk);
     cudaFree(d_image);
+    cudaFree(d_matchCount);
+    cudaFree(d_matchIdx);
+    cudaFree(d_matchScore);
     if (outArrMapped)
       munmap(outArr, szArr * sizeof(uint16_t));
     else
       free(outArr);
 
-    // Count results
-    for (int i = 0; i < (int)nrOrients; i++) {
-      if (matchedArr[i] > 0)
-        nrResults++;
-    }
+    nrResults = h_matchCount;
     printf("NrMatches: %zu\n", nrResults);
   }
 
@@ -740,12 +768,22 @@ int main(int argc, char *argv[]) {
   double *mA = (double *)calloc(nrResults, sizeof(*mA));
   size_t *rowNrs = (size_t *)calloc(nrResults, sizeof(*rowNrs));
   int resultNr = 0;
-  for (global_iterator = 0; global_iterator < (int)nrOrients;
-       global_iterator++) {
-    if (matchedArr[global_iterator] != 0) {
-      mA[resultNr] = matchedArr[global_iterator];
-      rowNrs[resultNr] = global_iterator;
-      resultNr++;
+  if (h_matchIdx != NULL) {
+    // GPU path: use compact arrays directly
+    for (int ci = 0; ci < (int)nrResults; ci++) {
+      mA[ci] = (double)h_matchScore[ci];
+      rowNrs[ci] = (size_t)h_matchIdx[ci];
+    }
+    resultNr = (int)nrResults;
+  } else {
+    // Forward sim path: scan matchedArr
+    for (global_iterator = 0; global_iterator < (int)nrOrients;
+         global_iterator++) {
+      if (matchedArr[global_iterator] != 0) {
+        mA[resultNr] = matchedArr[global_iterator];
+        rowNrs[resultNr] = global_iterator;
+        resultNr++;
+      }
     }
   }
 
@@ -872,7 +910,7 @@ int main(int argc, char *argv[]) {
             fprintf(outF, "%-13.7lf\t\t", orientFit[k][l]);
           }
         }
-        fprintf(outF, "%-13.4lf\t%-13.7lf\t%d\n", matchedArr[bs], miso, bs);
+        fprintf(outF, "%-13.4lf\t%-13.7lf\t%d\n", mA[iterNr], miso, bs);
       }
     }
     free(outArrThisFit); // Final free per thread/iteration
@@ -882,6 +920,8 @@ int main(int argc, char *argv[]) {
 
   // Cleanup
   free(matchedArr);
+  if (h_matchIdx) free(h_matchIdx);
+  if (h_matchScore) free(h_matchScore);
   free(mA);
   free(rowNrs);
   free(doneArr);
