@@ -64,9 +64,12 @@ inline void gpuAssert(cudaError_t code, const char *file, int line,
 }
 
 // ── CUDA kernel (same as LaueMatchingGPU.cu) ───────────────────────────
+#define MAX_MATCHES 100000 // max matched orientations per image
+
 __global__ void compare(size_t nrPxX, size_t nOr, size_t nrMaxSpots,
                         double minInt, size_t minSps, uint16_t *oA, double *im,
-                        double *mA) {
+                        int *matchCount, int *matchIdx,
+                        double *matchScore, size_t chunkOffset) {
   size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < nOr) {
     size_t loc = i * (1 + 2 * nrMaxSpots);
@@ -87,7 +90,11 @@ __global__ void compare(size_t nrPxX, size_t nOr, size_t nrMaxSpots,
       }
     }
     if (nSps >= minSps && totInt >= minInt) {
-      mA[i] = totInt * sqrt((double)nSps);
+      int pos = atomicAdd(matchCount, 1);
+      if (pos < MAX_MATCHES) {
+        matchIdx[pos] = (int)(i + chunkOffset);
+        matchScore[pos] = totInt * sqrt((double)nSps);
+      }
     }
   }
 }
@@ -112,8 +119,14 @@ typedef struct {
 typedef struct {
   cudaStream_t stream;
   double *d_image;      // device image buffer
-  double *d_matchChunk; // device match scores (per chunk)
-  double *matchedArr;   // host match results (full nrOrients)
+  // Compact match output (device)
+  int *d_matchCount;    // atomic counter on device
+  int *d_matchIdx;      // matched orientation indices
+  double *d_matchScore; // matched orientation scores
+  // Compact match output (host, pinned)
+  int *h_matchCount;
+  int *h_matchIdx;
+  double *h_matchScore;
   // Async pipeline state
   int hasPendingWork; // 1 if GPU work submitted but not finalized
   uint16_t pending_image_num;
@@ -816,7 +829,8 @@ int main(int argc, char *argv[]) {
   // Determine number of streams that fit
   gpuErrchk(cudaMemGetInfo(&freeMem, &totalMem));
   size_t perStreamCost =
-      imageBytes + chunkSize * sizeof(double); // d_image + d_matchChunk
+      imageBytes +                                                    // d_image
+      sizeof(int) + MAX_MATCHES * (sizeof(int) + sizeof(double)); // compact output
   int numStreams = (int)(freeMem / (perStreamCost + (1 << 20))); // +1MB margin
   if (numStreams > MAX_STREAMS)
     numStreams = MAX_STREAMS;
@@ -831,9 +845,17 @@ int main(int argc, char *argv[]) {
   for (int s = 0; s < numStreams; s++) {
     gpuErrchk(cudaStreamCreate(&streams[s].stream));
     gpuErrchk(cudaMalloc(&streams[s].d_image, imageBytes));
-    gpuErrchk(cudaMalloc(&streams[s].d_matchChunk, chunkSize * sizeof(double)));
-    gpuErrchk(cudaMallocHost((void **)&streams[s].matchedArr,
-                             nrOrients * sizeof(double)));
+    // Compact output (device)
+    gpuErrchk(cudaMalloc(&streams[s].d_matchCount, sizeof(int)));
+    gpuErrchk(cudaMalloc(&streams[s].d_matchIdx, MAX_MATCHES * sizeof(int)));
+    gpuErrchk(
+        cudaMalloc(&streams[s].d_matchScore, MAX_MATCHES * sizeof(double)));
+    // Compact output (host, pinned)
+    gpuErrchk(cudaMallocHost((void **)&streams[s].h_matchCount, sizeof(int)));
+    gpuErrchk(cudaMallocHost((void **)&streams[s].h_matchIdx,
+                             MAX_MATCHES * sizeof(int)));
+    gpuErrchk(cudaMallocHost((void **)&streams[s].h_matchScore,
+                             MAX_MATCHES * sizeof(double)));
     gpuErrchk(cudaEventCreate(&streams[s].ev_start));
     gpuErrchk(cudaEventCreate(&streams[s].ev_h2d_done));
     gpuErrchk(cudaEventCreate(&streams[s].ev_kern_done));
@@ -937,14 +959,11 @@ int main(int argc, char *argv[]) {
     gpuErrchk(cudaEventElapsedTime(&_t_d2h, _fc->ev_kern_done, _fc->ev_end));  \
     uint16_t _img_num = _fc->pending_image_num;                                \
     double *_image = _fc->pending_image;                                       \
-    /* Count results */                                                        \
-    size_t _nrResults = 0;                                                     \
-    for (size_t _i = 0; _i < nrOrients; _i++) {                                \
-      if (_fc->matchedArr[_i] > 0)                                             \
-        _nrResults++;                                                          \
-    }                                                                          \
+    /* Read compact match count */                                             \
+    int _nrResults = *(_fc->h_matchCount);                                     \
+    if (_nrResults > MAX_MATCHES) _nrResults = MAX_MATCHES;                    \
     printf("[Image %u] GPU: %.0f ms (H2D:%.0f Kern:%.0f D2H:%.0f), "           \
-           "%zu matches\n",                                                    \
+           "%d matches\n",                                                     \
            _img_num, _t_h2d + _t_kern + _t_d2h, _t_h2d, _t_kern, _t_d2h,       \
            _nrResults);                                                        \
     if (_nrResults == 0) {                                                     \
@@ -953,21 +972,20 @@ int main(int argc, char *argv[]) {
       _fc->hasPendingWork = 0;                                                 \
       break;                                                                   \
     }                                                                          \
-    /* Unique solutions search */                                              \
+    /* Use compact arrays directly */                                          \
+    int *_matchIdx = _fc->h_matchIdx;                                          \
+    double *_matchScore = _fc->h_matchScore;                                   \
     double *_mA = (double *)calloc(_nrResults, sizeof(double));                \
     size_t *_rowNrs = (size_t *)calloc(_nrResults, sizeof(size_t));            \
-    int _resultNr = 0;                                                         \
-    for (size_t _gi = 0; _gi < nrOrients; _gi++) {                             \
-      if (_fc->matchedArr[_gi] != 0) {                                         \
-        _mA[_resultNr] = _fc->matchedArr[_gi];                                 \
-        _rowNrs[_resultNr] = _gi;                                              \
-        _resultNr++;                                                           \
-      }                                                                        \
+    for (int _ci = 0; _ci < _nrResults; _ci++) {                               \
+      _mA[_ci] = _matchScore[_ci];                                             \
+      _rowNrs[_ci] = (size_t)_matchIdx[_ci];                                   \
     }                                                                          \
     int *_doneArr = (int *)calloc(_nrResults, sizeof(int));                    \
     double *_FinOrientArr = (double *)calloc(_nrResults * 9, sizeof(double));  \
     int *_dArr = (int *)calloc(_nrResults, sizeof(int));                       \
     int *_bsArr = (int *)calloc(_nrResults, sizeof(int));                      \
+    double *_bsScoreArr = (double *)calloc(_nrResults, sizeof(double));        \
     int _iterNr = 0;                                                           \
     double _orient1[9], _orient2[9], _quat1[4], _quat2[4];                     \
     double _misoAngle, _bestIntensity;                                         \
@@ -1001,6 +1019,7 @@ int main(int argc, char *argv[]) {
         _FinOrientArr[_iterNr * 9 + _k] = orients[_bestSol * 9 + _k];          \
       _dArr[_iterNr] = _doneArr[_gi];                                          \
       _bsArr[_iterNr] = _bestSol;                                              \
+      _bsScoreArr[_iterNr] = _bestIntensity;                                   \
       _iterNr++;                                                               \
     }                                                                          \
     int _totalSols = _iterNr;                                                  \
@@ -1076,7 +1095,7 @@ int main(int argc, char *argv[]) {
           for (int _k = 0; _k < 3; _k++)                                       \
             for (int _l = 0; _l < 3; _l++)                                     \
               fprintf(outF, "%-13.7lf\t\t", _orientFit[_k][_l]);               \
-          fprintf(outF, "%-13.4lf\t%-13.7lf\t%d\n", _fc->matchedArr[_bs],      \
+          fprintf(outF, "%-13.4lf\t%-13.7lf\t%d\n", _bsScoreArr[_iterNr],     \
                   _miso, _bs);                                                 \
         }                                                                      \
       }                                                                        \
@@ -1096,6 +1115,7 @@ int main(int argc, char *argv[]) {
     free(_FinOrientArr);                                                       \
     free(_dArr);                                                               \
     free(_bsArr);                                                              \
+    free(_bsScoreArr);                                                         \
     free(_image);                                                              \
     _fc->hasPendingWork = 0;                                                   \
   } while (0)
@@ -1141,8 +1161,9 @@ int main(int argc, char *argv[]) {
     // allowing CPU fitting to overlap with GPU work on a different stream.
     gpuErrchk(cudaEventSynchronize(gpu_gate));
 
-    // Reset matchedArr (host-side, for D2H async copy target)
-    memset(ctx->matchedArr, 0, nrOrients * sizeof(double));
+    // Reset match counter on device
+    gpuErrchk(
+        cudaMemsetAsync(ctx->d_matchCount, 0, sizeof(int), ctx->stream));
 
     // H2D: upload image
     gpuErrchk(cudaEventRecord(ctx->ev_start, ctx->stream));
@@ -1166,23 +1187,27 @@ int main(int argc, char *argv[]) {
                                   ctx->stream));
       }
 
-      gpuErrchk(
-          cudaMemsetAsync(ctx->d_matchChunk, 0, thisMatchBytes, ctx->stream));
-
       int blocks = (int)((thisChunk + 1023) / 1024);
       uint16_t *d_chunkPtr =
           outArrOnGPU ? d_outArr + offset * stride : d_outArr;
       compare<<<blocks, 1024, 0, ctx->stream>>>(
           nrPxX, thisChunk, maxNrSpots, minIntensity, minNrSpots, d_chunkPtr,
-          ctx->d_image, ctx->d_matchChunk);
-
-      // D2H: match results for this chunk
-      if (c == 0)
-        gpuErrchk(cudaEventRecord(ctx->ev_kern_done, ctx->stream));
-      gpuErrchk(cudaMemcpyAsync(ctx->matchedArr + offset, ctx->d_matchChunk,
-                                thisMatchBytes, cudaMemcpyDeviceToHost,
-                                ctx->stream));
+          ctx->d_image,
+          ctx->d_matchCount, ctx->d_matchIdx, ctx->d_matchScore, offset);
     }
+
+    gpuErrchk(cudaEventRecord(ctx->ev_kern_done, ctx->stream));
+
+    // D2H: compact match results only (count + idx + score)
+    gpuErrchk(cudaMemcpyAsync(ctx->h_matchCount, ctx->d_matchCount,
+                              sizeof(int), cudaMemcpyDeviceToHost,
+                              ctx->stream));
+    gpuErrchk(cudaMemcpyAsync(ctx->h_matchIdx, ctx->d_matchIdx,
+                              MAX_MATCHES * sizeof(int),
+                              cudaMemcpyDeviceToHost, ctx->stream));
+    gpuErrchk(cudaMemcpyAsync(ctx->h_matchScore, ctx->d_matchScore,
+                              MAX_MATCHES * sizeof(double),
+                              cudaMemcpyDeviceToHost, ctx->stream));
 
     gpuErrchk(cudaEventRecord(ctx->ev_end, ctx->stream));
 
@@ -1235,9 +1260,13 @@ int main(int argc, char *argv[]) {
     cudaEventDestroy(streams[s].ev_kern_done);
     cudaEventDestroy(streams[s].ev_end);
     cudaFree(streams[s].d_image);
-    cudaFree(streams[s].d_matchChunk);
+    cudaFree(streams[s].d_matchCount);
+    cudaFree(streams[s].d_matchIdx);
+    cudaFree(streams[s].d_matchScore);
+    cudaFreeHost(streams[s].h_matchCount);
+    cudaFreeHost(streams[s].h_matchIdx);
+    cudaFreeHost(streams[s].h_matchScore);
     cudaStreamDestroy(streams[s].stream);
-    cudaFreeHost(streams[s].matchedArr);
   }
   free(streams);
   cudaFree(d_outArr);
