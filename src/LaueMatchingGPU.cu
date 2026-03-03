@@ -658,8 +658,12 @@ int main(int argc, char *argv[]) {
     uint8_t *im_u8 = (uint8_t *)malloc(imageBytes);
     double invScale = (maxVal > 0) ? 255.0 / maxVal : 0.0;
     for (int p = 0; p < nrPxX * nrPxY; p++) {
-      double v = image[p] * invScale;
-      im_u8[p] = (v > 255.0) ? 255 : (uint8_t)v;
+      if (image[p] > 0) {
+        double v = image[p] * invScale;
+        im_u8[p] = (v >= 255.0) ? 255 : (v < 1.0) ? 1 : (uint8_t)v;
+      } else {
+        im_u8[p] = 0;
+      }
     }
     double wt_img = omp_get_wtime();
     gpuErrchk(cudaMemcpy(d_image, im_u8, imageBytes, cudaMemcpyHostToDevice));

@@ -1182,8 +1182,12 @@ int main(int argc, char *argv[]) {
     uint8_t *im_u8 = (uint8_t *)malloc(g_imagePixels);
     float invScale = (maxVal > 0) ? 255.0f / maxVal : 0.0f;
     for (size_t p = 0; p < g_imagePixels; p++) {
-      float v = image[p] * invScale;
-      im_u8[p] = (v > 255.0f) ? 255 : (uint8_t)v;
+      if (image[p] > 0) {
+        float v = image[p] * invScale;
+        im_u8[p] = (v >= 255.0f) ? 255 : (v < 1.0f) ? 1 : (uint8_t)v;
+      } else {
+        im_u8[p] = 0;
+      }
     }
     gpuErrchk(cudaMemcpyAsync(ctx->d_image, im_u8, imageBytes,
                               cudaMemcpyHostToDevice, ctx->stream));
