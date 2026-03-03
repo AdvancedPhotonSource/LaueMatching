@@ -1087,6 +1087,12 @@ int main(int argc, char *argv[]) {
   for (int s = 0; s < numStreams; s++)
     streams[s].hasPendingWork = 0;
 
+  // GPU gate: ensures only 1 kernel runs at a time across all streams.
+  // Without this, concurrent kernels on different streams compete for
+  // the same SMs, making each kernel take N× longer (GPU-saturating workload).
+  cudaEvent_t gpu_gate;
+  gpuErrchk(cudaEventCreate(&gpu_gate));
+
   while (keep_running) {
     StreamContext *ctx = &streams[streamId];
 
@@ -1109,6 +1115,11 @@ int main(int argc, char *argv[]) {
     double *image = chunk.data;
 
     printf("[Image %u] Submitting on stream %d...\n", image_num, streamId);
+
+    // Wait for previous stream's GPU work to finish before launching new
+    // kernel. This serializes GPU kernels (only 1 at a time) while still
+    // allowing CPU fitting to overlap with GPU work on a different stream.
+    gpuErrchk(cudaEventSynchronize(gpu_gate));
 
     // Reset matchedArr (host-side, for D2H async copy target)
     memset(ctx->matchedArr, 0, nrOrients * sizeof(double));
@@ -1149,6 +1160,9 @@ int main(int argc, char *argv[]) {
                                 ctx->stream));
     }
 
+    // Record GPU gate: next submission will wait for this kernel to finish
+    gpuErrchk(cudaEventRecord(gpu_gate, ctx->stream));
+
     // Record state — NO cudaStreamSynchronize here!
     ctx->hasPendingWork = 1;
     ctx->pending_image_num = image_num;
@@ -1166,13 +1180,15 @@ int main(int argc, char *argv[]) {
   }
 
   if (g_queue_full_count > 0)
-    printf("Note: receive queue was full %d times (backpressure from processing)\n",
+    printf("Note: receive queue was full %d times (backpressure from "
+           "processing)\n",
            g_queue_full_count);
 
   // ═══════════════════════════════════════════════════════════════════
   // Cleanup
   // ═══════════════════════════════════════════════════════════════════
   printf("\nShutting down...\n");
+  cudaEventDestroy(gpu_gate);
 
   // Unblock accept() and join the accept thread
   shutdown(server_fd, SHUT_RDWR);
