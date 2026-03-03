@@ -57,7 +57,7 @@ extern int useBobyqa; // 1 = BOBYQA (default), 0 = Nelder-Mead
 
 // ── Optimization data bundle ────────────────────────────────────────────
 struct dataFit {
-  double *image;
+  float *image;
   int *hkls;
   int nhkls;
   int nrPxX;
@@ -72,6 +72,8 @@ struct dataFit {
   double pxY;
   double Elo;
   double Ehi;
+  int *validHKLIdx; // prefiltered HKL indices (NULL = iterate all)
+  int nValidHKL;    // number of valid HKLs
 };
 
 // ── Symmetry tables ─────────────────────────────────────────────────────
@@ -435,7 +437,7 @@ static inline void calcRecipArray(double Lat[6], int SpaceGroup,
 
 // ── Diffraction overlap calculation ─────────────────────────────────────
 
-static inline double calcOverlap(double *image, double euler[3], int *hkls,
+static inline double calcOverlap(float *image, double euler[3], int *hkls,
                                  int nhkls, int nrPxX, int nrPxY,
                                  double recip[3][3], double *outArrThis,
                                  int maxNrSpots, double rotTranspose[3][3],
@@ -450,6 +452,131 @@ static inline double calcOverlap(double *image, double euler[3], int *hkls,
       sinTheta, E, result = 0;
   int spotNr = 0, iterNr, nrPos = 0;
   for (hklnr = 0; hklnr < nhkls; hklnr++) {
+    hkl[0] = hkls[hklnr * 3 + 0];
+    hkl[1] = hkls[hklnr * 3 + 1];
+    hkl[2] = hkls[hklnr * 3 + 2];
+    MatrixMultF(OM, hkl, qvec);
+    qlen = CalcLength(qvec[0], qvec[1], qvec[2]);
+    if (qlen == 0)
+      continue;
+    qhat[0] = qvec[0] / qlen;
+    qhat[1] = qvec[1] / qlen;
+    qhat[2] = qvec[2] / qlen;
+    dot = qhat[2];
+    kf[0] = ki[0] - 2 * dot * qhat[0];
+    kf[1] = ki[1] - 2 * dot * qhat[1];
+    kf[2] = ki[2] - 2 * dot * qhat[2];
+    MatrixMultF(rotTranspose, kf, xyz);
+    if (xyz[2] <= 0)
+      continue;
+    xyz[0] = xyz[0] * pArr[2] / xyz[2];
+    xyz[1] = xyz[1] * pArr[2] / xyz[2];
+    xyz[2] = pArr[2];
+    xp = xyz[0] - pArr[0];
+    yp = xyz[1] - pArr[1];
+    px = (xp / pxX) + (0.5 * (nrPxX - 1));
+    if (px < 0 || px > (nrPxX - 1))
+      continue;
+    py = (yp / pxY) + (0.5 * (nrPxY - 1));
+    if (py < 0 || py > (nrPxY - 1))
+      continue;
+    sinTheta = -qhat[2];
+    E = hc_keVnm * qlen / (4 * M_PI * sinTheta);
+    if (E < Elo || E > Ehi)
+      continue;
+    badSpot = 0;
+    for (iterNr = 0; iterNr < spotNr; iterNr++) {
+      if ((fabs(qhat[0] - outArrThis[3 * iterNr + 0]) * 100000 < 0.1) &&
+          (fabs(qhat[1] - outArrThis[3 * iterNr + 1]) * 100000 < 0.1) &&
+          (fabs(qhat[2] - outArrThis[3 * iterNr + 2]) * 100000 < 0.1)) {
+        badSpot = 1;
+        break;
+      }
+    }
+    if (badSpot == 0) {
+      outArrThis[3 * spotNr + 0] = qhat[0];
+      outArrThis[3 * spotNr + 1] = qhat[1];
+      outArrThis[3 * spotNr + 2] = qhat[2];
+      if (image[(int)((int)py * nrPxX + (int)px)] > 0) {
+        result += image[(int)((int)py * nrPxX + (int)px)];
+        nrPos++;
+      }
+      spotNr++;
+      if (spotNr == maxNrSpots)
+        break;
+    }
+  }
+  result = nrPos * sqrt(result);
+  return result;
+}
+
+// ── HKL prefiltering ────────────────────────────────────────────────────
+// Identify which HKLs produce valid diffraction spots at a given
+// orientation. During NLopt optimisation the Euler angles vary by only
+// ±3°, so the valid-HKL set stays essentially constant.  Running the
+// inner loop over ~60 HKLs instead of 3058 is the main speedup.
+
+static inline int prefilterHKLs(int *hkls, int nhkls, double euler[3],
+                                double recip[3][3], int nrPxX, int nrPxY,
+                                double rotTranspose[3][3], double pArr[3],
+                                double pxX, double pxY, double Elo, double Ehi,
+                                int *validIdx, int maxValid) {
+  double OM[3][3], OMt[3][3];
+  Euler2OrientMat(euler, OMt);
+  MatrixMultF33(OMt, recip, OM);
+  int nValid = 0;
+  for (int hklnr = 0; hklnr < nhkls && nValid < maxValid; hklnr++) {
+    double hkl[3], qvec[3];
+    hkl[0] = hkls[hklnr * 3 + 0];
+    hkl[1] = hkls[hklnr * 3 + 1];
+    hkl[2] = hkls[hklnr * 3 + 2];
+    MatrixMultF(OM, hkl, qvec);
+    double qlen = CalcLength(qvec[0], qvec[1], qvec[2]);
+    if (qlen == 0)
+      continue;
+    double qhat[3] = {qvec[0] / qlen, qvec[1] / qlen, qvec[2] / qlen};
+    double dot = qhat[2];
+    double kf[3] = {-2 * dot * qhat[0], -2 * dot * qhat[1],
+                    1.0 - 2 * dot * qhat[2]};
+    double xyz[3];
+    MatrixMultF(rotTranspose, kf, xyz);
+    if (xyz[2] <= 0)
+      continue;
+    double xp = xyz[0] * pArr[2] / xyz[2] - pArr[0];
+    double yp = xyz[1] * pArr[2] / xyz[2] - pArr[1];
+    double px = (xp / pxX) + (0.5 * (nrPxX - 1));
+    if (px < 0 || px > (nrPxX - 1))
+      continue;
+    double py = (yp / pxY) + (0.5 * (nrPxY - 1));
+    if (py < 0 || py > (nrPxY - 1))
+      continue;
+    double sinTheta = -qhat[2];
+    double E = hc_keVnm * qlen / (4 * M_PI * sinTheta);
+    if (E < Elo || E > Ehi)
+      continue;
+    validIdx[nValid++] = hklnr;
+  }
+  return nValid;
+}
+
+// ── Overlap using prefiltered HKLs ──────────────────────────────────────
+
+static inline double
+calcOverlapFiltered(float *image, double euler[3], int *hkls, int *validIdx,
+                    int nValid, int nrPxX, int nrPxY, double recip[3][3],
+                    double *outArrThis, int maxNrSpots,
+                    double rotTranspose[3][3], double pArr[3], double pxX,
+                    double pxY, double Elo, double Ehi) {
+  double OM[3][3], OMt[3][3];
+  Euler2OrientMat(euler, OMt);
+  double ki[3] = {0, 0, 1.0};
+  MatrixMultF33(OMt, recip, OM);
+  int badSpot;
+  double hkl[3], qvec[3], qlen, qhat[3], dot, kf[3], xyz[3], xp, yp, px, py,
+      sinTheta, E, result = 0;
+  int spotNr = 0, iterNr, nrPos = 0;
+  for (int vi = 0; vi < nValid; vi++) {
+    int hklnr = validIdx[vi];
     hkl[0] = hkls[hklnr * 3 + 0];
     hkl[1] = hkls[hklnr * 3 + 1];
     hkl[2] = hkls[hklnr * 3 + 2];
@@ -543,28 +670,37 @@ static inline double problem_function(unsigned n, const double *x, double *grad,
     }
     calcRecipArray(latCNew, sg_num, recip);
   }
-  double *image = f_data->image;
+  float *image = f_data->image;
   int *hkls = f_data->hkls;
   double *outArrThis = f_data->outArrThis;
   double Euler[3];
   for (i = 0; i < 3; i++)
     Euler[i] = x[i];
-  double overlap = calcOverlap(
-      image, Euler, hkls, f_data->nhkls, f_data->nrPxX, f_data->nrPxY, recip,
-      outArrThis, f_data->maxNrSpots, rotTranspose, pArr, f_data->pxX,
-      f_data->pxY, f_data->Elo, f_data->Ehi);
+  double overlap;
+  if (f_data->validHKLIdx != NULL) {
+    overlap = calcOverlapFiltered(
+        image, Euler, hkls, f_data->validHKLIdx, f_data->nValidHKL,
+        f_data->nrPxX, f_data->nrPxY, recip, outArrThis, f_data->maxNrSpots,
+        rotTranspose, pArr, f_data->pxX, f_data->pxY, f_data->Elo, f_data->Ehi);
+  } else {
+    overlap = calcOverlap(image, Euler, hkls, f_data->nhkls, f_data->nrPxX,
+                          f_data->nrPxY, recip, outArrThis, f_data->maxNrSpots,
+                          rotTranspose, pArr, f_data->pxX, f_data->pxY,
+                          f_data->Elo, f_data->Ehi);
+  }
   return -overlap;
 }
 
 // ── Orientation fitting ─────────────────────────────────────────────────
 
 static inline double
-FitOrientation(double *image, double euler[3], int *hkls, int nhkls, int nrPxX,
+FitOrientation(float *image, double euler[3], int *hkls, int nhkls, int nrPxX,
                int nrPxY, double recip[3][3], double *outArrThis,
                int maxNrSpots, double rotTranspose[3][3], double pArr[3],
                double pxX, double pxY, double Elo, double Ehi, double tol,
                double latc[6], double eulerFit[3], double latCUpd[6],
-               double *minVal, int doCrystalFit) {
+               double *minVal, int doCrystalFit, int *validHKLIdx,
+               int nValidHKL) {
   int i, j;
   unsigned n;
   if (doCrystalFit == 0) {
@@ -614,6 +750,8 @@ FitOrientation(double *image, double euler[3], int *hkls, int nhkls, int nrPxX,
   f_data.nrPxY = nrPxY;
   f_data.outArrThis = outArrThis;
   f_data.maxNrSpots = maxNrSpots;
+  f_data.validHKLIdx = validHKLIdx;
+  f_data.nValidHKL = nValidHKL;
   for (i = 0; i < 3; i++) {
     f_data.pArr[i] = pArr[i];
     for (j = 0; j < 3; j++) {
@@ -659,12 +797,14 @@ FitOrientation(double *image, double euler[3], int *hkls, int nhkls, int nrPxX,
     }
   }
   *minVal = -minf;
-  return 0; // FIX: was missing return statement in CPU code
+  return 0;
 }
 
 // ── Write overlap with optional spot info ───────────────────────────────
+// Always buffers spot data. Caller decides whether to flush based on
+// nrSps return value, or passes saveExtraInfo != 0 to auto-flush.
 
-static inline int writeCalcOverlap(double *image, double euler[3], int *hkls,
+static inline int writeCalcOverlap(float *image, double euler[3], int *hkls,
                                    int nhkls, int nrPxX, int nrPxY,
                                    double recip[3][3], double *outArrThis,
                                    int maxNrSpots, double rotTranspose[3][3],
@@ -745,14 +885,14 @@ static inline int writeCalcOverlap(double *image, double euler[3], int *hkls,
                   "%d\t%d\t%d\t%d\t%d\t%d\t%5d\t%5d\t%lf\t%lf\t%lf\t%lf\n",
                   imageNr, saveExtraInfo, spotNr, (int)hkl[0], (int)hkl[1],
                   (int)hkl[2], (int)px, (int)py, qhat[0], qhat[1], qhat[2],
-                  image[(int)((int)py * nrPxX + (int)px)]);
+                  (double)image[(int)((int)py * nrPxX + (int)px)]);
             else
-              currentOffset +=
-                  sprintf(outputBuf + currentOffset,
-                          "%d\t%d\t%d\t%d\t%d\t%5d\t%5d\t%lf\t%lf\t%lf\t%lf\n",
-                          saveExtraInfo, spotNr, (int)hkl[0], (int)hkl[1],
-                          (int)hkl[2], (int)px, (int)py, qhat[0], qhat[1],
-                          qhat[2], image[(int)((int)py * nrPxX + (int)px)]);
+              currentOffset += sprintf(
+                  outputBuf + currentOffset,
+                  "%d\t%d\t%d\t%d\t%d\t%5d\t%5d\t%lf\t%lf\t%lf\t%lf\n",
+                  saveExtraInfo, spotNr, (int)hkl[0], (int)hkl[1], (int)hkl[2],
+                  (int)px, (int)py, qhat[0], qhat[1], qhat[2],
+                  (double)image[(int)((int)py * nrPxX + (int)px)]);
           } else {
 #pragma omp critical
             {
@@ -762,13 +902,14 @@ static inline int writeCalcOverlap(double *image, double euler[3], int *hkls,
                     "%d\t%d\t%d\t%d\t%d\t%d\t%5d\t%5d\t%lf\t%lf\t%lf\t%lf\n",
                     imageNr, saveExtraInfo, spotNr, (int)hkl[0], (int)hkl[1],
                     (int)hkl[2], (int)px, (int)py, qhat[0], qhat[1], qhat[2],
-                    image[(int)((int)py * nrPxX + (int)px)]);
+                    (double)image[(int)((int)py * nrPxX + (int)px)]);
               else
                 fprintf(ExtraInfo,
                         "%d\t%d\t%d\t%d\t%d\t%5d\t%5d\t%lf\t%lf\t%lf\t%lf\n",
                         saveExtraInfo, spotNr, (int)hkl[0], (int)hkl[1],
                         (int)hkl[2], (int)px, (int)py, qhat[0], qhat[1],
-                        qhat[2], image[(int)((int)py * nrPxX + (int)px)]);
+                        qhat[2],
+                        (double)image[(int)((int)py * nrPxX + (int)px)]);
             }
           }
         }
