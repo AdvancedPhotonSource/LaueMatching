@@ -12,7 +12,7 @@ Python scripts for image preprocessing, orientation indexing, streaming pipeline
 |--------|------:|-------------|
 | `RunImage.py` | 1,673 | **Single-image indexing pipeline** — load, preprocess, index, refine, and export results for one H5 image. |
 | `laue_orchestrator.py` | 465 | **Streaming pipeline entry-point** — launches the GPU daemon, image server, monitors progress with tqdm bar, and runs post-processing. |
-| `laue_image_server.py` | 389 | **TCP image sender** — reads H5 files, preprocesses frames, and sends them to the GPU daemon over TCP with pipelined threading. |
+| `laue_image_server.py` | 433 | **TCP image sender** — reads H5 files, preprocesses frames in parallel (`ProcessPoolExecutor`), and sends them to the GPU daemon over TCP with a 3-stage async pipeline. |
 | `laue_postprocess.py` | 580 | **Stream results post-processor** — splits daemon output by image, filters by unique spots, embeds raw/processed image data, saves per-image HDF5. |
 | `laue_config.py` | 782 | **Configuration module** — dataclasses for processing, visualization, and optimizer settings; parameter file parser. |
 | `laue_stream_utils.py` | 1,108 | **Shared utilities** — image I/O, preprocessing, TCP wire protocol (float32), HDF5 helpers, orientation sort/filter. |
@@ -45,7 +45,7 @@ graph TD
 
     subgraph "Shared Modules"
         Config["laue_config.py"]
-        Utils["laue_stream_utils.py"]
+        Utils["laue_stream_utils.py<br/>(KDTree sigma, preprocessing)"]
         Viz["laue_visualization.py"]
     end
 
@@ -189,7 +189,19 @@ Each frame is sent as:
 | uint16_t image_num (2 bytes, little-endian) | float[NrPxX×NrPxY] pixel data |
 ```
 
-The daemon receives float32 pixels (4 bytes each, halving bandwidth vs. double) and converts to double internally for GPU matching. Results are appended to `solutions.txt` and `spots.txt`.
+The daemon receives float32 pixels, quantizes them to uint8 (4 MB, fits in GPU L2 cache), and runs GPU matching. Results are appended to `solutions.txt` and `spots.txt`.
+
+#### Async Pipeline Architecture
+
+```mermaid
+flowchart LR
+    Main["Main thread<br/>submit ALL frames"] --> Pool["ProcessPoolExecutor<br/>(up to 8 workers)"]
+    Pool --> |"futures (in order)"| Consumer["Consumer thread<br/>drain futures → send_q"]
+    Consumer --> |"send_q (backpressure)"| Sender["Sender thread<br/>TCP sendall"]
+    Sender --> Daemon["GPU daemon"]
+```
+
+All frames across all H5 files are submitted to the pool upfront, giving the workers maximum lookahead. The consumer thread drains completed futures in sequential order to maintain `image_num` monotonicity for the wire protocol.
 
 ### `laue_postprocess.py` — CLI Reference
 

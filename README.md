@@ -83,9 +83,11 @@ flowchart LR
         GPU["GPU Indexing Engine<br/>100M orientations in memory"]
     end
 
-    subgraph Server ["laue_image_server.py"]
+    subgraph Server ["laue_image_server.py<br/>(3-stage async pipeline)"]
         direction TB
-        H5["Glob *.h5 files"] --> Pre["Preprocess<br/>(bg sub → threshold → filter → blur)"] --> Send["TCP send"]
+        H5["H5 files"] --> Pool["ProcessPoolExecutor<br/>(8 workers)"]
+        Pool --> Consumer["Consumer thread<br/>(ordered drain)"]
+        Consumer --> Send["Sender thread<br/>(TCP sendall)"]
     end
 
     subgraph PostProc ["laue_postprocess.py"]
@@ -97,6 +99,29 @@ flowchart LR
     Daemon -- "solutions.txt<br/>spots.txt" --> PostProc
     Server -- "frame_mapping.json" --> Orchestrator
     Server -- "labels.h5<br/>(segmentation)" --> PostProc
+```
+
+### GPU Kernel Data Flow
+
+```mermaid
+flowchart LR
+    subgraph Host ["Host (CPU)"]
+        ImgF["float image<br/>(16 MB)"] --> Q8["Quantize<br/>float→uint8"]
+        Q8 --> ImgU8["uint8 image<br/>(4 MB)"]
+    end
+
+    subgraph Device ["GPU"]
+        L2["L2 Cache (6 MB)<br/>uint8 image fits!"]
+        OutArr["outArr (uint16)<br/>pixel coordinates"]
+        Kernel["compare kernel<br/>__ldg() reads"]
+        Compact["atomicAdd<br/>compact output"]
+        L2 --> Kernel
+        OutArr --> Kernel
+        Kernel --> Compact
+    end
+
+    ImgU8 -- "H2D (4 MB)" --> L2
+    Compact -- "D2H (~1.6 KB)" --> Results["matches + scores"]
 ```
 
 **Key advantages over single-image mode:**
@@ -305,7 +330,20 @@ See `simulation/params_sim.txt` for a complete example.
 
 ---
 
-## Performance Tips
+## Performance
+
+### GPU Kernel Optimizations
+
+| Optimization | Before | After | Improvement |
+|---|---|---|---|
+| **Float32 kernel** | double (273 ms) | float (273 ms) | Enables uint8 path |
+| **Compact output (atomicAdd)** | D2H 800 MB dense | D2H ~1.6 KB | Eliminated bottleneck |
+| **uint8 image quantization** | 16 MB (L2 miss) | 4 MB (L2 hit) | **2.5× kernel speedup** |
+| **Overall GPU time** | 275 ms | **120 ms** | **2.3×** |
+
+> The `compare` kernel reads scattered image pixels via `__ldg()` from uint8 image data (4 MB, fits in the GPU's 6 MB L2 cache). Each pixel read is multiplied by a per-image scale factor to recover approximate intensity. Nonzero pixels are guaranteed to map to at least uint8 value 1, preserving spot counts exactly.
+
+### General Tips
 
 - **Linux** is the primary platform. macOS CPU builds work with `brew install gcc`.
 - Place `OrientationFile` and `ForwardFile` in `/dev/shm` (tmpfs) for dramatically faster memory-mapped I/O.
@@ -336,6 +374,19 @@ H. Sharma, D. Sheyfer, R. Harder and J.Z. Tischler (2026). *J. Appl. Cryst.* **5
 ---
 
 ## Version History
+
+### v2.1 (2026-03-03)
+
+- **GPU Kernel Optimizations**: 2.3× faster GPU matching:
+  - Float32 kernel with `__ldg()` texture cache reads.
+  - `atomicAdd` compact output: eliminates 800 MB D2H transfer.
+  - **uint8 image quantization**: image shrinks from 16 MB to 4 MB, fits in L2 cache. Kernel time drops from 273 ms to 108 ms.
+  - Nonzero-preserving quantization ensures spot counts remain exact.
+- **CPU uint8 Matching**: `LaueMatchingCPU.c` uses uint8 quantized image for the `doFwd=0` matching path, improving L3 cache sharing across 96 threads.
+- **Parallel Preprocessing**: `laue_image_server.py` uses `ProcessPoolExecutor` (up to 8 workers) for multi-process frame preprocessing.
+- **Async Pipeline**: 3-stage architecture (submit → consumer → sender) fully decouples preprocessing from TCP sending.
+- **KDTree Sigma**: `calculate_gaussian_sigma` uses `scipy.spatial.cKDTree` (O(n log n)) instead of O(n²) brute-force.
+- **Reduced Log Verbosity**: Orchestrator result listing replaced with single-line summary.
 
 ### v2.0 (2026-02-18)
 
