@@ -103,8 +103,8 @@ if(EXISTS "${NLOPT_LIB64_DIR}/libnlopt.a")
 elseif(EXISTS "${NLOPT_LIB_DIR}/libnlopt.a")
   set(_NLOPT_LIB "${NLOPT_LIB_DIR}/libnlopt.a")
 else()
-  # Default fallback if neither exists (yet)
-  set(_NLOPT_LIB "${NLOPT_LIB64_DIR}/libnlopt.a")
+  # Default fallback — lib/ is most common; lib64/ is handled above
+  set(_NLOPT_LIB "${NLOPT_LIB_DIR}/libnlopt.a")
 endif()
 set_target_properties(NLOPT::NLOPT PROPERTIES
   IMPORTED_LOCATION             "${_NLOPT_LIB}"
