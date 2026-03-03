@@ -950,6 +950,7 @@ int main(int argc, char *argv[]) {
     if (!_fc->hasPendingWork)                                                  \
       break;                                                                   \
     gpuErrchk(cudaStreamSynchronize(_fc->stream));                             \
+    double _wt_cpu_start = omp_get_wtime();                                    \
     double _wt_gpu = omp_get_wtime() - _fc->wt_submission;                     \
     /* GPU phase timings (ms) */                                               \
     float _t_h2d = 0, _t_kern = 0, _t_d2h = 0;                                 \
@@ -1122,16 +1123,21 @@ int main(int argc, char *argv[]) {
       }                                                                        \
       free(_outArrThisFit);                                                    \
     }                                                                          \
+    double _wt_flush_start = omp_get_wtime();                                  \
     fflush(outF);                                                              \
     fflush(ExtraInfo);                                                         \
+    double _wt_flush_ms = (omp_get_wtime() - _wt_flush_start) * 1000;          \
     double _wt_total = omp_get_wtime() - _fc->wt_submission;                   \
     float _t_gpu_total = _t_h2d + _t_kern + _t_d2h;                            \
-    double _wt_fit_ms = (omp_get_wtime() - _wt_fit_start) * 1000;              \
+    double _wt_fit_ms = (_wt_flush_start - _wt_fit_start) * 1000;              \
+    double _wt_setup_ms = (_wt_merge - _wt_cpu_start) * 1000;                  \
+    printf("[Image %u]   setup: %.0f ms, flush: %.0f ms\n", _img_num,          \
+           _wt_setup_ms, _wt_flush_ms);                                        \
     printf("[Image %u]   fitting: %.0f ms (%d orientations, %d threads)\n",    \
            _img_num, _wt_fit_ms, _totalSols, numProcs);                        \
-    printf("[Image %u] Total: %.3f s (GPU: %.0f ms, CPU fitting: %.3f s)\n",   \
+    printf("[Image %u] Total: %.3f s (GPU: %.0f ms, CPU: %.0f ms)\n",          \
            _img_num, _wt_total, _t_gpu_total,                                  \
-           _wt_total - _t_gpu_total / 1000.0);                                 \
+           (omp_get_wtime() - _wt_cpu_start) * 1000);                          \
     fflush(stdout);                                                            \
     free(_mA);                                                                 \
     free(_rowNrs);                                                             \
