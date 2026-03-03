@@ -317,14 +317,15 @@ int main(int argc, char *argv[]) {
   printf("Pixels with intensity: %d\n", nonZeroPx);
 
   // Create uint8 quantized image for cache-friendly matching
+  size_t nPixels = (size_t)nrPxX * nrPxY;
   double maxImgVal = 0;
-  for (pxNr = 0; pxNr < nrPxX * nrPxY; pxNr++)
+  for (pxNr = 0; pxNr < (int)nPixels; pxNr++)
     if (image[pxNr] > maxImgVal)
       maxImgVal = image[pxNr];
   double imScale = (maxImgVal > 0) ? maxImgVal / 255.0 : 1.0;
-  uint8_t *image_u8 = (uint8_t *)malloc(nrPxX * nrPxY);
+  uint8_t *image_u8 = (uint8_t *)malloc(nPixels);
   double imInvScale = (maxImgVal > 0) ? 255.0 / maxImgVal : 0.0;
-  for (pxNr = 0; pxNr < nrPxX * nrPxY; pxNr++) {
+  for (pxNr = 0; pxNr < (int)nPixels; pxNr++) {
     if (image[pxNr] > 0) {
       double v = image[pxNr] * imInvScale;
       image_u8[pxNr] = (v >= 255.0) ? 255 : (v < 1.0) ? 1 : (uint8_t)v;
@@ -333,7 +334,7 @@ int main(int argc, char *argv[]) {
     }
   }
   printf("Quantized image: %.1f MB (double) -> %.1f MB (uint8)\n",
-         nrPxX * nrPxY * sizeof(double) / 1e6, nrPxX * nrPxY / 1e6);
+         nPixels * sizeof(double) / 1e6, nPixels / 1e6);
 
   // Forward simulation & matching
   double *matchedArr = calloc(nrOrients, sizeof(*matchedArr));
