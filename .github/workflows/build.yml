@@ -7,7 +7,7 @@ on:
     branches: [ "main" ]
 
 jobs:
-  build:
+  build-cpu:
     runs-on: ubuntu-latest
     
     steps:
@@ -35,8 +35,47 @@ jobs:
       run: |
         if [ -f bin/LaueMatchingCPU ]; then
           echo "Build successful: binary found."
-          ./bin/LaueMatchingCPU --help || true # Should show usage and exit 1, which is fine, but we force true so CI doesn't fail on exit code 1
+          ./bin/LaueMatchingCPU --help || true
         else
           echo "Build failed: binary not found."
           exit 1
         fi
+
+  build-gpu:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Cache NLopt (GPU)
+      uses: actions/cache@v4
+      with:
+        path: LIBS/NLOPT
+        key: ${{ runner.os }}-nlopt-gpu-${{ hashFiles('CMakeLists.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-nlopt-gpu-
+
+    - name: Install CUDA toolkit
+      uses: Jimver/cuda-toolkit@v0.2.19
+      with:
+        cuda: '12.6.3'
+        method: network
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cmake build-essential
+
+    - name: Build (GPU)
+      run: SKIP_DOWNLOAD=1 ./build.sh gpu
+
+    - name: Verify Executables
+      run: |
+        for bin in LaueMatchingCPU LaueMatchingGPU LaueMatchingGPUStream; do
+          if [ -f "bin/$bin" ]; then
+            echo "✓ $bin built successfully"
+          else
+            echo "✗ $bin not found"
+            exit 1
+          fi
+        done
