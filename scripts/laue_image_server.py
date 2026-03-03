@@ -30,6 +30,7 @@ import struct
 import sys
 import threading
 import time
+from concurrent.futures import ProcessPoolExecutor, Future
 
 import numpy as np
 
@@ -56,6 +57,28 @@ def _setup_logging(level: str = "INFO") -> None:
     )
     logger.addHandler(handler)
     logger.setLevel(getattr(logging, level.upper(), logging.INFO))
+
+
+# ---------------------------------------------------------------------------
+# Top-level worker for multiprocessing (must be picklable)
+# ---------------------------------------------------------------------------
+
+def _preprocess_one(h5_path, h5loc, frame_idx, nr_px_y, nr_px_x, cfg, background):
+    """Load and preprocess a single frame. Runs in a worker process."""
+    try:
+        raw = lsu.load_h5_image(h5_path, h5loc, frame_index=frame_idx)
+    except Exception as e:
+        return {"error": f"load: {e}"}
+    if raw.shape != (nr_px_y, nr_px_x):
+        return {"error": f"shape {raw.shape} != ({nr_px_y},{nr_px_x})"}
+    blurred, _filt_img, filt_labels, centers = lsu.preprocess_image(
+        raw, cfg, background=background
+    )
+    if not centers:
+        return {"error": "no_spots"}
+    pixels_bytes = np.ascontiguousarray(blurred, dtype=np.float32).tobytes()
+    return {"pixels_bytes": pixels_bytes, "filt_labels": filt_labels,
+            "n_spots": len(centers)}
 
 
 # ---------------------------------------------------------------------------
@@ -148,13 +171,14 @@ def serve_images(
         return {}
     logger.info("Connected to daemon.")
 
-    # --- 5. Pipelined process & send loop ---
+    # --- 5. Parallel preprocess + pipelined send ---
     #
-    # Producer thread: load H5 + preprocess (CPU-bound)
-    # Consumer thread: send over TCP (I/O-bound)
-    # This overlaps compute with network I/O for ~2x throughput.
+    # ProcessPoolExecutor preprocesses multiple frames in parallel.
+    # Futures are consumed in order to maintain sequential image_num.
+    # A sender thread handles TCP I/O concurrently.
     #
     SEND_QUEUE_SIZE = 4  # buffer up to 4 frames
+    PREPROCESS_WORKERS = min(os.cpu_count() or 4, 8)  # cap at 8 workers
     send_q: queue.Queue = queue.Queue(maxsize=SEND_QUEUE_SIZE)
     send_error: list = []  # shared error flag
 
@@ -214,101 +238,87 @@ def serve_images(
     skip_count = 0
     t_start = time.time()
 
+    logger.info(f"Using {PREPROCESS_WORKERS} parallel preprocessing workers")
+
     try:
-        for file_idx, (h5_path, n_frames) in enumerate(
-            zip(h5_files, file_frame_counts)
-        ):
-            h5_basename = os.path.basename(h5_path)
-            logger.info(
-                f"[{file_idx+1}/{len(h5_files)}] Processing {h5_basename} "
-                f"({n_frames} frame{'s' if n_frames > 1 else ''})"
-            )
-
-            for frame_idx in range(n_frames):
-                if image_num > 65535:
-                    logger.warning("Reached uint16 image_num limit, stopping.")
-                    break
-                if send_error:
-                    logger.error("Send thread error, aborting.")
-                    break
-
-                # Load raw frame
-                try:
-                    raw = lsu.load_h5_image(h5_path, h5loc, frame_index=frame_idx)
-                except Exception as e:
-                    logger.error(
-                        f"  Frame {frame_idx} of {h5_basename}: load error: {e}"
-                    )
-                    skip_count += 1
-                    image_num += 1
-                    continue
-
-                # Validate dimensions
-                if raw.shape != (nr_px_y, nr_px_x):
-                    logger.warning(
-                        f"  Frame {frame_idx}: shape {raw.shape} != "
-                        f"expected ({nr_px_y},{nr_px_x}), skipping."
-                    )
-                    skip_count += 1
-                    image_num += 1
-                    continue
-
-                # Preprocess (steps 1-6)
-                blurred, _filt_img, filt_labels, centers = lsu.preprocess_image(
-                    raw, cfg, background=background
+        with ProcessPoolExecutor(max_workers=PREPROCESS_WORKERS) as pool:
+            # Stage 1: Submit ALL frames to the pool upfront
+            all_futures = []  # (future, image_num, h5_basename, frame_idx)
+            img_num = 1
+            for file_idx, (h5_path, n_frames) in enumerate(
+                zip(h5_files, file_frame_counts)
+            ):
+                h5_basename = os.path.basename(h5_path)
+                logger.info(
+                    f"[{file_idx+1}/{len(h5_files)}] Queuing {h5_basename} "
+                    f"({n_frames} frame{'s' if n_frames > 1 else ''})"
                 )
-
-                # Skip if no spots detected
-                if not centers:
-                    logger.debug(
-                        f"  Frame {frame_idx} of {h5_basename}: "
-                        f"no spots after filtering, skipping."
+                for frame_idx in range(n_frames):
+                    if img_num > 65535:
+                        break
+                    fut = pool.submit(
+                        _preprocess_one,
+                        h5_path, h5loc, frame_idx,
+                        nr_px_y, nr_px_x, cfg, background,
                     )
-                    skip_count += 1
-                    frame_mapping[str(image_num)] = {
-                        "file": h5_basename,
-                        "frame": frame_idx,
-                        "skipped": True,
-                        "reason": "no_spots",
-                    }
-                    image_num += 1
-                    continue
+                    all_futures.append((fut, img_num, h5_basename, frame_idx))
+                    img_num += 1
+                if img_num > 65535:
+                    break
 
-                # Prepare bytes as float32 (wire protocol uses float, not double)
-                pixels_bytes = np.ascontiguousarray(
-                    blurred, dtype=np.float32
-                ).tobytes()
+            logger.info(f"Submitted {len(all_futures)} frames for preprocessing")
 
-                mapping_entry = {
-                    "file": h5_basename,
-                    "frame": frame_idx,
-                    "n_spots": len(centers),
-                }
+            # Stage 2: Consumer thread — drains futures in order → send queue
+            def _consumer_thread():
+                nonlocal skip_count
+                for fut, img_num, h5bn, fr_idx in all_futures:
+                    if send_error:
+                        break
+                    try:
+                        result = fut.result()
+                    except Exception as e:
+                        result = {"error": f"worker_exception: {e}"}
 
-                # Enqueue for sender thread (blocks if queue full, backpressure)
-                send_q.put((image_num, pixels_bytes, mapping_entry, filt_labels))
+                    if "error" in result:
+                        reason = result["error"]
+                        if reason != "no_spots":
+                            logger.error(f"  Frame {fr_idx} of {h5bn}: {reason}")
+                        frame_mapping[str(img_num)] = {
+                            "file": h5bn, "frame": fr_idx,
+                            "skipped": True, "reason": reason,
+                        }
+                        skip_count += 1
+                    else:
+                        mapping_entry = {
+                            "file": h5bn, "frame": fr_idx,
+                            "n_spots": result["n_spots"],
+                        }
+                        send_q.put((
+                            img_num, result["pixels_bytes"],
+                            mapping_entry, result["filt_labels"],
+                        ))
 
-                # Progress (read counters safely)
-                with sent_count_lock:
-                    sc = counters["sent"]
-                processed = sc + skip_count
-                if processed > 0 and (processed % 10 == 0 or processed == 1):
-                    elapsed = time.time() - t_start
-                    rate = processed / elapsed if elapsed > 0 else 0
-                    remaining = (total_frames - processed) / rate if rate > 0 else 0
-                    logger.info(
-                        f"  Progress: {processed}/{total_frames} "
-                        f"({rate:.1f} img/s, ETA {remaining:.0f}s)"
-                    )
+                    # Progress
+                    with sent_count_lock:
+                        sc = counters["sent"]
+                    processed = sc + skip_count
+                    if processed > 0 and (processed % 10 == 0 or processed == 1):
+                        elapsed = time.time() - t_start
+                        rate = processed / elapsed if elapsed > 0 else 0
+                        remaining = (total_frames - processed) / rate if rate > 0 else 0
+                        logger.info(
+                            f"  Progress: {processed}/{total_frames} "
+                            f"({rate:.1f} img/s, ETA {remaining:.0f}s)"
+                        )
+                    if processed > 0 and processed % save_interval == 0:
+                        lsu.save_frame_mapping(frame_mapping, mapping_file)
 
-                # Periodic mapping save
-                if processed > 0 and processed % save_interval == 0:
-                    lsu.save_frame_mapping(frame_mapping, mapping_file)
+                # Signal sender thread: no more frames
+                send_q.put(None)
 
-                image_num += 1
-
-            if image_num > 65535 or send_error:
-                break
+            consumer = threading.Thread(target=_consumer_thread, daemon=True)
+            consumer.start()
+            consumer.join()  # wait for all futures to be consumed
 
     except KeyboardInterrupt:
         logger.warning("Interrupted by user.")

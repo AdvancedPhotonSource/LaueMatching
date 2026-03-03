@@ -491,15 +491,12 @@ def calculate_gaussian_sigma(
     if not centers or len(centers) < 2:
         return 3.0
 
-    coords = [c[1] for c in centers]
-    min_dist_sq = float("inf")
-    for i in range(len(coords)):
-        for j in range(i + 1, len(coords)):
-            d2 = (coords[i][0] - coords[j][0]) ** 2 + (
-                coords[i][1] - coords[j][1]
-            ) ** 2
-            min_dist_sq = min(min_dist_sq, d2)
-    min_px_dist = np.sqrt(min_dist_sq)
+    coords = np.array([c[1] for c in centers])
+    from scipy.spatial import cKDTree
+    tree = cKDTree(coords)
+    # query k=2: first neighbor is the point itself (distance 0), second is nearest
+    dists, _ = tree.query(coords, k=2)
+    min_px_dist = float(dists[:, 1].min())
 
     if pixel_size > 0 and distance > 0:
         delta = (distance * np.tan(np.radians(orient_spacing))) / pixel_size
