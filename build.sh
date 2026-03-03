@@ -6,6 +6,7 @@
 #   ./build.sh          # CPU only (default)
 #   ./build.sh gpu      # CPU + GPU (requires CUDA)
 #   ./build.sh clean    # Remove build directory
+#   SKIP_DOWNLOAD=1 ./build.sh  # Skip orientation file download (CI)
 #
 
 set -euo pipefail
@@ -49,6 +50,9 @@ ORIENT_FILE="${SCRIPT_DIR}/100MilOrients.bin"
 RELEASE_URL="https://github.com/AdvancedPhotonSource/LaueMatching/releases/download/v1.0-data"
 
 if [ ! -f "${ORIENT_FILE}" ]; then
+  if [ "${SKIP_DOWNLOAD:-0}" = "1" ]; then
+    echo "Orientation file not found but SKIP_DOWNLOAD=1, skipping."
+  else
   echo "----------------------------------------------------------------"
   echo "Orientation file not found: ${ORIENT_FILE}"
   echo "Downloading default orientation database (~6.7 GB) in parts..."
@@ -78,6 +82,7 @@ if [ ! -f "${ORIENT_FILE}" ]; then
   rm 100MilOrients.part.a*
   
   echo "Download and reassembly complete."
+  fi
 else
   echo "Found orientation file: ${ORIENT_FILE}"
 fi
