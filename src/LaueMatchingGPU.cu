@@ -370,6 +370,12 @@ int main(int argc, char *argv[]) {
   fclose(imageFile);
   printf("Pixels with intensity: %d\n", nonZeroPx);
 
+  // Create float image for CPU fitting (halves cache pressure vs double)
+  size_t nPixels = (size_t)nrPxX * nrPxY;
+  float *imageF = (float *)malloc(nPixels * sizeof(float));
+  for (pxNr = 0; pxNr < (int)nPixels; pxNr++)
+    imageF[pxNr] = (float)image[pxNr];
+
   // Forward simulation & matching
   // Warm up CUDA context (lazy init happens on first API call — ~2 s)
   double wt_cuda_init = omp_get_wtime();
@@ -860,25 +866,20 @@ int main(int argc, char *argv[]) {
     OrientMat2Euler(orientBest, eulerBest);
     for (iJ = 0; iJ < 3; iJ++)
       eulerFit[iJ] = eulerBest[iJ];
-    int saveExtraInfo = 0;
-    int doCrystalFit = 0;
+    int doCrystalFit = 1;
     memset(outArrThisFit, 0, 3 * maxNrSpots * sizeof(*outArrThisFit));
     double latCFit[6], recipFit[3][3], mv = 0;
-    // First fit: orientation only
-    FitOrientation(image, eulerBest, hkls, nhkls, nrPxX, nrPxY, recip,
+    // Prefilter HKLs at coarse orientation (3058 → ~60)
+    int *validIdx = (int *)malloc(nhkls * sizeof(int));
+    int nValid =
+        prefilterHKLs(hkls, nhkls, eulerBest, recip, nrPxX, nrPxY, rotTranspose,
+                      pArr, pxX, pxY, Elo, Ehi, validIdx, nhkls);
+    // Single-pass fit: orientation + crystal
+    FitOrientation(imageF, eulerBest, hkls, nhkls, nrPxX, nrPxY, recip,
                    outArrThisFit, maxNrSpots, rotTranspose, pArr, pxX, pxY, Elo,
                    Ehi, tol, LatticeParameter, eulerFit, latCFit, &mv,
-                   doCrystalFit);
-    // Second fit: orientation + crystal parameters (tighter bounds)
-    doCrystalFit = 1;
-    for (iK = 0; iK < 3; iK++)
-      eulerBest[iK] = eulerFit[iK];
-    memset(outArrThisFit, 0, 3 * maxNrSpots * sizeof(*outArrThisFit));
-    double tol2 = tol / 3.0;
-    FitOrientation(image, eulerBest, hkls, nhkls, nrPxX, nrPxY, recip,
-                   outArrThisFit, maxNrSpots, rotTranspose, pArr, pxX, pxY, Elo,
-                   Ehi, tol2, LatticeParameter, eulerFit, latCFit, &mv,
-                   doCrystalFit);
+                   doCrystalFit, validIdx, nValid);
+    free(validIdx);
     // Convert fitted Euler angles to orientation matrix and quaternions
     Euler2OrientMat(eulerFit, orientFit);
     OrientMat2Quat33(orientBest, q1);
@@ -886,19 +887,15 @@ int main(int argc, char *argv[]) {
     int simulNrSps = 0;
     calcRecipArray(latCFit, sg_num, recipFit);
     memset(outArrThisFit, 0, 3 * maxNrSpots * sizeof(*outArrThisFit));
-    int nrSps = writeCalcOverlap(image, eulerFit, hkls, nhkls, nrPxX, nrPxY,
+    // Single writeCalcOverlap call with saveExtraInfo = iterNr+1
+    int saveExtraInfo = iterNr + 1;
+    int nrSps = writeCalcOverlap(imageF, eulerFit, hkls, nhkls, nrPxX, nrPxY,
                                  recipFit, outArrThisFit, maxNrSpots,
                                  rotTranspose, pArr, pxX, pxY, Elo, Ehi,
                                  ExtraInfo, saveExtraInfo, &simulNrSps, 0);
     if (nrSps >= minNrSpots) {
       int bs = bsArr[iterNr];
       double miso = GetMisOrientation(q1, q2);
-      saveExtraInfo = iterNr + 1;
-      // Reuse recipFit (already computed above) — skip redundant calcRecipArray
-      memset(outArrThisFit, 0, 3 * maxNrSpots * sizeof(*outArrThisFit));
-      writeCalcOverlap(image, eulerFit, hkls, nhkls, nrPxX, nrPxY, recipFit,
-                       outArrThisFit, maxNrSpots, rotTranspose, pArr, pxX, pxY,
-                       Elo, Ehi, ExtraInfo, saveExtraInfo, &simulNrSps, 0);
       double OF[3][3];
       MatrixMultF33(orientFit, recipFit, OF);
 #pragma omp critical
@@ -942,6 +939,7 @@ int main(int argc, char *argv[]) {
   free(dArr);
   free(bsArr);
   free(hkls);
+  free(imageF);
   free(image);
   if (orientsMapped)
     munmap(orients, szFile);
