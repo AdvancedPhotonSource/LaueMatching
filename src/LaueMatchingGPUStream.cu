@@ -987,27 +987,43 @@ int main(int argc, char *argv[]) {
     int *_dArr = (int *)calloc(_nrResults, sizeof(int));                       \
     int *_bsArr = (int *)calloc(_nrResults, sizeof(int));                      \
     double *_bsScoreArr = (double *)calloc(_nrResults, sizeof(double));        \
+    /* Step 1: Precompute quaternions for all matches (parallel) */            \
+    double *_quats = (double *)malloc(_nrResults * 4 * sizeof(double));        \
+    _Pragma("omp parallel for num_threads(numProcs)") for (int _qi = 0;        \
+                                                           _qi < _nrResults;   \
+                                                           _qi++) {            \
+      double _or9[9];                                                          \
+      for (int _k = 0; _k < 9; _k++)                                           \
+        _or9[_k] = orients[_rowNrs[_qi] * 9 + _k];                             \
+      OrientMat2Quat(_or9, &_quats[_qi * 4]);                                  \
+    }                                                                          \
+    /* Step 2: Precompute pairwise misorientations (parallel) */               \
+    /* Lower triangle: misoDist[i*(i-1)/2 + j] for i > j */                    \
+    size_t _nPairs = (size_t)_nrResults * (_nrResults - 1) / 2;                \
+    float *_misoDist = (float *)malloc(_nPairs * sizeof(float));               \
+    _Pragma("omp parallel for num_threads(numProcs) schedule(dynamic)") for (  \
+        int _i = 1; _i < _nrResults; _i++) {                                   \
+      for (int _j = 0; _j < _i; _j++) {                                        \
+        size_t _idx = (size_t)_i * (_i - 1) / 2 + _j;                          \
+        _misoDist[_idx] =                                                      \
+            (float)GetMisOrientation(&_quats[_i * 4], &_quats[_j * 4]);        \
+      }                                                                        \
+    }                                                                          \
+    /* Step 3: Greedy cluster using precomputed distances (serial, fast) */    \
     int _iterNr = 0;                                                           \
-    double _orient1[9], _orient2[9], _quat1[4], _quat2[4];                     \
-    double _misoAngle, _bestIntensity;                                         \
+    double _bestIntensity;                                                     \
     int _bestSol;                                                              \
     for (int _gi = 0; _gi < (int)_nrResults; _gi++) {                          \
       if (_doneArr[_gi] != 0)                                                  \
         continue;                                                              \
-      for (int _k = 0; _k < 9; _k++)                                           \
-        _orient1[_k] = orients[_rowNrs[_gi] * 9 + _k];                         \
-      OrientMat2Quat(_orient1, _quat1);                                        \
       _doneArr[_gi] = 1;                                                       \
       _bestSol = _rowNrs[_gi];                                                 \
       _bestIntensity = _mA[_gi];                                               \
       for (int _l = _gi + 1; _l < (int)_nrResults; _l++) {                     \
         if (_doneArr[_l] > 0)                                                  \
           continue;                                                            \
-        for (int _m2 = 0; _m2 < 9; _m2++)                                      \
-          _orient2[_m2] = orients[_rowNrs[_l] * 9 + _m2];                      \
-        OrientMat2Quat(_orient2, _quat2);                                      \
-        _misoAngle = GetMisOrientation(_quat1, _quat2);                        \
-        if (_misoAngle <= maxAngle) {                                          \
+        size_t _idx = (size_t)_l * (_l - 1) / 2 + _gi;                         \
+        if (_misoDist[_idx] <= maxAngle) {                                     \
           _doneArr[_l] = 1;                                                    \
           _doneArr[_gi]++;                                                     \
           if (_mA[_l] > _bestIntensity) {                                      \
@@ -1023,6 +1039,8 @@ int main(int argc, char *argv[]) {
       _bsScoreArr[_iterNr] = _bestIntensity;                                   \
       _iterNr++;                                                               \
     }                                                                          \
+    free(_quats);                                                              \
+    free(_misoDist);                                                           \
     int _totalSols = _iterNr;                                                  \
     printf("[Image %u] %d unique orientations found\n", _img_num, _totalSols); \
     /* Parallel fitting */                                                     \
