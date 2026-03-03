@@ -28,6 +28,7 @@ Usage:
 import argparse
 import logging
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -111,6 +112,43 @@ def _terminate_process(proc: subprocess.Popen, name: str, timeout: float = 10.0)
         logger.error(f"Error killing {name}: {e}")
 
 
+def _ensure_shm_files(orient_file: str) -> None:
+    """Copy orientation database to /dev/shm if the path points there.
+
+    When the resolved *orient_file* lives under ``/dev/shm`` and does not
+    yet exist, this helper copies it from the LaueMatching project root
+    (``<project_root>/<basename>``).
+    """
+    if not orient_file.startswith("/dev/shm/"):
+        return  # not a shared-memory path, nothing to do
+
+    if os.path.isfile(orient_file):
+        sz = os.path.getsize(orient_file)
+        logger.info(
+            f"SHM file already present: {orient_file} ({sz / 1e9:.2f} GB) — skipping copy"
+        )
+        return
+
+    # Source: <project_root>/<basename>
+    basename = os.path.basename(orient_file)
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(script_dir)
+    source = os.path.join(project_root, basename)
+
+    if not os.path.isfile(source):
+        logger.error(
+            f"Cannot copy to {orient_file}: source file not found at {source}"
+        )
+        sys.exit(1)
+
+    src_size = os.path.getsize(source)
+    logger.info(
+        f"Copying {source} → {orient_file} ({src_size / 1e9:.2f} GB) ..."
+    )
+    shutil.copy2(source, orient_file)
+    logger.info("SHM copy complete.")
+
+
 # ---------------------------------------------------------------------------
 # Orchestrator
 # ---------------------------------------------------------------------------
@@ -173,16 +211,32 @@ def run_pipeline(
     logger.info(f"Orientation DB : {orient_file}")
     logger.info(f"HKL file       : {hkl_file}")
 
-    # Read the daemon's ResultDir from config (the subdirectory where it
-    # writes solutions.txt / spots.txt inside its CWD).
+    # Copy orientation file to /dev/shm if the path points there.
+    _ensure_shm_files(orient_file)
+
+    # Read the daemon's ResultDir and ForwardFile from config.
     daemon_result_dir = "results_stream"  # C-code default
+    forward_file = ""
     try:
         import laue_config
         cfg_mgr = laue_config.ConfigurationManager(config_file)
         daemon_result_dir = getattr(cfg_mgr.config, "result_dir", daemon_result_dir)
+        forward_file = getattr(cfg_mgr.config, "forward_file", "")
     except Exception:
         pass
     logger.info(f"Daemon ResultDir: {daemon_result_dir}")
+
+    # Warn if the forward simulation file does not exist yet.
+    if forward_file and not os.path.isfile(forward_file):
+        logger.warning("=" * 60)
+        logger.warning(
+            f"Forward simulation file not found: {forward_file}"
+        )
+        logger.warning(
+            "The daemon will generate the forward simulation from scratch. "
+            "This may take a considerable amount of time."
+        )
+        logger.warning("=" * 60)
 
     # --- 1. Create output directory ---
     if not output_dir:
