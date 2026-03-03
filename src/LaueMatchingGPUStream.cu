@@ -46,6 +46,7 @@ int useBobyqa = 1;
 #define HEADER_SIZE 2 // uint16_t image_num
 
 volatile sig_atomic_t keep_running = 1;
+static int g_server_fd = -1; // for signal handler to unblock accept()
 
 // ── CUDA error handling ────────────────────────────────────────────────
 #define gpuErrchk(ans)                                                         \
@@ -122,8 +123,17 @@ static size_t g_imagePixels; // nrPxX * nrPxY
 // ── Signal handler ─────────────────────────────────────────────────────
 void sigint_handler(int signum) {
   if (keep_running) {
+    // First signal: graceful shutdown
     printf("\nCaught signal %d, requesting shutdown...\n", signum);
     keep_running = 0;
+    // Unblock accept() by shutting down the listening socket
+    if (g_server_fd >= 0)
+      shutdown(g_server_fd, SHUT_RDWR);
+  } else {
+    // Second signal: force exit immediately
+    const char msg[] = "\nForced exit.\n";
+    write(STDOUT_FILENO, msg, sizeof(msg) - 1);
+    _exit(1);
   }
 }
 
@@ -822,6 +832,7 @@ int main(int argc, char *argv[]) {
     perror("socket");
     return 1;
   }
+  g_server_fd = server_fd; // expose to signal handler
   int opt_val = 1;
   setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt_val, sizeof(opt_val));
   struct sockaddr_in server_addr;
@@ -1098,8 +1109,11 @@ int main(int argc, char *argv[]) {
   // ═══════════════════════════════════════════════════════════════════
   printf("\nShutting down...\n");
 
-  // Close server socket to unblock accept()
+  // Unblock accept() and join the accept thread
+  shutdown(server_fd, SHUT_RDWR);
   close(server_fd);
+  g_server_fd = -1;
+  pthread_cancel(accept_tid);
   pthread_join(accept_tid, NULL);
   queue_destroy(&process_queue);
 
