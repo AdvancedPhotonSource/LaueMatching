@@ -937,4 +937,146 @@ static inline int writeCalcOverlap(float *image, double euler[3], int *hkls,
   return nrSps;
 }
 
+// ── Merge duplicate orientations (parallel) ──────────────────────────────
+// Clusters match results by misorientation angle using OMP-parallel
+// pairwise precomputation.  Returns number of unique solutions.
+static inline int mergeDuplicateOrientations(double *orients, size_t *rowNrs,
+                                             double *matchScores, int nrResults,
+                                             double maxAngle, int numProcs,
+                                             double *FinOrientArr, int *dArr,
+                                             int *bsArr, double *bsScoreArr) {
+  int *doneArr = (int *)calloc(nrResults, sizeof(int));
+  // Step 1: Precompute quaternions for all matches (parallel)
+  double *quats = (double *)malloc(nrResults * 4 * sizeof(double));
+#pragma omp parallel for num_threads(numProcs)
+  for (int qi = 0; qi < nrResults; qi++) {
+    double or9[9];
+    for (int k = 0; k < 9; k++)
+      or9[k] = orients[rowNrs[qi] * 9 + k];
+    OrientMat2Quat(or9, &quats[qi * 4]);
+  }
+  // Step 2: Precompute pairwise misorientations (parallel)
+  size_t nPairs = (size_t)nrResults * (nrResults - 1) / 2;
+  float *misoDist = (float *)malloc(nPairs * sizeof(float));
+#pragma omp parallel for num_threads(numProcs) schedule(dynamic)
+  for (int i = 1; i < nrResults; i++) {
+    for (int j = 0; j < i; j++) {
+      size_t idx = (size_t)i * (i - 1) / 2 + j;
+      misoDist[idx] = (float)GetMisOrientation(&quats[i * 4], &quats[j * 4]);
+    }
+  }
+  // Step 3: Greedy cluster using precomputed distances (serial, fast)
+  int iterNr = 0;
+  for (int gi = 0; gi < nrResults; gi++) {
+    if (doneArr[gi] != 0)
+      continue;
+    doneArr[gi] = 1;
+    int bestSol = rowNrs[gi];
+    double bestIntensity = matchScores[gi];
+    for (int l = gi + 1; l < nrResults; l++) {
+      if (doneArr[l] > 0)
+        continue;
+      size_t idx = (size_t)l * (l - 1) / 2 + gi;
+      if (misoDist[idx] <= maxAngle) {
+        doneArr[l] = 1;
+        doneArr[gi]++;
+        if (matchScores[l] > bestIntensity) {
+          bestIntensity = matchScores[l];
+          bestSol = rowNrs[l];
+        }
+      }
+    }
+    for (int k = 0; k < 9; k++)
+      FinOrientArr[iterNr * 9 + k] = orients[bestSol * 9 + k];
+    dArr[iterNr] = doneArr[gi];
+    bsArr[iterNr] = bestSol;
+    bsScoreArr[iterNr] = bestIntensity;
+    iterNr++;
+  }
+  free(quats);
+  free(misoDist);
+  free(doneArr);
+  return iterNr;
+}
+
+// ── Fit and write orientations (parallel) ────────────────────────────────
+// OMP-parallel fitting loop: prefilter HKLs, single-pass FitOrientation,
+// writeCalcOverlap, fprintf results.
+// imageNum > 0: prepend image number column (streaming mode)
+// imageNum <= 0: no image column (batch mode)
+static inline void fitAndWriteOrientations(
+    float *image, double *FinOrientArr, int *dArr, int *bsArr,
+    double *bsScoreArr, int totalSols, int *hkls, int nhkls, int nrPxX,
+    int nrPxY, double recip[3][3], double rotTranspose[3][3], double pArr[3],
+    double pxX, double pxY, double Elo, double Ehi, double tol,
+    double *LatticeParameter, int maxNrSpots, int minNrSpots, int numProcs,
+    FILE *outF, FILE *ExtraInfo, int imageNum) {
+  int iterNr;
+#pragma omp parallel for num_threads(numProcs)
+  for (iterNr = 0; iterNr < totalSols; iterNr++) {
+    double orientBest[3][3], eulerBest[3], eulerFit[3], orientFit[3][3];
+    double q1[4], q2[4];
+    int iJ, iK;
+    double *outArrThisFit = (double *)calloc(3 * maxNrSpots, sizeof(double));
+    for (iJ = 0; iJ < 3; iJ++)
+      for (iK = 0; iK < 3; iK++)
+        orientBest[iJ][iK] = FinOrientArr[iterNr * 9 + 3 * iJ + iK];
+    OrientMat2Euler(orientBest, eulerBest);
+    for (iJ = 0; iJ < 3; iJ++)
+      eulerFit[iJ] = eulerBest[iJ];
+    int doCrystalFit = 1;
+    memset(outArrThisFit, 0, 3 * maxNrSpots * sizeof(double));
+    double latCFit[6], recipFit[3][3], mv = 0;
+    // Prefilter HKLs at coarse orientation
+    int *validIdx = (int *)malloc(nhkls * sizeof(int));
+    int nValid =
+        prefilterHKLs(hkls, nhkls, eulerBest, recip, nrPxX, nrPxY, rotTranspose,
+                      pArr, pxX, pxY, Elo, Ehi, validIdx, nhkls);
+    // Single-pass fit: orientation + crystal
+    FitOrientation(image, eulerBest, hkls, nhkls, nrPxX, nrPxY, recip,
+                   outArrThisFit, maxNrSpots, rotTranspose, pArr, pxX, pxY, Elo,
+                   Ehi, tol, LatticeParameter, eulerFit, latCFit, &mv,
+                   doCrystalFit, validIdx, nValid);
+    free(validIdx);
+    Euler2OrientMat(eulerFit, orientFit);
+    OrientMat2Quat33(orientBest, q1);
+    OrientMat2Quat33(orientFit, q2);
+    int simulNrSps = 0;
+    calcRecipArray(latCFit, sg_num, recipFit);
+    memset(outArrThisFit, 0, 3 * maxNrSpots * sizeof(double));
+    int saveExtraInfo = iterNr + 1;
+    int nrSps = writeCalcOverlap(
+        image, eulerFit, hkls, nhkls, nrPxX, nrPxY, recipFit, outArrThisFit,
+        maxNrSpots, rotTranspose, pArr, pxX, pxY, Elo, Ehi, ExtraInfo,
+        saveExtraInfo, &simulNrSps, imageNum);
+    if (nrSps >= minNrSpots) {
+      int bs = bsArr[iterNr];
+      double miso = GetMisOrientation(q1, q2);
+      double OF[3][3];
+      MatrixMultF33(orientFit, recipFit, OF);
+#pragma omp critical
+      {
+        if (imageNum > 0)
+          fprintf(outF, "%d\t", imageNum);
+        fprintf(outF, "%d\t%d\t", iterNr + 1, dArr[iterNr]);
+        fprintf(outF, "%-13.4lf\t", (mv / nrSps) * (mv / nrSps));
+        fprintf(outF, "%-13.4lf\t", nrSps * (mv / nrSps) * (mv / nrSps));
+        fprintf(outF, "%-13.4lf\t", mv);
+        fprintf(outF, "%d\t", nrSps);
+        fprintf(outF, "%d\t", simulNrSps);
+        for (int k = 0; k < 3; k++)
+          for (int l = 0; l < 3; l++)
+            fprintf(outF, "%-13.7lf\t\t", OF[k][l]);
+        for (int k = 0; k < 6; k++)
+          fprintf(outF, "%-13.7lf\t\t", latCFit[k]);
+        for (int k = 0; k < 3; k++)
+          for (int l = 0; l < 3; l++)
+            fprintf(outF, "%-13.7lf\t\t", orientFit[k][l]);
+        fprintf(outF, "%-13.4lf\t%-13.7lf\t%d\n", bsScoreArr[iterNr], miso, bs);
+      }
+    }
+    free(outArrThisFit);
+  }
+}
+
 #endif /* LAUE_MATCHING_HEADERS_H */
