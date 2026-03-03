@@ -751,10 +751,8 @@ int main(int argc, char *argv[]) {
   // Unique solutions
   nSym = MakeSymmetries(sg_num, Symm);
 
-  double bestIntensity;
   double tol = 3 * deg2rad;
   maxNrSpots *= 3;
-  int bestSol;
   char outFN[1000];
   sprintf(outFN, "%s.solutions.txt", imageFN);
   FILE *outF = fopen(outFN, "w");
@@ -804,137 +802,20 @@ int main(int argc, char *argv[]) {
     }
   }
 
-  int *doneArr = (int *)calloc(nrResults, sizeof(*doneArr));
   double *FinOrientArr = (double *)calloc(nrResults * 9, sizeof(*FinOrientArr));
-  int iterNr = 0;
   int *dArr = (int *)calloc(nrResults, sizeof(*dArr));
   int *bsArr = (int *)calloc(nrResults, sizeof(*bsArr));
-  // Step 1: Precompute quaternions for all matches (parallel)
-  double *quats = (double *)malloc(nrResults * 4 * sizeof(double));
-#pragma omp parallel for num_threads(numProcs)
-  for (int qi = 0; qi < (int)nrResults; qi++) {
-    double or9[9];
-    for (int kk = 0; kk < 9; kk++)
-      or9[kk] = orients[rowNrs[qi] * 9 + kk];
-    OrientMat2Quat(or9, &quats[qi * 4]);
-  }
-  // Step 2: Precompute pairwise misorientations (parallel)
-  size_t nPairs = (size_t)nrResults * (nrResults - 1) / 2;
-  float *misoDist = (float *)malloc(nPairs * sizeof(float));
-#pragma omp parallel for num_threads(numProcs) schedule(dynamic)
-  for (int i = 1; i < (int)nrResults; i++) {
-    for (int j = 0; j < i; j++) {
-      size_t idx = (size_t)i * (i - 1) / 2 + j;
-      misoDist[idx] = (float)GetMisOrientation(&quats[i * 4], &quats[j * 4]);
-    }
-  }
-  // Step 3: Greedy cluster using precomputed distances (serial, fast)
-  for (global_iterator = 0; global_iterator < (int)nrResults;
-       global_iterator++) {
-    if (doneArr[global_iterator] != 0)
-      continue;
-    doneArr[global_iterator] = 1;
-    bestSol = rowNrs[global_iterator];
-    bestIntensity = mA[global_iterator];
-    for (l = global_iterator + 1; l < (int)nrResults; l++) {
-      if (doneArr[l] > 0)
-        continue;
-      size_t idx = (size_t)l * (l - 1) / 2 + global_iterator;
-      if (misoDist[idx] <= maxAngle) {
-        doneArr[l] = 1;
-        doneArr[global_iterator]++;
-        if (mA[l] > bestIntensity) {
-          bestIntensity = mA[l];
-          bestSol = rowNrs[l];
-        }
-      }
-    }
-    for (k = 0; k < 9; k++) {
-      FinOrientArr[iterNr * 9 + k] = orients[bestSol * 9 + k];
-    }
-    dArr[iterNr] = doneArr[global_iterator];
-    bsArr[iterNr] = bestSol;
-    iterNr++;
-  }
-  free(quats);
-  free(misoDist);
+  double *bsScoreArr = (double *)calloc(nrResults, sizeof(*bsScoreArr));
+  int totalSols = mergeDuplicateOrientations(orients, rowNrs, mA, nrResults,
+                                             maxAngle, numProcs, FinOrientArr,
+                                             dArr, bsArr, bsScoreArr);
   double time3 = omp_get_wtime() - start_time;
   printf("Finished finding unique solutions, took: %lf seconds.\n",
          time3 - time2);
-  int totalSols = iterNr;
-#pragma omp parallel for num_threads(numProcs)
-  for (iterNr = 0; iterNr < totalSols; iterNr++) {
-    double orientBest[3][3], eulerBest[3], eulerFit[3], orientFit[3][3], q1[4],
-        q2[4];
-    int iJ, iK;
-    // Hoisted allocation
-    double *outArrThisFit =
-        (double *)calloc(3 * maxNrSpots, sizeof(*outArrThisFit));
-    for (iJ = 0; iJ < 3; iJ++) {
-      for (iK = 0; iK < 3; iK++) {
-        orientBest[iJ][iK] = FinOrientArr[iterNr * 9 + 3 * iJ + iK];
-      }
-    }
-    OrientMat2Euler(orientBest, eulerBest);
-    for (iJ = 0; iJ < 3; iJ++)
-      eulerFit[iJ] = eulerBest[iJ];
-    int doCrystalFit = 1;
-    memset(outArrThisFit, 0, 3 * maxNrSpots * sizeof(*outArrThisFit));
-    double latCFit[6], recipFit[3][3], mv = 0;
-    // Prefilter HKLs at coarse orientation (3058 → ~60)
-    int *validIdx = (int *)malloc(nhkls * sizeof(int));
-    int nValid =
-        prefilterHKLs(hkls, nhkls, eulerBest, recip, nrPxX, nrPxY, rotTranspose,
-                      pArr, pxX, pxY, Elo, Ehi, validIdx, nhkls);
-    // Single-pass fit: orientation + crystal
-    FitOrientation(imageF, eulerBest, hkls, nhkls, nrPxX, nrPxY, recip,
-                   outArrThisFit, maxNrSpots, rotTranspose, pArr, pxX, pxY, Elo,
-                   Ehi, tol, LatticeParameter, eulerFit, latCFit, &mv,
-                   doCrystalFit, validIdx, nValid);
-    free(validIdx);
-    // Convert fitted Euler angles to orientation matrix and quaternions
-    Euler2OrientMat(eulerFit, orientFit);
-    OrientMat2Quat33(orientBest, q1);
-    OrientMat2Quat33(orientFit, q2);
-    int simulNrSps = 0;
-    calcRecipArray(latCFit, sg_num, recipFit);
-    memset(outArrThisFit, 0, 3 * maxNrSpots * sizeof(*outArrThisFit));
-    // Single writeCalcOverlap call with saveExtraInfo = iterNr+1
-    int saveExtraInfo = iterNr + 1;
-    int nrSps = writeCalcOverlap(imageF, eulerFit, hkls, nhkls, nrPxX, nrPxY,
-                                 recipFit, outArrThisFit, maxNrSpots,
-                                 rotTranspose, pArr, pxX, pxY, Elo, Ehi,
-                                 ExtraInfo, saveExtraInfo, &simulNrSps, 0);
-    if (nrSps >= minNrSpots) {
-      int bs = bsArr[iterNr];
-      double miso = GetMisOrientation(q1, q2);
-      double OF[3][3];
-      MatrixMultF33(orientFit, recipFit, OF);
-#pragma omp critical
-      {
-        fprintf(outF, "%d\t%d\t", iterNr + 1, dArr[iterNr]);
-        fprintf(outF, "%-13.4lf\t", (mv / nrSps) * (mv / nrSps));
-        fprintf(outF, "%-13.4lf\t", nrSps * (mv / nrSps) * (mv / nrSps));
-        fprintf(outF, "%-13.4lf\t", mv);
-        fprintf(outF, "%d\t", nrSps);
-        fprintf(outF, "%d\t", simulNrSps);
-        for (k = 0; k < 3; k++) {
-          for (l = 0; l < 3; l++) {
-            fprintf(outF, "%-13.7lf\t\t", OF[k][l]);
-          }
-        }
-        for (k = 0; k < 6; k++)
-          fprintf(outF, "%-13.7lf\t\t", latCFit[k]);
-        for (k = 0; k < 3; k++) {
-          for (l = 0; l < 3; l++) {
-            fprintf(outF, "%-13.7lf\t\t", orientFit[k][l]);
-          }
-        }
-        fprintf(outF, "%-13.4lf\t%-13.7lf\t%d\n", mA[iterNr], miso, bs);
-      }
-    }
-    free(outArrThisFit); // Final free per thread/iteration
-  }
+  fitAndWriteOrientations(
+      imageF, FinOrientArr, dArr, bsArr, bsScoreArr, totalSols, hkls, nhkls,
+      nrPxX, nrPxY, recip, rotTranspose, pArr, pxX, pxY, Elo, Ehi, tol,
+      LatticeParameter, maxNrSpots, minNrSpots, numProcs, outF, ExtraInfo, 0);
   fclose(ExtraInfo);
   fclose(outF);
 
@@ -946,10 +827,10 @@ int main(int argc, char *argv[]) {
     free(h_matchScore);
   free(mA);
   free(rowNrs);
-  free(doneArr);
   free(FinOrientArr);
   free(dArr);
   free(bsArr);
+  free(bsScoreArr);
   free(hkls);
   free(imageF);
   free(image);
