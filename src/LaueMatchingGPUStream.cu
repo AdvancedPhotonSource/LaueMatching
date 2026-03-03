@@ -988,6 +988,7 @@ int main(int argc, char *argv[]) {
     int *_bsArr = (int *)calloc(_nrResults, sizeof(int));                      \
     double *_bsScoreArr = (double *)calloc(_nrResults, sizeof(double));        \
     /* Step 1: Precompute quaternions for all matches (parallel) */            \
+    double _wt_merge = omp_get_wtime();                                        \
     double *_quats = (double *)malloc(_nrResults * 4 * sizeof(double));        \
     _Pragma("omp parallel for num_threads(numProcs)") for (int _qi = 0;        \
                                                            _qi < _nrResults;   \
@@ -1009,6 +1010,7 @@ int main(int argc, char *argv[]) {
             (float)GetMisOrientation(&_quats[_i * 4], &_quats[_j * 4]);        \
       }                                                                        \
     }                                                                          \
+    double _wt_merge_done = omp_get_wtime();                                   \
     /* Step 3: Greedy cluster using precomputed distances (serial, fast) */    \
     int _iterNr = 0;                                                           \
     double _bestIntensity;                                                     \
@@ -1041,9 +1043,16 @@ int main(int argc, char *argv[]) {
     }                                                                          \
     free(_quats);                                                              \
     free(_misoDist);                                                           \
+    double _wt_cluster_done = omp_get_wtime();                                 \
     int _totalSols = _iterNr;                                                  \
     printf("[Image %u] %d unique orientations found\n", _img_num, _totalSols); \
+    printf("[Image %u]   merge: %.0f ms (precompute: %.0f ms, cluster: "       \
+           "%.0f ms)\n",                                                       \
+           _img_num, (_wt_cluster_done - _wt_merge) * 1000,                    \
+           (_wt_merge_done - _wt_merge) * 1000,                                \
+           (_wt_cluster_done - _wt_merge_done) * 1000);                        \
     /* Parallel fitting */                                                     \
+    double _wt_fit_start = omp_get_wtime();                                    \
     _Pragma("omp parallel for num_threads(numProcs)") for (_iterNr = 0;        \
                                                            _iterNr <           \
                                                            _totalSols;         \
@@ -1117,6 +1126,9 @@ int main(int argc, char *argv[]) {
     fflush(ExtraInfo);                                                         \
     double _wt_total = omp_get_wtime() - _fc->wt_submission;                   \
     float _t_gpu_total = _t_h2d + _t_kern + _t_d2h;                            \
+    double _wt_fit_ms = (omp_get_wtime() - _wt_fit_start) * 1000;              \
+    printf("[Image %u]   fitting: %.0f ms (%d orientations, %d threads)\n",    \
+           _img_num, _wt_fit_ms, _totalSols, numProcs);                        \
     printf("[Image %u] Total: %.3f s (GPU: %.0f ms, CPU fitting: %.3f s)\n",   \
            _img_num, _wt_total, _t_gpu_total,                                  \
            _wt_total - _t_gpu_total / 1000.0);                                 \
