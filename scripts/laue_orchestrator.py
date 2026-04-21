@@ -165,6 +165,8 @@ def run_pipeline(
     port_timeout: float = 180.0,
     flush_time: float = 5.0,
     min_unique: int = 2,
+    write_indexfile: bool = True,
+    indexfile_dir: str = "",
 ) -> None:
     """
     Run the full LaueMatching streaming pipeline.
@@ -257,6 +259,26 @@ def run_pipeline(
 
     logger.info(f"Output directory: {output_dir}")
     logger.info(f"Daemon output  : {daemon_out_dir}")
+
+    # --- 1b. Stamp run-level provenance up-front ---
+    # Written now (rather than at end-of-run) so a crashed/killed run still
+    # leaves a record of which commit + config was in play.
+    try:
+        import laue_provenance as _lp
+        run_prov = _lp.collect(
+            config=getattr(cfg_mgr, "config", None),
+            input_files=[f for f in (config_file, orient_file, hkl_file) if f],
+            extra={
+                "output_dir": output_dir,
+                "folder": folder,
+                "ncpus": ncpus,
+                "port": port,
+            },
+        )
+        _lp.write_sidecar_json(os.path.join(output_dir, "provenance.json"), run_prov)
+        logger.info(f"Wrote run provenance: {os.path.join(output_dir, 'provenance.json')}")
+    except Exception as prov_exc:
+        logger.warning(f"Could not write run provenance: {prov_exc}")
 
     # --- 2. Start GPU daemon ---
     daemon_bin = _find_daemon_binary()
@@ -384,6 +406,10 @@ def run_pipeline(
         "--min-unique", str(min_unique),
         "--nprocs", str(ncpus),
     ]
+    if not write_indexfile:
+        pp_cmd.append("--no-indexfile")
+    elif indexfile_dir:
+        pp_cmd.extend(["--indexfile-out", indexfile_dir])
     logger.info(f"Running: {' '.join(os.path.basename(c) for c in pp_cmd)}")
     pp_result = subprocess.run(pp_cmd, capture_output=True, text=True)
 
@@ -558,6 +584,14 @@ def main() -> None:
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         help="Logging verbosity (default: INFO)"
     )
+    parser.add_argument(
+        "--no-indexfile", action="store_true",
+        help="Disable the default Tischler-format .indexing.txt per-image output"
+    )
+    parser.add_argument(
+        "--indexfile-out", default="",
+        help="Directory for .indexing.txt files (default: alongside HDF5 outputs)"
+    )
     args = parser.parse_args()
 
     _setup_logging(args.log_level)
@@ -582,6 +616,8 @@ def main() -> None:
         port_timeout=args.port_timeout,
         flush_time=args.flush_time,
         min_unique=args.min_unique,
+        write_indexfile=not args.no_indexfile,
+        indexfile_dir=args.indexfile_out,
     )
 
 

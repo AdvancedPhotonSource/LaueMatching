@@ -66,6 +66,8 @@ def process_single_image(
     mapping_info: Optional[Dict] = None,
     labels: Optional[np.ndarray] = None,
     folder: str = "",
+    write_indexfile: bool = True,
+    indexfile_dir: str = "",
 ) -> Dict[str, Any]:
     """
     Process results for a single image number.
@@ -191,7 +193,9 @@ def process_single_image(
     )
 
     # --- Save per-image H5 ---
+    h5_path = None
     if HAS_H5PY:
+        h5_path = os.path.join(output_dir, f"image_{image_nr:05d}.output.h5")
         _save_image_h5(
             image_nr, output_dir,
             orientations, filtered_orient,
@@ -199,6 +203,18 @@ def process_single_image(
             unique_info, mapping_info,
             cfg=cfg, folder=folder,
         )
+
+    # --- Write the Tischler IndexFile alongside the HDF5 (default ON) ---
+    if write_indexfile and HAS_H5PY and h5_path and os.path.isfile(h5_path):
+        try:
+            import laue_indexfile as _lif
+            target_dir = indexfile_dir or output_dir
+            os.makedirs(target_dir, exist_ok=True)
+            out_txt = os.path.join(target_dir, f"image_{image_nr:05d}.indexing.txt")
+            _lif.write_from_h5(h5_path, out_txt, cfg, mapping_info)
+            logger.debug(f"  Wrote IndexFile: {out_txt}")
+        except Exception as exc:
+            logger.warning(f"  Could not write IndexFile for image {image_nr}: {exc}")
 
     return result
 
@@ -297,6 +313,31 @@ def _save_image_h5(
                 except Exception as e:
                     logger.warning(f"  Could not save image data for image {image_nr}: {e}")
 
+            # --- Provenance group ---
+            try:
+                import laue_provenance as _lp
+                prov_inputs = []
+                if mapping_info and folder:
+                    src_path = os.path.join(folder, mapping_info.get("file", ""))
+                    if os.path.isfile(src_path):
+                        prov_inputs.append(src_path)
+                prov = _lp.collect(
+                    config=cfg,
+                    input_files=prov_inputs,
+                    extra={
+                        "image_nr": image_nr,
+                        "n_orientations_raw": int(orientations.shape[0]),
+                        "n_orientations_filtered": int(filtered_orientations.shape[0]),
+                        "n_spots_raw": int(spots.shape[0]),
+                        "n_spots_filtered": int(filtered_spots.shape[0]),
+                        "source_file": (mapping_info or {}).get("file", ""),
+                        "source_frame": (mapping_info or {}).get("frame", -1),
+                    },
+                )
+                _lp.write_to_h5(hf, prov, group="/entry/provenance")
+            except Exception as prov_exc:
+                logger.warning(f"  Could not write provenance group: {prov_exc}")
+
         logger.info(f"  Saved {h5_path}")
 
     except Exception as e:
@@ -343,6 +384,8 @@ def postprocess(
     image_nr: int = 0,
     min_unique: int = 2,
     nprocs: int = 1,
+    write_indexfile: bool = True,
+    indexfile_dir: str = "",
 ) -> None:
     """
     Main post-processing entry point.
@@ -453,6 +496,8 @@ def postprocess(
                     mapping_info=map_info,
                     labels=img_labels,
                     folder=folder,
+                    write_indexfile=write_indexfile,
+                    indexfile_dir=indexfile_dir,
                 )
                 futures[fut] = img
 
@@ -484,6 +529,8 @@ def postprocess(
                 mapping_info=map_info,
                 labels=img_labels,
                 folder=folder,
+                write_indexfile=write_indexfile,
+                indexfile_dir=indexfile_dir,
             )
             all_results.append(res)
 
@@ -550,6 +597,14 @@ def main() -> None:
         "--nprocs", type=int, default=1,
         help="Number of parallel processes for per-image processing (default: 1)"
     )
+    parser.add_argument(
+        "--no-indexfile", action="store_true",
+        help="Disable the default Tischler-format .indexing.txt output"
+    )
+    parser.add_argument(
+        "--indexfile-out", default="",
+        help="Directory for .indexing.txt output (default: same as --output-dir)"
+    )
     args = parser.parse_args()
 
     _setup_logging(args.log_level)
@@ -575,6 +630,8 @@ def main() -> None:
         image_nr=args.image_nr,
         min_unique=args.min_unique,
         nprocs=args.nprocs,
+        write_indexfile=not args.no_indexfile,
+        indexfile_dir=args.indexfile_out,
     )
 
 

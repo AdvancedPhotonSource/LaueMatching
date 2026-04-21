@@ -359,34 +359,53 @@ class DiffractionSimulator:
         
         return self.img, self.pos_arr, recips
     
-    def save_results(self, output_file, orientations):
+    def save_results(self, output_file, orientations, provenance_inputs=None):
         """
         Save simulation results to HDF5 and TIFF files.
-        
+
         Args:
             output_file (str): Output file path
             orientations (numpy.ndarray): Original orientation matrices
+            provenance_inputs (list[str] or None): Paths to the input files
+                (config, orientation list, HKL file) that fed this run.
+                Written into ``/provenance`` alongside git commit + timestamp.
         """
         # Save TIFF image
         tiff_path = f"{output_file}.tif"
         Image.fromarray(self.img).save(tiff_path)
         logger.info(f"Saved TIFF image to {tiff_path}")
-        
+
         # Save HDF5 file with all data
         try:
             with h5py.File(output_file, 'w') as hf:
                 hf.create_dataset('/entry1/data/data', data=self.img)
-                
+
                 # Reshape recips to store in file
                 recips = orientations * self.params['astar']
                 hf.create_dataset('/entry1/recips', data=recips)
-                
+
                 # Store spot positions
                 hf.create_dataset('/entry1/spots', data=self.pos_arr)
-                
+
                 # Store original orientation matrices
                 hf.create_dataset('/entry1/orientation_matrices', data=orientations)
-                
+
+                # Provenance: git commit + params snapshot + input fingerprints
+                try:
+                    import laue_provenance as _lp
+                    prov = _lp.collect(
+                        config=self.params,
+                        input_files=provenance_inputs or [],
+                        extra={
+                            "n_orientations": int(orientations.shape[0]),
+                            "image_shape": list(self.img.shape),
+                            "n_spots": int(self.pos_arr.shape[0]),
+                        },
+                    )
+                    _lp.write_to_h5(hf, prov, group="provenance")
+                except Exception as prov_exc:
+                    logger.warning(f"Could not write provenance group: {prov_exc}")
+
             logger.info(f"Saved HDF5 data to {output_file}")
         except Exception as e:
             logger.error(f"Error saving HDF5 file: {str(e)}")
@@ -422,7 +441,8 @@ def ensure_hkl_file_exists(params, install_path):
             f'-NumPxX {params["nPxX"]}',
             f'-NumPxY {params["nPxY"]}',
             f'-dx {params["dx"]}',
-            f'-dy {params["dy"]}'
+            f'-dy {params["dy"]}',
+            f'-Ehi {params.get("Ehi", 30)}',
         ]
         
         command = ' '.join(cmd)
@@ -523,8 +543,12 @@ def main():
     
     # Save results
     logger.info(f"Saving results to: {args.outputFile}")
-    simulator.save_results(args.outputFile, orientations)
-    
+    simulator.save_results(
+        args.outputFile,
+        orientations,
+        provenance_inputs=[args.configFile, args.orientationFile, params.get('hklf', '')],
+    )
+
     logger.info("Simulation completed successfully")
 
 

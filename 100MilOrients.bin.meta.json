@@ -1,0 +1,45 @@
+{
+  "extra": {
+    "actual_n_orientations": 100000000,
+    "covers": "full SO(3), not the fundamental zone \u2014 oversampled on purpose",
+    "crystal_system": "cubic",
+    "expected_n_orientations": 100000000,
+    "generator_script": "unknown \u2014 pre-repo-history",
+    "notes": "Provenance added retroactively. For reproducible regeneration use scripts/GenerateOrientations.py, which writes a full provenance sidecar.",
+    "origin": "GitHub Release tag v1.0-data, reassembled from 4 parts by build.sh",
+    "record_bytes": 72,
+    "record_layout": "row-major 3x3 float64 rotation matrix",
+    "size_bytes": 7200000000,
+    "step_deg": 0.4
+  },
+  "git": {
+    "branch": "main",
+    "commit": "c7a111caa7d2b3199a784a25c35c93a281289ace",
+    "commit_short": "c7a111caa7d2",
+    "dirty": true,
+    "remote": "git@github.com:AdvancedPhotonSource/LaueMatching.git"
+  },
+  "host": "Wavellite",
+  "inputs": [
+    {
+      "basename": "100MilOrients.bin",
+      "mtime_utc": "2026-02-17T18:59:39.668777+00:00",
+      "path": "100MilOrients.bin",
+      "sha256_head": "050e2d3be62464825001c363056f3ef978620e97d2dffd53afdbac56247b59d8",
+      "size": 7200000000
+    }
+  ],
+  "laue_version": "2.1.0",
+  "python": "3.12.2",
+  "schema_version": "1",
+  "script": {
+    "argv": [
+      "scripts/annotate_orientation_db.py",
+      "--file",
+      "100MilOrients.bin"
+    ],
+    "argv0": "scripts/annotate_orientation_db.py"
+  },
+  "timestamp_utc": "2026-04-21T03:56:37.415468+00:00",
+  "user": "hsharma"
+}

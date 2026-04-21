@@ -87,6 +87,18 @@ else
   echo "Found orientation file: ${ORIENT_FILE}"
 fi
 
+# Write/refresh the provenance sidecar next to the orientation binary so
+# downstream runs know what they're matching against. Silent no-op if
+# Python or the script is unavailable.
+META_FILE="${ORIENT_FILE}.meta.json"
+if [ -f "${ORIENT_FILE}" ] && [ ! -f "${META_FILE}" ]; then
+  if command -v python3 &> /dev/null; then
+    echo "Writing orientation-db sidecar: ${META_FILE}"
+    python3 "${SCRIPT_DIR}/scripts/annotate_orientation_db.py" --file "${ORIENT_FILE}" || \
+      echo "warning: annotate_orientation_db.py failed (non-fatal)"
+  fi
+fi
+
 echo ""
 
 mkdir -p "${BUILD_DIR}"

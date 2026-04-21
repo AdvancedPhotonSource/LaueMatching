@@ -1,0 +1,33 @@
+$filetype	IndexFile
+// Found 3 patterns, indexed 36 out of 38 spots in 00:00:00 = (0.10 sec)
+// ------------------------------------------------------------
+$peakFile		'/data34/dsheyfer/analysis_jupyter/ML_LAUE/test_forHemant3/Ni_p2q150L0_Ni_wire_pos1_2_10.txt'		// input data file
+$keVmaxCalc		17.2 			// max energy (keV) for calculated hkl
+$angleTolerance		0.1 	// how close to vectors have to be considered to have the correct angle (deg)
+$keVmaxTest		35.00		// max energy (keV) matching a spot (for calculating Gtest[][3])
+$hklPrefer		'{0,0,2}'	// preferred hkl, this should be hkl near center of pattern
+$cone		72 				// angle from the preferred hkl to look for acceptable hkl when calculating (deg)
+$NpatternsFound		3		// number of patterns found
+$Nindexed		36 			// number of spots indexed
+$NiData		38 				// total number of data spots
+$executionTime		0.10	// execution time (sec)
+// ------------------------------------------------------------
+$structureDesc		Ni
+$SpaceGroup		225
+$latticeParameters	{ 0.35238, 0.35238, 0.35238, 90, 90, 90 }
+$lengthUnit		nm
+$AtomDesctiption1	{Ni001  0 0 0 1}
+$xdim			2048
+$ydim			2048
+$xDimDet		2048
+$yDimDet		2048
+$threshold		150
+
+$pattern0
+$EulerAngles0 { -95.53748287, 127.10320335,  86.43953933}
+$goodness0		279.758
+$rms_error0		0.00498
+$rotation_matrix0		{{0.9970272,0.0037123,-0.0769611}{-0.0590224,-0.6052710,-0.7938283}{-0.0495293,0.7960108,-0.6032526}}
+//   rotation matrix      0.99703     -0.05902     -0.04953
+//   column vectors       0.00371     -0.60527      0.79601
+//                       -0.07696     -0.79383     -0.60325

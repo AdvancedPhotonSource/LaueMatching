@@ -111,6 +111,24 @@ def serve_images(
     nr_px_x = cfg["nr_px_x"]
     nr_px_y = cfg["nr_px_y"]
 
+    # Write a sidecar provenance.json next to the mapping file so the image
+    # server run is auditable even when invoked outside the orchestrator.
+    try:
+        import laue_provenance as _lp
+        prov = _lp.collect(
+            config=cfg,
+            input_files=[config_file],
+            extra={
+                "folder": folder,
+                "h5_location": h5loc,
+                "port": port,
+                "mapping_file": mapping_file,
+            },
+        )
+        _lp.write_sidecar_json(mapping_file + ".provenance.json", prov)
+    except Exception as prov_exc:
+        logger.warning(f"Could not write image-server provenance: {prov_exc}")
+
     # --- 2. Discover H5 files ---
     h5_files = sorted(glob.glob(os.path.join(folder, "*.h5")))
     if not h5_files:
