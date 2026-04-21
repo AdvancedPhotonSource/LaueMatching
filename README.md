@@ -375,6 +375,25 @@ H. Sharma, D. Sheyfer, R. Harder and J.Z. Tischler (2026). *J. Appl. Cryst.* **5
 
 ## Version History
 
+### v2.2 (unreleased)
+
+- **Provenance tracking**: every generated artifact (HKL CSV, simulation HDF5,
+  per-image indexing HDF5, orchestrator run directory) now carries a git
+  commit, config snapshot, and weak fingerprints of its input files.
+  See [docs/provenance.md](docs/provenance.md).
+- **IndexFile text output**: on by default — each indexed image emits a
+  Tischler-style `.indexing.txt` alongside the HDF5 (`--no-indexfile` to
+  disable). See [docs/indexfile-format.md](docs/indexfile-format.md).
+- **`scripts/GenerateOrientations.py`**: reproduce the orientation database
+  at any spacing / crystal system using `orix`. Emits the **full SO(3)**,
+  not the fundamental zone — the oversampling is load-bearing for the
+  indexer's spurious-match filter. Writes a `.meta.json` sidecar with full
+  provenance.
+- **`scripts/annotate_orientation_db.py`**: writes a retroactive sidecar
+  next to the existing `100MilOrients.bin`. Hooked into `build.sh`.
+- **`GenerateHKLs.py` -Ehi flag**: the max-energy cutoff is no longer
+  silently hardcoded to 30 keV.
+
 ### v2.1 (2026-03-03)
 
 - **GPU Kernel Optimizations**: 2.3× faster GPU matching:

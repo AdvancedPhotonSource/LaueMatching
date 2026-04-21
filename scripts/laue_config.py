@@ -196,6 +196,12 @@ class LaueConfig:
     log_level: LogLevel = LogLevel.INFO
     log_file: Optional[str] = None
 
+    # Optional IndexFile metadata (used by scripts/laue_indexfile.py)
+    xtal_file: str = ""           # path to a CIF/xml crystal description (optional)
+    structure_desc: str = ""      # short structure tag, e.g. "Ni", "Cu"
+    atom_description: str = ""    # raw ``AtomDesctiption`` line contents (sic)
+    write_indexfile: bool = True  # emit .indexing.txt alongside output HDF5 (runtime flag)
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert the configuration to dictionary format."""
         config_dict = {k: v for k, v in self.__dict__.items()
@@ -451,6 +457,15 @@ class ConfigurationManager:
             # --- Keys used by other scripts ---
             elif key in ('AStar', 'SimulationSmoothingWidth'):
                 pass  # Recognized but not used
+            # --- IndexFile metadata ---
+            elif key == 'XtalFile':
+                self.config.xtal_file = get_val(1, str)
+            elif key == 'StructureDesc':
+                self.config.structure_desc = get_val(1, str)
+            elif key == 'AtomDescription' or key == 'AtomDesctiption':
+                # Preserve the original (sic) spelling for compat with
+                # downstream parsers of the Tischler .indexFile output.
+                self.config.atom_description = line.split(None, 1)[1] if num_parts > 1 else ""
             # --- Ignore unknown keys ---
             else:
                 logger.warning(f"Ignoring unknown configuration key '{key}' on line: '{line}'")

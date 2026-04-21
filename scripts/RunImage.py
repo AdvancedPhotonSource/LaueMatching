@@ -491,19 +491,64 @@ class EnhancedImageProcessor:
             # Ensure binary data headers/columns are stored correctly (called within _create_h5_output and here for simulation)
             self._store_binary_headers_in_h5(output_path, hf_out)
 
+            # Provenance: git commit + params + input fingerprints. Written
+            # last so it reflects the actual invocation even if earlier
+            # steps were skipped. Never fail the run if provenance fails.
+            try:
+                import laue_provenance as _lp
+                prov_inputs = [p for p in (
+                    image_path,
+                    self.config.get("orientation_file"),
+                    self.config.get("hkl_file"),
+                ) if p]
+                # self.config is the ConfigurationManager; its .config attr
+                # is the LaueConfig dataclass with the to_dict() method that
+                # laue_provenance knows how to serialize.
+                prov = _lp.collect(
+                    config=getattr(self.config, "config", self.config),
+                    input_files=prov_inputs,
+                    extra={
+                        "processing_time_sec": time.time() - start_time,
+                        "output_path": output_path,
+                    },
+                )
+                _lp.write_to_h5(hf_out, prov, group="/entry/provenance")
+            except Exception as prov_exc:
+                logger.warning(f"Could not write provenance group: {prov_exc}")
+
             progress.complete("Processing completed")
 
-            # Return processing results (based on filtered orientations/spots)
-            return {
-                "success": True,
-                "image_path": image_path,
-                "output_path": output_path,
-                "output_h5": output_h5,
-                "centers": centers,
-                "final_labels": final_labels,
-                "indexing_results": processed_indexing_results, # Contains filtered results primarily
-                "processing_time": time.time() - start_time
-            } # End of `with h5py.File(...)`
+        # (out of `with h5py.File(...)` — HDF5 flushed to disk, safe to
+        # open the same file for reading from the IndexFile builder.)
+
+        # Write a Tischler-format ``.indexing.txt`` next to the HDF5 unless
+        # the caller passed ``--no-indexfile`` on the CLI.
+        if self.config.get("write_indexfile", True):
+            try:
+                import laue_indexfile as _lif
+                out_txt = f"{output_path}.indexing.txt"
+                mapping_entry = {"file": os.path.basename(image_path)}
+                _lif.write_from_h5(
+                    output_h5, out_txt,
+                    cfg=getattr(self.config, "config", self.config),
+                    mapping_entry=mapping_entry,
+                    execution_time_sec=time.time() - start_time,
+                )
+                logger.info(f"Wrote IndexFile: {out_txt}")
+            except Exception as exc:
+                logger.warning(f"Could not write IndexFile: {exc}")
+
+        # Return processing results (based on filtered orientations/spots)
+        return {
+            "success": True,
+            "image_path": image_path,
+            "output_path": output_path,
+            "output_h5": output_h5,
+            "centers": centers,
+            "final_labels": final_labels,
+            "indexing_results": processed_indexing_results, # Contains filtered results primarily
+            "processing_time": time.time() - start_time
+        }
 
 
     def _store_txt_files_in_h5(self, output_path: str, h5_file) -> None:
@@ -1240,6 +1285,8 @@ Examples:
     process_parser.add_argument('--dry-run', action='store_true', help='Load config and find files, but do not process images')
     process_parser.add_argument('--no-viz', action='store_true', help='Disable all visualization generation')
     process_parser.add_argument('--no-sim', action='store_true', help='Disable the python simulation step (GenerateSimulation.py)')
+    process_parser.add_argument('--no-indexfile', action='store_true',
+                              help='Disable the default Tischler-format .indexing.txt output next to each HDF5 result')
 
 
     # --- Config Command ---
@@ -1328,6 +1375,8 @@ def process_images(args):
         config_manager.config.visualization.enable_visualization = False
     if args.no_sim:
         config_manager.config.simulation.enable_simulation = False
+    # IndexFile emission is ON by default; --no-indexfile disables it.
+    config_manager.set("write_indexfile", not getattr(args, "no_indexfile", False))
 
     # Handle threshold overrides - Value override (-t) takes precedence
     if args.threshold > 0:

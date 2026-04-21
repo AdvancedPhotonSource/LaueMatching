@@ -26,7 +26,8 @@ class LaueMatching:
         self.Ny = args.NumPxY
         self.dx = args.dx
         self.dy = args.dy
-        
+        self.Ehi = getattr(args, 'Ehi', 30)
+
         # Constants
         self.hc_keVnm = 1.2398419739
         self.rad2deg = 180/np.pi
@@ -124,9 +125,11 @@ class LaueMatching:
 
     def createDetector(self):
         """Create a detector object with the specified parameters."""
-        return DetectorType(Nx=self.Nx, Ny=self.Ny, dx=self.dx, dy=self.dy, 
+        return DetectorType(Nx=self.Nx, Ny=self.Ny, dx=self.dx, dy=self.dy,
                            R=self.R, P=self.P, name='Perkn-Elmer')
-    def preCalcHKLs(self, detector, recip, Ehi=30):
+    def preCalcHKLs(self, detector, recip, Ehi=None):
+        if Ehi is None:
+            Ehi = getattr(self, 'Ehi', 30)
         """
         Pre-calculate valid HKLs based on detector and lattice parameters.
         
@@ -233,8 +236,35 @@ class LaueMatching:
             # Sort by length and save to file
             hklarr2 = hklarr[hklarr[:, 3].argsort()]
             np.savetxt(self.resultFileName, hklarr2, fmt="%d %d %d %d")
+
+            # Stamp provenance as a sidecar JSON alongside the CSV. We do NOT
+            # embed it as ``#``-prefixed header lines because the C indexer's
+            # ``sscanf("%d %d %d")`` would count comment lines as zero-HKLs,
+            # silently corrupting the run. Sidecar keeps the data file shape
+            # unchanged.
+            try:
+                import laue_provenance as _lp
+                prov = _lp.collect(
+                    config={
+                        "space_group": self.sgNum,
+                        "symmetry": self.sym,
+                        "lattice_parameter": list(self.latticeParameter),
+                        "r_array": list(self.R.tolist()),
+                        "p_array": list(self.P.tolist()),
+                        "nr_px_x": self.Nx,
+                        "nr_px_y": self.Ny,
+                        "px_x_m": self.dx,
+                        "px_y_m": self.dy,
+                        "ehi": self.Ehi,
+                    },
+                    extra={"n_valid_hkls": int(hklarr2.shape[0])},
+                )
+                _lp.write_sidecar_json(self.resultFileName + ".provenance.json", prov)
+            except Exception as prov_exc:  # never fail the run over provenance
+                print(f'Warning: could not write provenance sidecar: {prov_exc}')
+
             print(f'Results saved to: {self.resultFileName}')
-            
+
         except Exception as e:
             print(f"Error during execution: {e}")
             sys.exit(1)
@@ -382,9 +412,11 @@ def main():
                       help='Number of pixels in Y direction.')
     parser.add_argument('-dx', type=float, required=False, default=200e-6, 
                       help='Pixel size in X direction.[m]')
-    parser.add_argument('-dy', type=float, required=False, default=200e-6, 
+    parser.add_argument('-dy', type=float, required=False, default=200e-6,
                       help='Pixel size in Y direction.[m]')
-    
+    parser.add_argument('-Ehi', type=float, required=False, default=30,
+                      help='Maximum beam energy [keV]. Controls how many HKLs fall inside the Ewald cutoff.')
+
     args, unparsed = parser.parse_known_args()
     
     # Create and run the LaueMatching instance
