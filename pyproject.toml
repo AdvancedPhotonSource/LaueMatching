@@ -25,6 +25,9 @@ pipeline = ["opencv-python-headless", "scipy", "h5py"]
 preprocess = ["diplib", "scikit-image"]
 dev = ["pytest"]
 
+[project.scripts]
+laue-index = "laue_index.cli:main"
+
 [tool.setuptools]
 packages = ["laue_index"]
 
