@@ -56,6 +56,7 @@ if INSTALL_PATH not in sys.path:
 from laue_index.records import SOLUTION_FORMATS
 from laue_index.filtering import LegacyUniqueSpotFilter, RobustCSLAwareFilter
 from laue_index.indexer import run_indexer
+from laue_index.postprocess import PostProcessor
 _RI = SOLUTION_FORMATS["runimage"]  # RunImage solution layout (GrainNr at col 0)
 
 # Configuration system (extracted to laue_config.py)
@@ -937,72 +938,26 @@ class EnhancedImageProcessor:
              logger.error(f"Error reading indexing result files: {str(e)}")
              return {"success": False, "error": f"Failed to read indexing results: {str(e)}"}
 
-        # --- Calculate unique spots per orientation ---
-        orientation_unique_spots = self._calculate_unique_spots_per_orientation(
-             orientations_unfiltered, spots_unfiltered, final_labels
+        # --- Post-process: unique-spots -> sort -> filter -> spot-filter ---
+        # Single PostProcessor stage (REFACTOR_PLAN §6.5); the inline
+        # unique/sort/filter/spot-filter block lived here before.
+        pp = PostProcessor(
+            robust=bool(self.config.get("robust_filter", True)),
+            min_unique=int(self.config.get("min_good_spots", 2)),
+            min_total_spots=int(self.config.get("min_nr_spots", 5)),
+            max_angle_deg=float(self.config.get("maxAngle", 5.0)),
+            space_group=int(self.config.get("space_group", 225) or 225),
+            csl_sigmas=(3,), csl_tol_deg=3.0, fmt=_RI,
         )
-
-        # --- Sort orientations by quality score ---
-        orientations_sorted = self._sort_orientations_by_quality(
-             orientations_unfiltered, orientation_unique_spots # Pass unique spots info if needed for sorting
-        )
-
-        # --- Filter Orientations: twin/CSL-aware robust dedup (default) ---
-        # The legacy unique-spot filter deletes real Sigma3-twinned crystals:
-        # the higher-goodness partner claims the shared coincident reflections
-        # (winner-take-all), starving the other of *unique* spots so it is
-        # dropped despite matching many spots.  filter_orientations_robust
-        # (a) keeps distinct solutions clearing an evidence floor, (b) merges
-        # near-duplicates by symmetry-reduced disorientation, and (c) EXEMPTS
-        # CSL/twin-related solutions (e.g. Sigma3 60deg/<111>) from the
-        # unique-spot test.  Set RobustFilter 0 in the config for legacy.
-        min_unique_spots_required = self.config.get("min_good_spots", 2) # MinGoodSpots
-        use_robust = bool(self.config.get("robust_filter", True))
-        sg = int(self.config.get("space_group", 225) or 225)
-        is_cubic = 195 <= sg <= 230
-
-        if orientations_sorted.size > 0 and len(orientations_sorted.shape) == 1:
-            orientations_sorted = np.expand_dims(orientations_sorted, axis=0)
-
-        kept_grain_nrs = set()
-        filtered_out_count = 0
-
-        # Select the orientation-filter strategy from config (REFACTOR_PLAN
-        # §4c/§6.2).  The implementations live in laue_index.filtering — the
-        # single source of truth; the old inline legacy loop here is gone.
-        if use_robust:
-            min_total = int(self.config.get("min_nr_spots", 5))
-            max_ang = float(self.config.get("maxAngle", 5.0))
-            logger.info(
-                f"Robust (twin/CSL-aware) orientation filter: min_unique="
-                f"{min_unique_spots_required}, min_total={min_total}, "
-                f"max_angle={max_ang}, cubic={is_cubic}")
-            ofilter = RobustCSLAwareFilter(
-                min_unique=min_unique_spots_required, min_total_spots=min_total,
-                max_angle_deg=max_ang, csl_sigmas=(3,), csl_tol_deg=3.0,
-                cubic=is_cubic, fmt=_RI)
-        else:
-            logger.info(f"Legacy filter: dropping orientations with <{min_unique_spots_required} unique spots...")
-            ofilter = LegacyUniqueSpotFilter(
-                min_unique=min_unique_spots_required, fmt=_RI)
-
-        if orientations_sorted.size == 0:
-            filtered_orientations = orientations_sorted.copy()
-        else:
-            filtered_orientations = ofilter(orientations_sorted, orientation_unique_spots)
-            if filtered_orientations.size > 0:
-                kept_grain_nrs = set(filtered_orientations[:, _RI.grain].astype(int))
-            filtered_out_count = len(orientations_sorted) - len(filtered_orientations)
-
-        # --- Filter Spots based on kept Grain Numbers ---
-        if spots_unfiltered.size > 0 and kept_grain_nrs:
-            filtered_spots = spots_unfiltered[np.isin(spots_unfiltered[:, _RI.spot_grain].astype(int), list(kept_grain_nrs))]
-        else:
-            filtered_spots = np.empty((0, spots_unfiltered.shape[1])) # Keep shape if empty
-
-
-        logger.info(f"Filtered out {filtered_out_count} orientations. Kept {len(filtered_orientations)} orientations.")
-        logger.info(f"Filtered spots: {len(filtered_spots)} spots remain.")
+        ppr = pp(orientations_unfiltered, spots_unfiltered, final_labels)
+        orientations_sorted = ppr.orientations_sorted
+        filtered_orientations = ppr.filtered_orientations
+        filtered_spots = ppr.filtered_spots
+        orientation_unique_spots = ppr.unique_spot_info
+        logger.info(
+            f"Post-process ({'robust' if self.config.get('robust_filter', True) else 'legacy'} "
+            f"filter): kept {len(filtered_orientations)} of {len(orientations_sorted)} "
+            f"orientations; {len(filtered_spots)} spots remain.")
 
         # --- Save Filtered Orientations to Text File ---
         filtered_solutions_file = f'{output_path}.bin.solutions_filtered.txt'

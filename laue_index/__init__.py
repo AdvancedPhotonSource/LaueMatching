@@ -10,5 +10,9 @@ publish)`` until a common leaf can be extracted.
 Public API grows as modules land.  Today: typed solution records (§6.1).
 """
 from .records import Solution, SolutionFormat, SOLUTION_FORMATS, parse_solutions
+from .postprocess import PostProcessor, PostProcessResult
 
-__all__ = ["Solution", "SolutionFormat", "SOLUTION_FORMATS", "parse_solutions"]
+__all__ = [
+    "Solution", "SolutionFormat", "SOLUTION_FORMATS", "parse_solutions",
+    "PostProcessor", "PostProcessResult",
+]
