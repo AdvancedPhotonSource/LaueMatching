@@ -48,6 +48,17 @@ PYTHON_PATH = sys.executable
 # Shared streaming utilities (also used by laue_image_server / laue_postprocess)
 import laue_stream_utils as lsu
 import laue_visualization as lv
+import laue_simulation
+
+# Typed solution-table column map (REFACTOR_PLAN §6.1): replaces positional
+# "magic numbers" (OM=22:31, NMatches=5, grain=0) with named fields.
+if INSTALL_PATH not in sys.path:
+    sys.path.insert(0, INSTALL_PATH)
+from laue_index.records import SOLUTION_FORMATS
+from laue_index.filtering import LegacyUniqueSpotFilter, RobustCSLAwareFilter
+from laue_index.indexer import run_indexer
+from laue_index.postprocess import PostProcessor
+_RI = SOLUTION_FORMATS["runimage"]  # RunImage solution layout (GrainNr at col 0)
 
 # Configuration system (extracted to laue_config.py)
 from laue_config import (
@@ -229,6 +240,94 @@ class EnhancedImageProcessor:
         return lsu.calculate_gaussian_sigma(centers, pixel_size, distance, orient_spacing)
 
 
+    def _segment(self, thresholded_image, output_path, output_h5, data_group, progress):
+        """Connected-components -> small-component filter -> Gaussian blur ->
+        optional watershed.  Writes intermediate datasets into *data_group* and
+        the blurred indexing input to <output_path>.bin.  Returns the
+        segmentation outputs, or {"stop": <result>} on an early exit.
+        (Extracted verbatim from process_image, REFACTOR_PLAN §6.5.)"""
+        labels, bboxes, areas, nlabels = self.find_connected_components(thresholded_image)
+        if nlabels <= 1:
+            logger.warning("No connected components found after thresholding. Stopping processing for this image.")
+            progress.complete("No components found")
+            data_group.create_dataset('cleaned_data_threshold_labels_unfiltered', data=labels)
+            data_group.create_dataset('cleaned_data_threshold_filtered', data=thresholded_image)
+            data_group.create_dataset('cleaned_data_threshold_filtered_labels', data=labels)
+            data_group.create_dataset('component_centers', data=np.empty((0, 4)))
+            data_group.create_dataset('input_blurred', data=thresholded_image.astype(np.double))
+            return {"stop": {"success": True, "message": "No components found", "output_h5": output_h5}}
+
+        data_group.create_dataset('cleaned_data_threshold_labels_unfiltered', data=labels, dtype=np.int32)
+        progress.update(1, "Connected components found")
+
+        filtered_thresholded_image, filtered_labels, centers = self.filter_small_components(
+            thresholded_image, labels, bboxes, areas, nlabels
+        )
+        data_group.create_dataset('cleaned_data_threshold_filtered', data=filtered_thresholded_image, dtype=np.uint16)
+        data_group.create_dataset('cleaned_data_threshold_filtered_labels', data=filtered_labels, dtype=np.int32)
+        if centers:
+            centers_array = np.array([[float(c[0]), float(c[1][0]), float(c[1][1]), float(c[2])] for c in centers], dtype=np.float64)
+        else:
+            centers_array = np.empty((0, 4), dtype=np.float64)
+        data_group.create_dataset('component_centers', data=centers_array)
+        progress.update(1, "Small components filtered")
+
+        if not centers:
+            logger.warning("No components remained after filtering small areas. Stopping processing.")
+            progress.complete("No components left after filtering")
+            data_group.create_dataset('input_blurred', data=filtered_thresholded_image.astype(np.double))
+            return {"stop": {"success": True, "message": "No components left after filtering", "output_h5": output_h5}}
+
+        gauss_sigma = self.calculate_gaussian_width(
+            centers,
+            self.config.get("px_x", 0.2),
+            self.config.get("distance", 0.513),
+            self.config.get("orientation_spacing", 0.4)
+        )
+        blurred_image = ndimg.gaussian_filter(filtered_thresholded_image.astype(np.double), gauss_sigma)
+        data_group.create_dataset('input_blurred', data=blurred_image)
+
+        indexing_input_file = f"{output_path}.bin"
+        try:
+            blurred_image.astype(np.double).tofile(indexing_input_file)
+            logger.info(f"Image for indexing saved to {indexing_input_file}")
+        except Exception as e:
+            logger.error(f"Error saving blurred image for indexing: {e}")
+            progress.complete("Failed saving indexing input")
+            return {"stop": {"success": False, "error": f"Failed to save indexing input: {e}"}}
+
+        progress.update(1, "Image blurred")
+
+        watershed_mask = filtered_thresholded_image > 0
+        if self.config.get("image_processing").watershed_enabled:
+            if np.any(watershed_mask):
+                logger.info("Performing watershed segmentation...")
+                try:
+                    watershed_labels = skimage.segmentation.watershed(
+                        -blurred_image, markers=filtered_labels,
+                        mask=watershed_mask, connectivity=2)
+                    final_labels = watershed_labels
+                    max_labels = np.max(watershed_labels)
+                    logger.info(f'Watershed segmentation found {max_labels} regions')
+                    data_group.create_dataset('watershed_labels', data=watershed_labels, dtype=np.int32)
+                except Exception as e:
+                    logger.error(f"Watershed segmentation failed: {e}. Using filtered labels instead.")
+                    final_labels = filtered_labels
+                    max_labels = np.max(final_labels) if final_labels.size > 0 else 0
+            else:
+                logger.warning("Image is empty after filtering small components. Skipping watershed.")
+                final_labels = filtered_labels
+                max_labels = np.max(final_labels) if final_labels.size > 0 else 0
+        else:
+            final_labels = filtered_labels
+            max_labels = np.max(final_labels) if final_labels.size > 0 else 0
+            logger.info('Watershed segmentation was disabled')
+
+        progress.update(1, "Segmentation completed")
+        return {"final_labels": final_labels, "max_labels": max_labels,
+                "blurred_image": blurred_image, "centers": centers,
+                "filtered_thresholded_image": filtered_thresholded_image}
+
     def process_image(self, image_path: str, override_thresh: int = 0) -> Dict[str, Any]:
         """
         Process a single image file.
@@ -332,103 +431,15 @@ class EnhancedImageProcessor:
             logger.debug(f"Initial data saved to {output_h5}")
 
             # --- Continue processing ---
-            labels, bboxes, areas, nlabels = self.find_connected_components(thresholded_image)
-            # Handle case where no components are found (except background)
-            if nlabels <= 1:
-                 logger.warning("No connected components found after thresholding. Stopping processing for this image.")
-                 progress.complete("No components found")
-                 # Add empty datasets for consistency?
-                 data_group.create_dataset('cleaned_data_threshold_labels_unfiltered', data=labels)
-                 data_group.create_dataset('cleaned_data_threshold_filtered', data=thresholded_image) # No filtering done
-                 data_group.create_dataset('cleaned_data_threshold_filtered_labels', data=labels) # No filtering done
-                 data_group.create_dataset('component_centers', data=np.empty((0, 4)))
-                 data_group.create_dataset('input_blurred', data=thresholded_image.astype(np.double))
-                 return {"success": True, "message": "No components found", "output_h5": output_h5}
-
-            data_group.create_dataset('cleaned_data_threshold_labels_unfiltered', data=labels, dtype=np.int32)
-            progress.update(1, "Connected components found")
-
-            # --- Step 5: Filter small components ---
-            filtered_thresholded_image, filtered_labels, centers = self.filter_small_components(
-                thresholded_image, labels, bboxes, areas, nlabels
-            )
-            # 'filtered_thresholded_image' is the thresholded image with small components removed
-
-            data_group.create_dataset('cleaned_data_threshold_filtered', data=filtered_thresholded_image, dtype=np.uint16)
-            data_group.create_dataset('cleaned_data_threshold_filtered_labels', data=filtered_labels, dtype=np.int32)
-            # Store component centers properly
-            if centers:
-                 centers_array = np.array([[float(c[0]), float(c[1][0]), float(c[1][1]), float(c[2])] for c in centers], dtype=np.float64)
-            else:
-                 centers_array = np.empty((0, 4), dtype=np.float64)
-            data_group.create_dataset('component_centers', data=centers_array)
-            progress.update(1, "Small components filtered")
-
-            # Check if any components remain after filtering
-            if not centers:
-                 logger.warning("No components remained after filtering small areas. Stopping processing.")
-                 progress.complete("No components left after filtering")
-                 # Save blurred image as just the filtered_thresholded (which is likely all zero)
-                 data_group.create_dataset('input_blurred', data=filtered_thresholded_image.astype(np.double))
-                 return {"success": True, "message": "No components left after filtering", "output_h5": output_h5}
-
-
-            # --- Step 6: Calculate Gaussian blur width and apply blur ---
-            gauss_sigma = self.calculate_gaussian_width(
-                centers,
-                self.config.get("px_x", 0.2),
-                self.config.get("distance", 0.513),
-                self.config.get("orientation_spacing", 0.4)
-            )
-            # Apply Gaussian blur to the *filtered thresholded* image intensities
-            # Use float type for blurring
-            blurred_image = ndimg.gaussian_filter(filtered_thresholded_image.astype(np.double), gauss_sigma)
-            data_group.create_dataset('input_blurred', data=blurred_image)
-
-            # Save blurred image for indexing executable (using .bin extension as before)
-            indexing_input_file = f"{output_path}.bin"
-            try:
-                 blurred_image.astype(np.double).tofile(indexing_input_file)
-                 logger.info(f"Image for indexing saved to {indexing_input_file}")
-            except Exception as e:
-                 logger.error(f"Error saving blurred image for indexing: {e}")
-                 progress.complete("Failed saving indexing input")
-                 return {"success": False, "error": f"Failed to save indexing input: {e}"}
-
-            progress.update(1, "Image blurred")
-
-            # --- Step 7: Perform watershed segmentation if enabled ---
-            watershed_mask = filtered_thresholded_image > 0 # Mask based on filtered thresholded image
-            if self.config.get("image_processing").watershed_enabled:
-                if np.any(watershed_mask): # Check if mask is not empty
-                     logger.info("Performing watershed segmentation...")
-                     # Use negative blurred image as the landscape
-                     # Use filtered labels as markers
-                     try:
-                          watershed_labels = skimage.segmentation.watershed(
-                              -blurred_image,         # Energy landscape (inverted intensity)
-                              markers=filtered_labels,  # Seed markers from connected components
-                              mask=watershed_mask,      # Apply watershed only within the mask
-                              connectivity=2            # 8-connectivity
-                          )
-                          final_labels = watershed_labels
-                          max_labels = np.max(watershed_labels)
-                          logger.info(f'Watershed segmentation found {max_labels} regions')
-                          data_group.create_dataset('watershed_labels', data=watershed_labels, dtype=np.int32)
-                     except Exception as e:
-                          logger.error(f"Watershed segmentation failed: {e}. Using filtered labels instead.")
-                          final_labels = filtered_labels
-                          max_labels = np.max(final_labels) if final_labels.size > 0 else 0
-                else:
-                    logger.warning("Image is empty after filtering small components. Skipping watershed.")
-                    final_labels = filtered_labels # Fallback to filtered labels
-                    max_labels = np.max(final_labels) if final_labels.size > 0 else 0
-            else:
-                final_labels = filtered_labels
-                max_labels = np.max(final_labels) if final_labels.size > 0 else 0
-                logger.info('Watershed segmentation was disabled')
-
-            progress.update(1, "Segmentation completed")
+            seg = self._segment(thresholded_image, output_path, output_h5,
+                                data_group, progress)
+            if "stop" in seg:
+                return seg["stop"]
+            final_labels = seg["final_labels"]
+            max_labels = seg["max_labels"]
+            blurred_image = seg["blurred_image"]
+            centers = seg["centers"]
+            filtered_thresholded_image = seg["filtered_thresholded_image"]
 
             # --- Step 8: Run indexing and process results ---
             # Pass the *filtered thresholded* image for visualization context if needed
@@ -586,50 +597,28 @@ class EnhancedImageProcessor:
         """
         compute_type = self.config.get("processing_type", "CPU").upper()
         ncpus = self.config.get("num_cpus", 1)
-
-        # Find executable path relative to repo root (one level above scripts/)
-        script_dir = os.path.dirname(os.path.realpath(__file__))
-        repo_root = os.path.dirname(script_dir)
-        build_dir = os.path.join(repo_root, 'bin')
-
-        # Choose the appropriate executable
         do_forward = self.config.get("do_forward", False)
-        if compute_type == 'GPU' and not do_forward:
-             executable_name = 'LaueMatchingGPU'
-        else:
-             executable_name = 'LaueMatchingCPU'
-             if compute_type == 'GPU' and do_forward:
-                 logger.warning("GPU requested but DoFwd is enabled. Using CPU implementation (LaueMatchingCPU).")
-             elif compute_type != 'CPU':
-                 logger.warning(f"Processing type '{compute_type}' not recognized or incompatible. Using CPU implementation.")
+        repo_root = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 
-        executable_path = os.path.join(build_dir, executable_name)
-
-        # Check if executable exists
-        if not os.path.exists(executable_path):
-             logger.error(f"Indexing executable not found at: {executable_path}")
-             logger.error("Please ensure the code is compiled (e.g., run 'make' in the build directory).")
-             return {"success": False, "error": "Indexing executable not found"}
-
-        # --- Prepare required input files ---
+        # --- Prepare required input files (orchestration) ---
         config_file = self.config.config_file
         orient_db_file = self.config.get("orientation_file", "orientations.bin")
         hkl_file = self.config.get("hkl_file", "hkls.bin")
-        indexing_input_image = f"{output_path}.bin" # The blurred image saved to file
+        indexing_input_image = f"{output_path}.bin"  # blurred image saved to file
 
         # Ensure orientation database exists (copy default if needed)
         if not os.path.exists(orient_db_file):
-            default_orient_db = os.path.join(INSTALL_PATH, '100MilOrients.bin') # Default name/location
+            default_orient_db = os.path.join(INSTALL_PATH, '100MilOrients.bin')
             if os.path.exists(default_orient_db):
-                 logger.info(f"Orientation database '{orient_db_file}' not found. Copying default from '{default_orient_db}'.")
-                 try:
-                      shutil.copy2(default_orient_db, orient_db_file)
-                 except Exception as e:
-                      logger.error(f"Failed to copy default orientation database: {e}")
-                      return {"success": False, "error": "Orientation database missing and copy failed"}
+                logger.info(f"Orientation database '{orient_db_file}' not found. Copying default from '{default_orient_db}'.")
+                try:
+                    shutil.copy2(default_orient_db, orient_db_file)
+                except Exception as e:
+                    logger.error(f"Failed to copy default orientation database: {e}")
+                    return {"success": False, "error": "Orientation database missing and copy failed"}
             else:
-                 logger.error(f"Orientation database '{orient_db_file}' not found, and default DB '{default_orient_db}' is also missing.")
-                 return {"success": False, "error": "Orientation database missing"}
+                logger.error(f"Orientation database '{orient_db_file}' not found, and default DB '{default_orient_db}' is also missing.")
+                return {"success": False, "error": "Orientation database missing"}
 
         # Generate HKL file if it doesn't exist
         if not os.path.exists(hkl_file):
@@ -638,233 +627,26 @@ class EnhancedImageProcessor:
             if not hkl_gen_result["success"]:
                 return {"success": False, "error": f"Failed to generate HKL file: {hkl_gen_result.get('error', 'Unknown')}"}
 
-        # --- Set up environment for executable (LD_LIBRARY_PATH) ---
-        env = dict(os.environ)
-        lib_path_nlopt = os.path.join(repo_root, 'LIBS', 'NLOPT', 'lib')
-        lib_path_nlopt64 = os.path.join(repo_root, 'LIBS', 'NLOPT', 'lib64')
-        current_ld_path = env.get('LD_LIBRARY_PATH', '')
-        # Prepend NLopt paths
-        env['LD_LIBRARY_PATH'] = f"{lib_path_nlopt}:{lib_path_nlopt64}:{current_ld_path}"
-
-        # --- Construct and Run the Indexing Command ---
-        indexing_cmd = [
-             executable_path,
-             config_file,
-             orient_db_file,
-             hkl_file,
-             indexing_input_image,
-             str(ncpus)
-        ]
-        logger.info(f'Running indexing command: {" ".join(indexing_cmd)}')
-        stdout_log = f'{output_path}.LaueMatching_stdout.txt'
-        stderr_log = f'{output_path}.LaueMatching_stderr.txt'
-
-        try:
-             # Use subprocess.run for better control
-             process = subprocess.run(
-                 indexing_cmd,
-                 env=env,
-                 capture_output=True, # Capture stdout/stderr
-                 text=True,           # Decode as text
-                 check=False           # Don't raise exception on non-zero exit code immediately
-             )
-
-             # Save stdout/stderr regardless of exit code
-             with open(stdout_log, 'w') as f_out:
-                 f_out.write(process.stdout)
-             with open(stderr_log, 'w') as f_err:
-                 f_err.write(process.stderr)
-
-             # Check return code
-             if process.returncode == 0:
-                 logger.info(f"Indexing command completed successfully (exit code 0). Output saved to {stdout_log}")
-                 return {"success": True}
-             else:
-                 logger.error(f"Indexing command failed with exit code {process.returncode}.")
-                 logger.error(f"Check logs for details: {stdout_log} and {stderr_log}")
-                 logger.error(f"Stderr tail:\n{process.stderr[-500:]}") # Show last part of stderr
-                 return {
-                     "success": False,
-                     "error": f"Indexing command failed with code {process.returncode}"
-                 }
-
-        except FileNotFoundError:
-             logger.error(f"Executable not found at {executable_path} when trying to run.")
-             return {"success": False, "error": "Indexing executable not found during execution"}
-        except Exception as e:
-             logger.error(f"An unexpected error occurred while running indexing: {str(e)}")
-             # Save any partial output if possible
-             if 'process' in locals() and hasattr(process, 'stdout'):
-                 with open(stdout_log, 'a') as f_out: f_out.write(f"\n\nERROR DURING EXECUTION: {e}\n{process.stdout}")
-             if 'process' in locals() and hasattr(process, 'stderr'):
-                 with open(stderr_log, 'a') as f_err: f_err.write(f"\n\nERROR DURING EXECUTION: {e}\n{process.stderr}")
-             return {"success": False, "error": f"Unexpected error during indexing execution: {e}"}
-
-
-    def _run_simulation(
-        self,
-        output_path: str, # Base path e.g. results/image_001
-        orientations: np.ndarray, # Filtered orientations
-        centers: List,
-        filtered_thresholded_image: np.ndarray
-    ) -> Dict[str, Any]:
-        """
-        Run diffraction simulation (GenerateSimulation.py) for the indexed orientations.
-
-        Args:
-            output_path: Base path for output files (e.g., results/image_001)
-            orientations: Filtered orientation data array
-            centers: List of center points
-            filtered_thresholded_image: Filtered thresholded experimental image for context
-
-        Returns:
-            Dictionary with simulation results
-        """
-        logger.info("Running diffraction simulation (GenerateSimulation.py)")
-        sim_config = self.config.get("simulation")
-        if not sim_config:
-             logger.error("Simulation configuration missing. Cannot run simulation.")
-             return {"success": False, "error": "Simulation configuration missing"}
-
-        if orientations.size == 0:
-             logger.info("No orientations provided for simulation. Skipping.")
-             return {"success": True, "message": "No orientations for simulation"}
-
-        try:
-            # --- Prepare inputs for GenerateSimulation.py ---
-            # 1. Configuration file (use the main one)
-            main_config_file = self.config.config_file
-
-            # 2. Orientation file (create temporary text file)
-            sim_orient_input_file = f"{output_path}.indexed_orientations_for_sim.txt"
-            with open(sim_orient_input_file, 'w') as f:
-                # Write header? Assume GenerateSimulation doesn't need one.
-                if len(orientations.shape) == 1: # Handle single orientation case
-                    orientations = np.expand_dims(orientations, axis=0)
-
-                for orient in orientations:
-                    # Extract orientation matrix (columns 22-30) and write space-separated
-                    matrix_elements = orient[22:31]
-                    f.write(" ".join(map(str, matrix_elements)) + "\n")
-            logger.debug(f"Created temporary orientation file for simulation: {sim_orient_input_file}")
-
-            # 3. Output file base name for simulation (HDF5)
-            sim_output_h5 = f"{output_path}.simulation.h5" # Explicit H5 extension
-
-            # 4. Skip percentage
-            skip_percentage = sim_config.skip_percentage
-
-            # --- Construct and Run the Simulation Command ---
-            sim_script_path = os.path.join(SCRIPT_DIR, 'GenerateSimulation.py')
-            if not os.path.exists(sim_script_path):
-                 logger.error(f"Simulation script not found: {sim_script_path}")
-                 return {"success": False, "error": "GenerateSimulation.py not found"}
-
-            sim_cmd = [
-                PYTHON_PATH, # Use the same python executable
-                sim_script_path,
-                "-configFile", main_config_file,
-                "-orientationFile", sim_orient_input_file,
-                "-outputFile", sim_output_h5,
-                "-skipPercentage", str(skip_percentage)
-            ]
-
-            logger.info(f"Running simulation command: {' '.join(sim_cmd)}")
-            sim_stdout_log = f'{output_path}.simulation_stdout.txt'
-            sim_stderr_log = f'{output_path}.simulation_stderr.txt' # Capture stderr too
-
-            process = subprocess.run(
-                sim_cmd,
-                capture_output=True,
-                text=True,
-                check=False # Check manually
-            )
-
-            # Save simulation stdout/stderr
-            with open(sim_stdout_log, 'w') as f_out:
-                f_out.write(process.stdout)
-            with open(sim_stderr_log, 'w') as f_err:
-                 f_err.write(process.stderr) # Save stderr
-
-            # Check return code
-            if process.returncode != 0:
-                logger.error(f"Simulation command failed with exit code {process.returncode}.")
-                logger.error(f"Check logs: {sim_stdout_log} and {sim_stderr_log}")
-                logger.error(f"Stderr tail:\n{process.stderr[-500:]}")
-                # Clean up temporary orientation file
-                # if os.path.exists(sim_orient_input_file): os.remove(sim_orient_input_file)
-                return {"success": False, "error": f"Simulation command failed with code {process.returncode}"}
-
-            logger.info(f"Simulation command completed successfully. Output: {sim_output_h5}")
-
-            # --- Load simulation results from HDF5 ---
-            simulation_results = {}
-            if os.path.exists(sim_output_h5):
-                try:
-                    with h5py.File(sim_output_h5, 'r') as h5f:
-                        # Adjust paths based on GenerateSimulation.py output structure
-                        # Assuming structure like /entry1/spots, /entry1/data/data, /entry1/recips
-                        entry_group = 'entry1' # Or determine dynamically if possible
-                        if entry_group not in h5f:
-                             entry_group = 'entry' # Fallback
-                        if f'/{entry_group}/spots' in h5f:
-                            simulation_results["simulated_spots"] = np.array(h5f[f'/{entry_group}/spots'][()])
-                        if f'/{entry_group}/data/data' in h5f:
-                             simulation_results["simulated_images"] = {
-                                 "simulated_image": np.array(h5f[f'/{entry_group}/data/data'][()])
-                             }
-                        if f'/{entry_group}/recips' in h5f:
-                            simulation_results["recips"] = np.array(h5f[f'/{entry_group}/recips'][()])
-
-                    logger.info(f"Loaded simulation results from {sim_output_h5}")
-
-                    # Create comparison visualization if enabled
-                    vis_config = self.config.get("visualization")
-                    if vis_config and vis_config.enable_visualization:
-                        self._create_simulation_comparison_visualization(
-                            output_path,
-                            orientations, # Pass filtered orientations
-                            simulation_results.get("simulated_spots", np.array([])),
-                            simulation_results.get("simulated_images", {}).get("simulated_image", np.array([])),
-                            filtered_thresholded_image # Pass filtered experimental image
-                        )
-
-                    simulation_results["success"] = True
-
-                except Exception as e:
-                    logger.error(f"Error loading simulation results from HDF5 '{sim_output_h5}': {str(e)}")
-                    simulation_results = {"success": False, "error": f"Failed to load simulation HDF5 results: {str(e)}"}
-            else:
-                 logger.error(f"Simulation output file not found: {sim_output_h5}")
-                 simulation_results = {"success": False, "error": "Simulation output HDF5 file not found"}
-
-            # Clean up temporary orientation file
-            # if os.path.exists(sim_orient_input_file): os.remove(sim_orient_input_file)
-
-            return simulation_results
-
-        except Exception as e:
-            logger.error(f"An unexpected error occurred during simulation setup or execution: {str(e)}")
-            # Clean up temporary orientation file if it exists
-            # if 'sim_orient_input_file' in locals() and os.path.exists(sim_orient_input_file):
-            #     os.remove(sim_orient_input_file)
-            return {"success": False, "error": f"Unexpected error during simulation: {e}"}
-
-
-    def _create_simulation_comparison_visualization(
-        self,
-        output_path: str,
-        indexed_orientations: np.ndarray,
-        simulated_spots: np.ndarray,
-        simulated_image: np.ndarray,
-        filtered_exp_image: np.ndarray,
-    ) -> None:
-        """Delegate to lv.create_simulation_comparison_visualization."""
-        lv.create_simulation_comparison_visualization(
-            output_path, indexed_orientations, simulated_spots,
-            simulated_image, filtered_exp_image,
+        # --- Run the indexing binary (Indexer stage, REFACTOR_PLAN §6.5) ---
+        result = run_indexer(
+            repo_root=repo_root, config_file=config_file,
+            orient_db_file=orient_db_file, hkl_file=hkl_file,
+            image_bin=indexing_input_image, ncpus=ncpus, output_path=output_path,
+            compute_type=compute_type, do_forward=do_forward,
         )
+        if result.success:
+            return {"success": True}
+        return {"success": False, "error": result.error}
 
+
+    def _run_simulation(self, output_path, orientations, centers,
+                        filtered_thresholded_image):
+        """Run diffraction simulation for the indexed orientations.
+
+        Thin delegation to laue_simulation.run_simulation (REFACTOR_PLAN §6.5)."""
+        return laue_simulation.run_simulation(
+            self.config, output_path, orientations, centers,
+            filtered_thresholded_image)
 
     def _generate_hkl_file(self) -> Dict[str, Any]:
         """
@@ -1001,77 +783,26 @@ class EnhancedImageProcessor:
              logger.error(f"Error reading indexing result files: {str(e)}")
              return {"success": False, "error": f"Failed to read indexing results: {str(e)}"}
 
-        # --- Calculate unique spots per orientation ---
-        orientation_unique_spots = self._calculate_unique_spots_per_orientation(
-             orientations_unfiltered, spots_unfiltered, final_labels
+        # --- Post-process: unique-spots -> sort -> filter -> spot-filter ---
+        # Single PostProcessor stage (REFACTOR_PLAN §6.5); the inline
+        # unique/sort/filter/spot-filter block lived here before.
+        pp = PostProcessor(
+            robust=bool(self.config.get("robust_filter", True)),
+            min_unique=int(self.config.get("min_good_spots", 2)),
+            min_total_spots=int(self.config.get("min_nr_spots", 5)),
+            max_angle_deg=float(self.config.get("maxAngle", 5.0)),
+            space_group=int(self.config.get("space_group", 225) or 225),
+            csl_sigmas=(3,), csl_tol_deg=3.0, fmt=_RI,
         )
-
-        # --- Sort orientations by quality score ---
-        orientations_sorted = self._sort_orientations_by_quality(
-             orientations_unfiltered, orientation_unique_spots # Pass unique spots info if needed for sorting
-        )
-
-        # --- Filter Orientations: twin/CSL-aware robust dedup (default) ---
-        # The legacy unique-spot filter deletes real Sigma3-twinned crystals:
-        # the higher-goodness partner claims the shared coincident reflections
-        # (winner-take-all), starving the other of *unique* spots so it is
-        # dropped despite matching many spots.  filter_orientations_robust
-        # (a) keeps distinct solutions clearing an evidence floor, (b) merges
-        # near-duplicates by symmetry-reduced disorientation, and (c) EXEMPTS
-        # CSL/twin-related solutions (e.g. Sigma3 60deg/<111>) from the
-        # unique-spot test.  Set RobustFilter 0 in the config for legacy.
-        min_unique_spots_required = self.config.get("min_good_spots", 2) # MinGoodSpots
-        use_robust = bool(self.config.get("robust_filter", True))
-        sg = int(self.config.get("space_group", 225) or 225)
-        is_cubic = 195 <= sg <= 230
-
-        if orientations_sorted.size > 0 and len(orientations_sorted.shape) == 1:
-            orientations_sorted = np.expand_dims(orientations_sorted, axis=0)
-
-        kept_grain_nrs = set()
-        filtered_out_count = 0
-
-        if orientations_sorted.size == 0:
-            filtered_orientations = orientations_sorted.copy()
-        elif use_robust:
-            min_total = int(self.config.get("min_nr_spots", 5))
-            max_ang = float(self.config.get("maxAngle", 5.0))
-            logger.info(
-                f"Robust (twin/CSL-aware) orientation filter: min_unique="
-                f"{min_unique_spots_required}, min_total={min_total}, "
-                f"max_angle={max_ang}, cubic={is_cubic}")
-            filtered_orientations = lsu.filter_orientations_robust(
-                orientations_sorted, orientation_unique_spots,
-                min_unique=min_unique_spots_required,
-                grain_col=0, quality_col=4, om_start_col=22, nmatches_col=5,
-                max_angle_deg=max_ang, min_total_spots=min_total,
-                csl_sigmas=(3,), csl_tol_deg=3.0, cubic=is_cubic,
-            )
-            if filtered_orientations.size > 0:
-                kept_grain_nrs = set(filtered_orientations[:, 0].astype(int))
-            filtered_out_count = len(orientations_sorted) - len(filtered_orientations)
-        else:
-            logger.info(f"Legacy filter: dropping orientations with <{min_unique_spots_required} unique spots...")
-            indices_to_keep = []
-            for i, orientation in enumerate(orientations_sorted):
-                grain_nr = int(orientation[0])
-                unique_spot_data = orientation_unique_spots.get(grain_nr)
-                if unique_spot_data and unique_spot_data["unique_label_count"] >= min_unique_spots_required:
-                    indices_to_keep.append(i)
-                    kept_grain_nrs.add(grain_nr)
-                else:
-                    filtered_out_count += 1
-            filtered_orientations = orientations_sorted[indices_to_keep]
-
-        # --- Filter Spots based on kept Grain Numbers ---
-        if spots_unfiltered.size > 0 and kept_grain_nrs:
-            filtered_spots = spots_unfiltered[np.isin(spots_unfiltered[:, 0].astype(int), list(kept_grain_nrs))]
-        else:
-            filtered_spots = np.empty((0, spots_unfiltered.shape[1])) # Keep shape if empty
-
-
-        logger.info(f"Filtered out {filtered_out_count} orientations. Kept {len(filtered_orientations)} orientations.")
-        logger.info(f"Filtered spots: {len(filtered_spots)} spots remain.")
+        ppr = pp(orientations_unfiltered, spots_unfiltered, final_labels)
+        orientations_sorted = ppr.orientations_sorted
+        filtered_orientations = ppr.filtered_orientations
+        filtered_spots = ppr.filtered_spots
+        orientation_unique_spots = ppr.unique_spot_info
+        logger.info(
+            f"Post-process ({'robust' if self.config.get('robust_filter', True) else 'legacy'} "
+            f"filter): kept {len(filtered_orientations)} of {len(orientations_sorted)} "
+            f"orientations; {len(filtered_spots)} spots remain.")
 
         # --- Save Filtered Orientations to Text File ---
         filtered_solutions_file = f'{output_path}.bin.solutions_filtered.txt'
@@ -1117,33 +848,6 @@ class EnhancedImageProcessor:
             "unique_spots_per_orientation": orientation_unique_spots, # Refers to original grain numbers
             "visualization": visualization_results
         }
-
-
-    def _calculate_unique_spots_per_orientation(
-        self,
-        orientations: np.ndarray,
-        spots: np.ndarray,
-        labels: np.ndarray
-    ) -> Dict[int, Dict]:
-        """
-        Calculate the number of unique spots/labels for each orientation,
-        prioritizing assignments based on orientation quality score.
-        """
-        result = lsu.calculate_unique_spots(orientations, spots, labels)
-        logger.info(f"Calculated unique spots/labels for {len(result)} orientations based on quality.")
-        return result
-
-
-    def _sort_orientations_by_quality(
-        self,
-        orientations: np.ndarray,
-        orientation_unique_spots: Optional[Dict[int, Dict]] = None
-    ) -> np.ndarray:
-        """Sort orientations by quality score (col 4) descending. Delegates to lsu."""
-        sorted_arr = lsu.sort_orientations_by_quality(orientations)
-        if sorted_arr.size > 0:
-            logger.info(f"Sorted {len(sorted_arr)} orientations by quality score (column 4) descending.")
-        return sorted_arr
 
 
     def _create_h5_output(

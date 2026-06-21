@@ -27,6 +27,14 @@ try:
 except ImportError:
     tqdm = None  # tqdm is optional — ProgressReporter degrades gracefully
 
+# REFACTOR_PLAN §6.4: one declarative schema drives config parse + write
+# (replaces the hand-synced elif chain + write block).  Ensure laue_index is
+# importable (repo root one level above scripts/).
+_INSTALL_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _INSTALL_PATH not in sys.path:
+    sys.path.insert(0, _INSTALL_PATH)
+from laue_index import config_schema as _schema  # noqa: E402
+
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -325,164 +333,12 @@ class ConfigurationManager:
                     logger.error(f"Error parsing line {line_num + 1} in {self.config_file}: '{line_content}' - {str(e)}")
 
     def _parse_classic_config_line(self, line: str) -> None:
-        """
-        Parse a single configuration line from classic format.
-
-        Args:
-            line: A line from the configuration file
-        """
-        # Strip inline comments: everything after '#' is a comment
-        if '#' in line:
-            line = line[:line.index('#')].strip()
-        parts = line.split()
-        if not parts:
-            return
-        key = parts[0]
-        num_parts = len(parts)
-
-        # Helper to get value or log error
-        def get_val(index, expected_type=str, expected_parts=2):
-            if num_parts >= expected_parts:
-                try:
-                    return expected_type(parts[index])
-                except (ValueError, IndexError):
-                    logger.error(f"Invalid value format for {key} on line: '{line}'. Expected {expected_type}.")
-                    raise ValueError(f"Invalid format for {key}")
-            else:
-                logger.error(f"Missing value for {key} on line: '{line}'. Expected {expected_parts-1} value(s).")
-                raise ValueError(f"Missing value for {key}")
-
-        img_proc = self.config.image_processing
-        vis_conf = self.config.visualization
-        sim_conf = self.config.simulation
-
-        try:
-            if key == 'SpaceGroup':
-                self.config.space_group = get_val(1, int)
-            elif key == 'Symmetry':
-                sym = get_val(1, str)
-                if sym not in 'FICARPB' or len(sym) != 1:
-                    logger.error('Invalid value for Symmetry, must be one character from F,I,C,A,R,P,B')
-                    raise ValueError('Invalid Symmetry')
-                self.config.symmetry = sym
-            elif key == 'LatticeParameter':
-                 if num_parts == 7:
-                    self.config.lattice_parameter = ' '.join(parts[1:7])
-                 else:
-                     logger.error(f"Incorrect number of values for LatticeParameter. Expected 6, got {num_parts-1}.")
-                     raise ValueError("Incorrect LatticeParameter format")
-            elif key == 'R_Array':
-                if num_parts == 4:
-                    self.config.r_array = ' '.join(parts[1:4])
-                else:
-                     logger.error(f"Incorrect number of values for R_Array. Expected 3, got {num_parts-1}.")
-                     raise ValueError("Incorrect R_Array format")
-            elif key == 'P_Array':
-                 if num_parts == 4:
-                    self.config.p_array = ' '.join(parts[1:4])
-                    self.config.distance = float(parts[3])
-                 else:
-                     logger.error(f"Incorrect number of values for P_Array. Expected 3, got {num_parts-1}.")
-                     raise ValueError("Incorrect P_Array format")
-            # --- Thresholding Params ---
-            elif key == 'ThresholdMethod':
-                method = get_val(1, str).lower()
-                if method in ["adaptive", "otsu", "fixed", "percentile"]:
-                    img_proc.threshold_method = method
-                else:
-                    logger.warning(f"Unknown ThresholdMethod '{parts[1]}'. Using default '{img_proc.threshold_method}'.")
-            elif key == 'Threshold':
-                img_proc.threshold_value = get_val(1, float)
-            elif key == 'ThresholdPercentile':
-                 img_proc.threshold_percentile = get_val(1, float)
-            # --- End Thresholding Params ---
-            elif key == 'MinIntensity':
-                self.config.min_intensity = get_val(1, float)
-            elif key == 'Elo':
-                self.config.elo = get_val(1, float)
-            elif key == 'Ehi':
-                self.config.ehi = get_val(1, float)
-            elif key == 'PxX':
-                self.config.px_x = get_val(1, float)
-            elif key == 'PxY':
-                self.config.px_y = get_val(1, float)
-            elif key == 'OrientationSpacing':
-                self.config.orientation_spacing = get_val(1, float)
-            elif key == 'WatershedImage':
-                img_proc.watershed_enabled = bool(get_val(1, int))
-            elif key == 'NrPxX':
-                self.config.nr_px_x = get_val(1, int)
-            elif key == 'NrPxY':
-                self.config.nr_px_y = get_val(1, int)
-            elif key == 'FilterRadius':
-                img_proc.filter_radius = get_val(1, int)
-            elif key == 'NMeadianPasses':
-                img_proc.median_passes = get_val(1, int)
-            elif key == 'MinArea':
-                img_proc.min_area = get_val(1, int)
-            elif key == 'MinGoodSpots':
-                self.config.min_good_spots = get_val(1, int)
-            elif key == 'MinNrSpots':
-                self.config.min_nr_spots = get_val(1, int)
-            elif key == 'RobustFilter':
-                self.config.robust_filter = bool(get_val(1, int))
-            elif key == 'MaxAngle':
-                self.config.maxAngle = get_val(1, float)
-            elif key == 'MaxNrLaueSpots':
-                self.config.max_laue_spots = get_val(1, int)
-            elif key == 'BatchSize':
-                self.config.batch_size = get_val(1, int)
-            elif key == 'ResultDir':
-                self.config.result_dir = get_val(1, str)
-            elif key == 'OrientationFile':
-                self.config.orientation_file = get_val(1, str)
-            elif key == 'HKLFile':
-                self.config.hkl_file = get_val(1, str)
-            elif key == 'BackgroundFile':
-                self.config.background_file = get_val(1, str)
-            elif key == 'ForwardFile':
-                self.config.forward_file = get_val(1, str)
-            elif key == 'DoFwd':
-                self.config.do_forward = bool(get_val(1, int))
-            elif key == 'EnableVisualization':
-                vis_conf.enable_visualization = bool(get_val(1, int))
-            elif key == 'EnableSimulation':
-                sim_conf.enable_simulation = bool(get_val(1, int))
-            elif key == 'SkipPercentage':
-                sim_conf.skip_percentage = get_val(1, float)
-            elif key == 'SimulationEnergies':
-                if num_parts == 3:
-                    sim_conf.energies = ' '.join(parts[1:3])
-                else:
-                     logger.error(f"Incorrect number of values for SimulationEnergies. Expected 2, got {num_parts-1}.")
-                     raise ValueError("Incorrect SimulationEnergies format")
-            # --- Image Processing Enhancements ---
-            elif key == 'EnhanceContrast':
-                img_proc.enhance_contrast = bool(get_val(1, int))
-            elif key == 'DenoiseImage':
-                img_proc.denoise_image = bool(get_val(1, int))
-            elif key == 'DenoiseStrength':
-                img_proc.denoise_strength = get_val(1, float)
-            elif key == 'EdgeEnhancement':
-                img_proc.edge_enhancement = bool(get_val(1, int))
-            # --- Keys used by other scripts ---
-            elif key in ('AStar', 'SimulationSmoothingWidth'):
-                pass  # Recognized but not used
-            # --- IndexFile metadata ---
-            elif key == 'XtalFile':
-                self.config.xtal_file = get_val(1, str)
-            elif key == 'StructureDesc':
-                self.config.structure_desc = get_val(1, str)
-            elif key == 'AtomDescription' or key == 'AtomDesctiption':
-                # Preserve the original (sic) spelling for compat with
-                # downstream parsers of the Tischler .indexFile output.
-                self.config.atom_description = line.split(None, 1)[1] if num_parts > 1 else ""
-            # --- Ignore unknown keys ---
-            else:
-                logger.warning(f"Ignoring unknown configuration key '{key}' on line: '{line}'")
-
-        except ValueError as e:
-             raise e
+        """Parse one classic-format config line via the declarative schema
+        (REFACTOR_PLAN §6.4 — replaces the hand-written elif chain)."""
+        if not _schema.parse_line(self.config, line):
+            parts = line.split()
+            key = parts[0] if parts else line
+            logger.warning(f"Ignoring unknown configuration key '{key}' on line: '{line}'")
 
     def _sync_parameters(self):
         """Ensure consistency between related parameters."""
@@ -534,86 +390,12 @@ class ConfigurationManager:
             yaml.dump(self.config.to_dict(), f, default_flow_style=False)
 
     def _write_to_text(self) -> None:
-        """Write configuration to classic text format."""
+        """Write configuration to classic text format from the declarative
+        schema (REFACTOR_PLAN §6.4 — replaces the parallel f.write block)."""
         with open(self.config_file, 'w') as f:
-            # --- Comments ---
-            f.write("# LaueMatching Configuration File\n")
-            f.write("# Generated on: " + datetime.now().strftime("%Y-%m-%d %H:%M:%S") + "\n\n")
-
-            # --- Core Crystal Parameters ---
-            f.write("# --- Crystal Parameters ---\n")
-            f.write(f"SpaceGroup         {self.config.space_group}\n")
-            f.write(f"Symmetry           {self.config.symmetry}\n")
-            f.write(f"LatticeParameter   {self.config.lattice_parameter}\n")
-            f.write(f"R_Array            {self.config.r_array}\n")
-            f.write(f"P_Array            {self.config.p_array}\n\n")
-
-            # --- Detector Parameters ---
-            f.write("# --- Detector Parameters ---\n")
-            f.write(f"NrPxX              {self.config.nr_px_x}\n")
-            f.write(f"NrPxY              {self.config.nr_px_y}\n")
-            f.write(f"PxX                {self.config.px_x}\n")
-            f.write(f"PxY                {self.config.px_y}\n")
-            f.write(f"OrientationSpacing {self.config.orientation_spacing}\n\n")
-
-            # --- HKL Generation Parameters ---
-            f.write("# --- HKL Generation Parameters ---\n")
-            f.write(f"Elo                {self.config.elo}\n")
-            f.write(f"Ehi                {self.config.ehi}\n\n")
-
-            # --- Indexing Parameters ---
-            f.write("# --- Indexing Parameters (Executable) ---\n")
-            f.write(f"MinNrSpots         {self.config.min_nr_spots}\n")
-            f.write(f"MaxNrLaueSpots     {self.config.max_laue_spots}\n")
-            f.write(f"BatchSize          {self.config.batch_size} # Indexer batch size; bounds peak RAM\n")
-            f.write(f"MaxAngle           {self.config.maxAngle}\n")
-            f.write(f"MinIntensity       {self.config.min_intensity} # (May be deprecated by threshold methods)\n\n")
-
-            # --- Filtering Parameters ---
-            f.write("# --- Orientation Filtering (Python) ---\n")
-            f.write(f"MinGoodSpots       {self.config.min_good_spots} # Min unique spots to keep orientation\n")
-            f.write(f"RobustFilter       {int(self.config.robust_filter)} # 1=twin/CSL-aware filter (keep Sigma3 twins), 0=legacy unique-spot only\n\n")
-
-            # --- Image Processing Parameters ---
-            f.write("# --- Image Processing (Python) ---\n")
-            img_proc = self.config.image_processing
-            f.write(f"ThresholdMethod     {img_proc.threshold_method} # options: adaptive, otsu, fixed, percentile\n")
-            f.write(f"Threshold           {img_proc.threshold_value} # Used only if ThresholdMethod is 'fixed'\n")
-            f.write(f"ThresholdPercentile {img_proc.threshold_percentile} # Used only if ThresholdMethod is 'percentile'\n")
-            f.write(f"MinArea             {img_proc.min_area}\n")
-            f.write(f"FilterRadius        {img_proc.filter_radius}\n")
-            f.write(f"NMeadianPasses      {img_proc.median_passes}\n")
-            f.write(f"WatershedImage      {int(img_proc.watershed_enabled)}\n")
-            f.write(f"EnhanceContrast     {int(img_proc.enhance_contrast)}\n")
-            f.write(f"DenoiseImage        {int(img_proc.denoise_image)}\n")
-            f.write(f"DenoiseStrength     {img_proc.denoise_strength}\n")
-            f.write(f"EdgeEnhancement     {int(img_proc.edge_enhancement)}\n\n")
-
-            # --- File Paths ---
-            f.write("# --- File Paths ---\n")
-            f.write(f"ResultDir          {self.config.result_dir}\n")
-            f.write(f"OrientationFile    {self.config.orientation_file} # Input orientation database\n")
-            f.write(f"HKLFile            {self.config.hkl_file}\n")
-            f.write(f"BackgroundFile     {self.config.background_file}\n")
-            f.write(f"ForwardFile        {self.config.forward_file} # Output from executable forward sim?\n\n")
-
-            # --- Processing Control ---
-            f.write("# --- Processing Control ---\n")
-            f.write(f"DoFwd              {int(self.config.do_forward)} # Enable forward sim in executable?\n")
-
-            # --- Visualization Parameters ---
-            f.write("# --- Visualization Parameters (Python) ---\n")
-            vis_config = self.config.visualization
-            f.write(f"EnableVisualization {int(vis_config.enable_visualization)}\n")
-            f.write("\n")
-
-            # --- Simulation Parameters ---
-            f.write("# --- Simulation Parameters (Python GenerateSimulation.py) ---\n")
-            sim_config = self.config.simulation
-            f.write(f"EnableSimulation   {int(sim_config.enable_simulation)}\n")
-            f.write(f"SkipPercentage     {sim_config.skip_percentage}\n")
-            f.write(f"SimulationEnergies {sim_config.energies}\n")
-            f.write("\n")
+            f.write(_schema.render_text(
+                self.config,
+                header_timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
 
     def get(self, key: str, default=None):
         """Get a configuration parameter value."""
