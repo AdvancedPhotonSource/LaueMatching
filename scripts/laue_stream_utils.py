@@ -31,6 +31,13 @@ import numpy as np
 import cv2
 import scipy.ndimage as ndimg
 
+# REFACTOR_PLAN §6.2/§6.3: the filtering/geometry/threshold implementations live
+# in the laue_index package (single source of truth); ensure it is importable
+# (repo root one level above scripts/) before the re-exports below.
+_INSTALL_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _INSTALL_PATH not in sys.path:
+    sys.path.insert(0, _INSTALL_PATH)
+
 # Optional heavy imports — gracefully degrade
 try:
     import h5py
@@ -298,349 +305,24 @@ def count_h5_frames(path: str, h5_location: str = "/entry/data/data") -> int:
 
 
 # ---------------------------------------------------------------------------
-# Image pre-processing pipeline  (mirrors RunImage.py steps 1–6)
+# Image pre-processing pipeline
+#
+# REFACTOR_PLAN §6.5: moved to laue_index.preprocess (single source of truth);
+# re-exported here so RunImage / laue_postprocess callers keep working.
 # ---------------------------------------------------------------------------
-
-def compute_background(
-    image: np.ndarray,
-    filter_radius: int = 101,
-    median_passes: int = 1,
-) -> np.ndarray:
-    """
-    Compute background via diplib median filter.
-
-    Falls back to scipy median if diplib is unavailable.
-    """
-    if filter_radius <= 0 or median_passes <= 0:
-        return np.zeros_like(image, dtype=np.float64)
-
-    if HAS_DIPLIB:
-        bg = dip.Image(image)
-        for _ in range(median_passes):
-            bg = dip.MedianFilter(bg, filter_radius)
-        return np.array(bg).astype(np.float64)
-    else:
-        # Fallback: scipy median filter (slower for large radii)
-        bg = image.astype(np.float64)
-        for _ in range(median_passes):
-            bg = ndimg.median_filter(bg, size=filter_radius)
-        return bg
-
-
-def load_background(
-    background_file: str,
-    nr_px_x: int,
-    nr_px_y: int,
-) -> np.ndarray:
-    """Load a pre-computed background from a raw binary file."""
-    expected = nr_px_x * nr_px_y * np.dtype(np.float64).itemsize
-    if background_file and os.path.exists(background_file):
-        actual = os.path.getsize(background_file)
-        if actual == expected:
-            return np.fromfile(
-                background_file, dtype=np.float64
-            ).reshape((nr_px_y, nr_px_x))
-        else:
-            logger.warning(
-                f"Background file size mismatch (expected {expected}, "
-                f"got {actual}). Ignoring."
-            )
-    return np.zeros((nr_px_y, nr_px_x), dtype=np.float64)
-
-
-def enhance_image(
-    image: np.ndarray,
-    *,
-    denoise: bool = False,
-    denoise_strength: float = 1.0,
-    contrast: bool = False,
-    edge: bool = False,
-) -> np.ndarray:
-    """
-    Apply optional image enhancements (denoise, CLAHE, edge sharpening).
-
-    All operations are skipped if skimage is unavailable.
-    """
-    if not HAS_SKIMAGE:
-        return image
-
-    enhanced = image.copy().astype(np.float32)
-
-    # 1. Denoising
-    if denoise:
-        img_min, img_max = enhanced.min(), enhanced.max()
-        if img_max > img_min:
-            norm = (enhanced - img_min) / (img_max - img_min)
-            denoised = restoration.denoise_nl_means(
-                norm, h=denoise_strength, fast_mode=True,
-                patch_size=5, patch_distance=7, channel_axis=None,
-            )
-            enhanced = (denoised * (img_max - img_min) + img_min).astype(np.float32)
-
-    # 2. Contrast (CLAHE)
-    if contrast:
-        img_min, img_max = enhanced.min(), enhanced.max()
-        if img_max > img_min:
-            norm = (enhanced - img_min) / (img_max - img_min)
-            u16 = (norm * 65535).astype(np.uint16)
-            eq = exposure.equalize_adapthist(u16, clip_limit=0.03).astype(np.float32)
-            enhanced = eq / 65535.0 * (img_max - img_min) + img_min
-
-    # 3. Edge sharpening (unsharp mask)
-    if edge:
-        blurred = filters.gaussian(enhanced, sigma=1.0)
-        enhanced = enhanced + 0.5 * (enhanced - blurred)
-        enhanced = np.maximum(enhanced, 0)
-
-    return enhanced
-
-
-def apply_threshold(
-    image: np.ndarray,
-    method: str = "adaptive",
-    fixed_value: float = 0.0,
-    percentile: float = 90.0,
-) -> Tuple[np.ndarray, float]:
-    """
-    Threshold an image, returning (thresholded_image, threshold_used).
-
-    Methods: adaptive, percentile, otsu, fixed.
-    """
-    if method == "percentile":
-        thresh = np.percentile(image.ravel(), percentile)
-    elif method == "otsu" and HAS_SKIMAGE:
-        thresh = filters.threshold_otsu(image)
-    elif method == "fixed":
-        thresh = fixed_value
-    else:
-        # adaptive (default): robust per-frame NOISE-FLOOR threshold.
-        #
-        # The previous formula  max(60*(1 + std//60), 1)  used the whole-image
-        # std and a coarse 60-count step, giving ~240 for typical frames.  That
-        # is an (almost) fixed floor: faint frames (e.g. weak end-of-scan Laue
-        # patterns at ~1/3 intensity) have real Bragg spots BELOW 240, so they
-        # were zeroed and the frame failed to index even though the pattern was
-        # present.  Instead, estimate the noise floor robustly from the nonzero
-        # (typically background-subtracted) pixels and threshold a few sigma
-        # above it, so the cut scales with each frame's own noise:
-        #     thresh = median(nz) + k * 1.4826 * MAD(nz)
-        # Validated on Ni indent data: recovers faint frames (0 -> 8 matched
-        # spots) while keeping/improving bright frames (13 -> 18).
-        nz = image[image > 0]
-        if nz.size:
-            med = float(np.median(nz))
-            mad = 1.4826 * float(np.median(np.abs(nz - med)))
-            thresh = max(med + 4.0 * mad, 1.0)
-        else:
-            thresh = 1.0
-
-    out = image.copy()
-    out[image <= thresh] = 0
-    return out, float(thresh)
-
-
-def find_connected_components(
-    image: np.ndarray,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, int]:
-    """
-    Find connected components in a thresholded image (OpenCV).
-
-    Returns (labels, bboxes, areas, nlabels).
-    bboxes and areas correspond to labels 1..nlabels-1.
-    """
-    binary = cv2.threshold(image, 0, 255, cv2.THRESH_BINARY)[1].astype(np.uint8)
-    nlabels, labels, stats, _centroids = cv2.connectedComponentsWithStats(
-        binary, 8, cv2.CV_32S
-    )
-    areas = stats[1:, cv2.CC_STAT_AREA]
-    bboxes = stats[1:, : cv2.CC_STAT_HEIGHT + 1]
-    return labels, bboxes, areas, nlabels
-
-
-def filter_small_components(
-    image: np.ndarray,
-    labels: np.ndarray,
-    bboxes: np.ndarray,
-    areas: np.ndarray,
-    nlabels: int,
-    min_area: int = 10,
-) -> Tuple[np.ndarray, np.ndarray, List]:
-    """
-    Remove components smaller than *min_area* and compute centers of mass.
-
-    Returns (filtered_image, filtered_labels, centers).
-    Centers format: [[label, (cx, cy), area], ...]
-    """
-    filt_img = image.copy()
-    filt_lbl = labels.copy()
-    centers: List = []
-
-    for lbl in range(1, nlabels):
-        idx = lbl - 1
-        if areas[idx] >= min_area:
-            x, y, w, h = bboxes[idx]
-            mask = labels[y : y + h, x : x + w] == lbl
-            region = image[y : y + h, x : x + w] * mask
-            try:
-                com = ndimg.center_of_mass(region)
-                centers.append([lbl, (com[1] + x, com[0] + y), areas[idx]])
-            except Exception:
-                filt_img[labels == lbl] = 0
-                filt_lbl[labels == lbl] = 0
-        else:
-            filt_img[labels == lbl] = 0
-            filt_lbl[labels == lbl] = 0
-
-    return filt_img, filt_lbl, centers
-
-
-def calculate_gaussian_sigma(
-    centers: List,
-    pixel_size: float = 0.2,
-    distance: float = 0.513,
-    orient_spacing: float = 0.4,
-) -> float:
-    """
-    Calculate Gaussian blur sigma from spot spacing.
-
-    Returns sigma in pixels (float, >= 1.0).
-    """
-    if not centers or len(centers) < 2:
-        return 3.0
-
-    coords = np.array([c[1] for c in centers])
-    from scipy.spatial import cKDTree
-    tree = cKDTree(coords)
-    # query k=2: first neighbor is the point itself (distance 0), second is nearest
-    dists, _ = tree.query(coords, k=2)
-    min_px_dist = float(dists[:, 1].min())
-
-    if pixel_size > 0 and distance > 0:
-        delta = (distance * np.tan(np.radians(orient_spacing))) / pixel_size
-    else:
-        delta = min_px_dist
-
-    sigma = 0.25 * min(min_px_dist, delta) if delta > 0 else 0.25 * min_px_dist
-    return max(sigma, 1.0)
-
-
-def preprocess_image(
-    raw_image: np.ndarray,
-    cfg: Dict[str, Any],
-    background: Optional[np.ndarray] = None,
-    override_thresh: float = 0.0,
-    return_intermediates: bool = False,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List]:
-    """
-    Full preprocessing pipeline (RunImage.py steps 1-6).
-
-    1. Background subtraction
-    2. Optional enhancement (denoise, contrast, edge)
-    3. Thresholding
-    4. Connected components
-    5. Filter small components
-    6. Gaussian blur
-
-    Args:
-        raw_image:       Raw 2-D image (Y, X) float64.
-        cfg:             Config dict (from parse_config).
-        background:      Optional pre-loaded background array.
-        override_thresh: If > 0, override threshold method with this value.
-        return_intermediates: If True, return a dict with all intermediate
-            arrays instead of the standard 4-tuple.
-
-    Returns:
-        If return_intermediates is False (default):
-            (blurred_image, filtered_thresholded_image, filtered_labels, centers)
-        If return_intermediates is True:
-            dict with keys: background, thresholded, labels_unfiltered,
-            filt_img, filt_labels, blurred, centers
-    """
-    nr_px_x = cfg["nr_px_x"]
-    nr_px_y = cfg["nr_px_y"]
-
-    # --- Step 1: Background subtraction ---
-    if background is None:
-        bg_file = cfg.get("background_file", "")
-        background = load_background(bg_file, nr_px_x, nr_px_y)
-        # Compute from image if still empty
-        if np.count_nonzero(background) == 0:
-            background = compute_background(
-                raw_image,
-                filter_radius=cfg["filter_radius"],
-                median_passes=cfg["median_passes"],
-            )
-
-    bg_sub = np.maximum(raw_image - background, 0.0)
-
-    # --- Step 2: Enhancement ---
-    enhanced = enhance_image(
-        bg_sub,
-        denoise=cfg.get("denoise_image", False),
-        denoise_strength=cfg.get("denoise_strength", 1.0),
-        contrast=cfg.get("enhance_contrast", False),
-        edge=cfg.get("edge_enhancement", False),
-    )
-
-    # --- Step 3: Thresholding ---
-    if override_thresh > 0:
-        thresholded, _thresh = apply_threshold(
-            enhanced, method="fixed", fixed_value=override_thresh,
-        )
-    else:
-        thresholded, _thresh = apply_threshold(
-            enhanced,
-            method=cfg["threshold_method"],
-            fixed_value=cfg["threshold_value"],
-            percentile=cfg["threshold_percentile"],
-        )
-
-    thresholded_u16 = thresholded.astype(np.uint16)
-
-    # --- Step 4: Connected components ---
-    labels, bboxes, areas, nlabels = find_connected_components(thresholded_u16)
-    if nlabels <= 1:
-        # No components — return zero image
-        blurred = np.zeros_like(raw_image, dtype=np.float64)
-        if return_intermediates:
-            return {
-                "background": background, "thresholded": thresholded_u16,
-                "labels_unfiltered": labels, "filt_img": thresholded_u16,
-                "filt_labels": labels, "blurred": blurred, "centers": [],
-            }
-        return blurred, thresholded_u16, labels, []
-
-    # --- Step 5: Filter small components ---
-    filt_img, filt_labels, centers = filter_small_components(
-        thresholded_u16, labels, bboxes, areas, nlabels,
-        min_area=cfg["min_area"],
-    )
-    if not centers:
-        blurred = np.zeros_like(raw_image, dtype=np.float64)
-        if return_intermediates:
-            return {
-                "background": background, "thresholded": thresholded_u16,
-                "labels_unfiltered": labels, "filt_img": filt_img,
-                "filt_labels": filt_labels, "blurred": blurred, "centers": centers,
-            }
-        return blurred, filt_img, filt_labels, centers
-
-    # --- Step 6: Gaussian blur ---
-    sigma = calculate_gaussian_sigma(
-        centers,
-        pixel_size=cfg["px_x"],
-        distance=cfg["distance"],
-        orient_spacing=cfg["orientation_spacing"],
-    )
-    blurred = ndimg.gaussian_filter(filt_img.astype(np.float64), sigma)
-
-    if return_intermediates:
-        return {
-            "background": background, "thresholded": thresholded_u16,
-            "labels_unfiltered": labels, "filt_img": filt_img,
-            "filt_labels": filt_labels, "blurred": blurred, "centers": centers,
-        }
-    return blurred, filt_img, filt_labels, centers
+from laue_index.preprocess import (  # noqa: E402
+    compute_background,
+    load_background,
+    enhance_image,
+    find_connected_components,
+    filter_small_components,
+    calculate_gaussian_sigma,
+    preprocess_image,
+)
+# REFACTOR_PLAN §6.3: thresholding lives in laue_index.thresholds; re-exported
+# (byte-for-byte equivalent) so RunImage/preprocess callers are unchanged.  This
+# line previously sat inline among the preprocessing funcs that moved out in §6.5.
+from laue_index.thresholds import apply_threshold  # noqa: E402,F401
 
 
 # ---------------------------------------------------------------------------
@@ -761,274 +443,29 @@ def split_solutions_by_image(
 
 
 # ---------------------------------------------------------------------------
-# Orientation filtering (unique-spot counting)
-# ---------------------------------------------------------------------------
-
-def calculate_unique_spots(
-    orientations: np.ndarray,
-    spots: np.ndarray,
-    labels: np.ndarray,
-    grain_col: int = 0,
-    quality_col: int = 4,
-    spot_grain_col: int = 0,
-    spot_x_col: int = 5,
-    spot_y_col: int = 6,
-) -> Dict[int, Dict]:
-    """
-    Calculate unique spots per orientation, prioritized by quality score.
-
-    Orientations are sorted by quality (descending) using a stable sort so
-    that ties preserve the original input order.  Higher-quality orientations
-    claim spots first; once a label or pixel position is assigned, lower-
-    quality orientations cannot reuse it.
-
-    Returns:
-        {grain_nr: {"count": int, "unique_label_count": int,
-                     "unique_labels": set, "positions": set}}
-    """
-    results: Dict[int, Dict] = {}
-    if orientations.size == 0:
-        return results
-
-    if orientations.ndim == 1:
-        orientations = np.expand_dims(orientations, 0)
-
-    # Sort by quality descending with *stable* tie-breaking (matches the
-    # original Python list .sort() used in RunImage._calculate_unique_spots).
-    sorted_idx = np.argsort(orientations[:, quality_col], kind='stable')[::-1]
-
-    assigned_labels: set = set()
-    assigned_positions: set = set()
-
-    for idx in sorted_idx:
-        orient = orientations[idx]
-        gn = int(orient[grain_col])
-        results[gn] = {
-            "count": 0,
-            "unique_label_count": 0,
-            "unique_labels": set(),
-            "positions": set(),
-        }
-
-        orient_spots = spots[spots[:, spot_grain_col].astype(int) == gn]
-        if orient_spots.size == 0:
-            continue
-
-        for spot in orient_spots:
-            try:
-                x, y = int(spot[spot_x_col]), int(spot[spot_y_col])
-            except (IndexError, ValueError):
-                continue
-            pos = (x, y)
-            if pos in assigned_positions:
-                continue
-
-            if 0 <= y < labels.shape[0] and 0 <= x < labels.shape[1]:
-                lbl = labels[y, x]
-                if lbl > 0 and lbl in assigned_labels:
-                    continue
-                results[gn]["positions"].add(pos)
-                assigned_positions.add(pos)
-                if lbl > 0:
-                    results[gn]["unique_labels"].add(lbl)
-                    assigned_labels.add(lbl)
-            else:
-                # Out-of-bounds: still claim the position so lower-quality
-                # orientations cannot reuse it (matches original behaviour).
-                results[gn]["positions"].add(pos)
-                assigned_positions.add(pos)
-
-        results[gn]["count"] = len(results[gn]["positions"])
-        results[gn]["unique_label_count"] = len(results[gn]["unique_labels"])
-
-    return results
-
-
-def filter_orientations(
-    orientations: np.ndarray,
-    unique_spot_info: Dict[int, Dict],
-    min_unique: int = 2,
-    grain_col: int = 0,
-    quality_col: int = 4,
-) -> np.ndarray:
-    """
-    Filter orientations by minimum unique spot (label) count.
-
-    Returns a new array with only the qualifying rows, sorted by quality.
-    """
-    if orientations.size == 0:
-        return orientations.copy()
-
-    if orientations.ndim == 1:
-        orientations = np.expand_dims(orientations, 0)
-
-    # Sort by quality descending first
-    sorted_orient = orientations[np.argsort(orientations[:, quality_col])[::-1]]
-
-    keep = []
-    for row in sorted_orient:
-        gn = int(row[grain_col])
-        info = unique_spot_info.get(gn, {})
-        if info.get("unique_label_count", 0) >= min_unique:
-            keep.append(row)
-
-    if keep:
-        return np.array(keep)
-    return np.empty((0, orientations.shape[1]))
-
-
-# ---------------------------------------------------------------------------
-# Twin/CSL-aware, symmetry-reduced orientation filtering (robust dedup).
+# Orientation filtering + CSL geometry
 #
-# The legacy filter_orientations() above drops any solution whose *unique*
-# spot count (after winner-take-all spot claiming, highest quality first) is
-# < min_unique.  For Sigma3 (and other CSL) twins this misfires: the twin and
-# matrix share the coincident-site reflections, so whichever scores higher
-# quality claims them first and STARVES the other of unique spots -- deleting
-# a real, strong crystal (e.g. an FCC matrix matched on 11 spots) purely
-# because it shares reflections with its twin.
-#
-# filter_orientations_robust() separates the two jobs the legacy filter
-# conflated:
-#   (B.1) merge genuinely-redundant near-duplicate orientations
-#         (symmetry-reduced disorientation < max_angle_deg);
-#   (B.2) keep every remaining DISTINCT solution that clears a physical
-#         evidence threshold (total matched spots >= min_total_spots);
-#   (A)   EXEMPT solutions that are CSL/twin-related (e.g. Sigma3 60deg/<111>)
-#         to an already-kept solution from the unique-spot test, so real twins
-#         are never cannibalised.  Non-CSL spurious overlaps still face the
-#         unique-spot test and are removed.
+# REFACTOR_PLAN §6.2: the implementations now live in the laue_index package
+# (single source of truth).  This module re-exports them under their historical
+# names so existing callers (laue_postprocess, laue_image_server, tests) keep
+# working unchanged, while the duplicate inline copy in RunImage is removed.
 # ---------------------------------------------------------------------------
+_INSTALL_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _INSTALL_PATH not in sys.path:
+    sys.path.insert(0, _INSTALL_PATH)
 
-def _cubic_proper_ops() -> np.ndarray:
-    """24 proper (det=+1) rotation matrices of the cubic point group m-3m."""
-    import itertools as _it
-    ops = []
-    for perm in _it.permutations(range(3)):
-        for signs in _it.product((1.0, -1.0), repeat=3):
-            M = np.zeros((3, 3))
-            for i, p in enumerate(perm):
-                M[i, p] = signs[i]
-            if abs(np.linalg.det(M) - 1.0) < 1e-6:
-                ops.append(M)
-    return np.array(ops)
-
-
-_CUBIC_OPS = _cubic_proper_ops()
-
-# CSL boundaries for cubic: Sigma -> (disorientation angle deg, sorted-|axis|).
-_CSL_TABLE = {
-    3:  (60.00, np.array([0.57735, 0.57735, 0.57735])),  # 60 / <111>
-    9:  (38.94, np.array([0.00000, 0.70711, 0.70711])),  # 38.94 / <110>
-    11: (50.48, np.array([0.00000, 0.70711, 0.70711])),  # 50.48 / <110>
-}
-
-
-def _disorientation_deg_axis(A: np.ndarray, B: np.ndarray, ops: np.ndarray = _CUBIC_OPS):
-    """Symmetry-reduced disorientation angle (deg) and rotation-axis family
-    (sorted |components|) between two 3x3 orientation matrices, minimised over
-    both-sided point-group symmetry.  Crystal-frame misorientation M = A^T B."""
-    M = A.T @ B
-    best_ang, best_M = 999.0, M
-    for O1 in ops:
-        OM = O1 @ M
-        for O2 in ops:
-            m = OM @ O2
-            tr = max(-1.0, min(1.0, (np.trace(m) - 1.0) / 2.0))
-            ang = np.degrees(np.arccos(tr))
-            if ang < best_ang:
-                best_ang, best_M = ang, m
-    w, v = np.linalg.eig(best_M)
-    axis = np.real(v[:, int(np.argmin(np.abs(w - 1.0)))])
-    n = np.linalg.norm(axis)
-    axis = axis / n if n > 0 else axis
-    return best_ang, np.sort(np.abs(axis))
-
-
-def is_csl_related(A, B, sigmas=(3,), tol_deg: float = 3.0, ops: np.ndarray = _CUBIC_OPS) -> bool:
-    """True if A,B are related by one of the requested cubic CSL boundaries."""
-    ang, axfam = _disorientation_deg_axis(A, B, ops)
-    for s in sigmas:
-        ref = _CSL_TABLE.get(s)
-        if ref is None:
-            continue
-        ang_ref, ax_ref = ref
-        if abs(ang - ang_ref) < tol_deg and np.linalg.norm(axfam - ax_ref) < 0.08:
-            return True
-    return False
-
-
-def filter_orientations_robust(
-    orientations: np.ndarray,
-    unique_spot_info: Dict[int, Dict],
-    *,
-    min_unique: int = 2,
-    grain_col: int = 0,
-    quality_col: int = 4,
-    om_start_col: int = 22,
-    nmatches_col: int = 5,
-    max_angle_deg: float = 5.0,
-    min_total_spots: int = 5,
-    csl_sigmas=(3,),
-    csl_tol_deg: float = 3.0,
-    cubic: bool = True,
-) -> np.ndarray:
-    """Twin/CSL-aware orientation filter (see module note above).
-
-    Keeps a solution (processed best-quality first) when it clears the evidence
-    floor (>= min_total_spots total matched spots) AND one of:
-      * it is the top solution so far (nothing kept yet), or
-      * it has >= min_unique exclusive spots (genuinely independent), or
-      * it is CSL/twin-related (e.g. Sigma3) to an already-kept solution.
-    Near-duplicates (disorientation < max_angle_deg of a kept one) are dropped.
-    With cubic=False the CSL exemption and symmetry dedup are skipped and the
-    legacy unique-spot behaviour is reproduced.
-    """
-    if orientations.size == 0:
-        return orientations.copy()
-    if orientations.ndim == 1:
-        orientations = np.expand_dims(orientations, 0)
-
-    order = np.argsort(orientations[:, quality_col])[::-1]  # quality descending
-    kept_rows, kept_oms = [], []
-    for idx in order:
-        row = orientations[idx]
-        gn = int(row[grain_col])
-        info = unique_spot_info.get(gn, {})
-        uniq = int(info.get("unique_label_count", 0))
-        ntot = int(info.get("count", 0))
-        if ntot == 0 and orientations.shape[1] > nmatches_col:
-            try:
-                ntot = int(round(float(row[nmatches_col])))
-            except (ValueError, TypeError):
-                ntot = 0
-        om = None
-        if cubic and orientations.shape[1] >= om_start_col + 9:
-            try:
-                om = np.asarray(row[om_start_col:om_start_col + 9], dtype=float).reshape(3, 3)
-            except (ValueError, TypeError):
-                om = None
-
-        # (B.1) drop near-duplicates of an already-kept distinct orientation
-        if om is not None and kept_oms and \
-                any(_disorientation_deg_axis(om, k)[0] < max_angle_deg for k in kept_oms):
-            continue
-
-        # (A) CSL/twin-related to a kept solution + clears evidence -> exempt
-        csl_exempt = (
-            om is not None and bool(kept_oms) and ntot >= min_total_spots
-            and any(is_csl_related(om, k, csl_sigmas, csl_tol_deg) for k in kept_oms)
-        )
-
-        if ntot >= min_total_spots and (csl_exempt or uniq >= min_unique or not kept_rows):
-            kept_rows.append(row)
-            if om is not None:
-                kept_oms.append(om)
-
-    if kept_rows:
-        out = np.array(kept_rows)
-        return out[np.argsort(out[:, quality_col])[::-1]]
-    return np.empty((0, orientations.shape[1]))
+from laue_index.geometry import (  # noqa: E402
+    cubic_proper_ops as _cubic_proper_ops,
+    CUBIC_OPS as _CUBIC_OPS,
+    CSL_TABLE as _CSL_TABLE,
+    disorientation_deg_axis as _disorientation_deg_axis,
+    is_csl_related,
+)
+from laue_index.filtering import (  # noqa: E402
+    calculate_unique_spots,
+    filter_orientations,
+    filter_orientations_robust,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -1064,171 +501,17 @@ def sort_orientations_by_quality(
         return orientations.copy()
 
 
-def store_txt_files_in_h5(
-    output_path: str,
-    h5_file,
-) -> None:
-    """
-    Store the contents of generated text files in an open H5 file handle.
-
-    Each text file is stored as a bytes dataset, and the first line (header)
-    is attached as an ``'header'`` attribute.
-
-    Args:
-        output_path: Base path for output files (e.g. ``results/image_001``).
-        h5_file:     Open ``h5py.File`` handle (mode ``'a'`` or ``'w'``).
-    """
-    txt_files_map = {
-        f"{output_path}.bin.solutions.txt":           "/entry/results/solutions_text",
-        f"{output_path}.bin.solutions_filtered.txt":  "/entry/results/solutions_filtered_text",
-        f"{output_path}.bin.spots.txt":               "/entry/results/spots_text",
-        f"{output_path}.bin.LaueMatching_stdout.txt": "/entry/logs/stdout",
-        f"{output_path}.bin.LaueMatching_stderr.txt": "/entry/logs/stderr",
-        f"{output_path}.simulation_stdout.txt":       "/entry/logs/simulation_stdout",
-        f"{output_path}.bin.unique_spot_counts.txt":  "/entry/results/unique_spot_counts_text",
-    }
-
-    # Ensure parent groups exist
-    for dataset_path in txt_files_map.values():
-        group_path = os.path.dirname(dataset_path)
-        if group_path != "/":
-            h5_file.require_group(group_path)
-
-    for txt_file_path, dataset_path in txt_files_map.items():
-        try:
-            if os.path.exists(txt_file_path):
-                with open(txt_file_path, "r") as f:
-                    lines = f.readlines()
-                    header = lines[0].strip() if lines else ""
-                    content = "".join(lines)
-
-                if dataset_path in h5_file:
-                    del h5_file[dataset_path]
-                dataset = h5_file.create_dataset(dataset_path, data=np.bytes_(content))
-                if header:
-                    dataset.attrs["header"] = header
-
-                logger.debug(f"Stored '{txt_file_path}' in H5 dataset '{dataset_path}'")
-        except Exception as e:
-            logger.warning(f"Error storing text file '{txt_file_path}' in H5: {e}")
-
-
-def store_binary_headers_in_h5(
-    output_path: str,
-    h5_file,
-) -> None:
-    """
-    Store column headers from text files as attributes on binary H5 datasets.
-
-    Args:
-        output_path: Base path for output files (e.g. ``results/image_001``).
-        h5_file:     Open ``h5py.File`` handle.
-    """
-    binary_datasets_map = {
-        "/entry/results/orientations":          f"{output_path}.bin.solutions.txt",
-        "/entry/results/filtered_orientations": f"{output_path}.bin.solutions.txt",
-        "/entry/results/spots":                 f"{output_path}.bin.spots.txt",
-        "/entry/results/filtered_spots":        f"{output_path}.bin.spots.txt",
-    }
-
-    for dataset_path, header_file_path in binary_datasets_map.items():
-        try:
-            if dataset_path in h5_file and os.path.exists(header_file_path):
-                with open(header_file_path, "r") as f:
-                    header = f.readline().strip()
-                if header:
-                    ds = h5_file[dataset_path]
-                    ds.attrs["header"] = header
-                    columns = [c.strip() for c in header.split() if c.strip()]
-                    ds.attrs["columns"] = columns
-                    logger.debug(f"Added header and {len(columns)} columns to {dataset_path}")
-        except Exception as e:
-            logger.warning(f"Error adding header to {dataset_path}: {e}")
-
-    # Unique spots dataset
-    usp = "/entry/results/unique_spots_per_orientation"
-    if usp in h5_file:
-        try:
-            ds = h5_file[usp]
-            ds.attrs["header"] = "Grain_Nr Unique_Spots"
-            ds.attrs["columns"] = ["Grain_Nr", "Unique_Spots"]
-        except Exception as e:
-            logger.warning(f"Error adding header to {usp}: {e}")
-
-    # Simulated spots dataset
-    ssp = "/entry/simulation/simulated_spots"
-    if ssp in h5_file:
-        try:
-            ds = h5_file[ssp]
-            if "header" not in ds.attrs:
-                ds.attrs["header"] = "X Y GrainID Matched H K L Energy"
-                ds.attrs["columns"] = ["X", "Y", "GrainID", "Matched", "H", "K", "L", "Energy"]
-        except Exception as e:
-            logger.warning(f"Error adding header to {ssp}: {e}")
-
-
-def create_h5_output(
-    output_path: str,
-    orientations_unfiltered: np.ndarray,
-    filtered_orientations: np.ndarray,
-    spots_unfiltered: np.ndarray,
-    filtered_spots: np.ndarray,
-    orientation_unique_spots: Dict[int, Dict],
-) -> None:
-    """
-    Create / update an HDF5 file with orientation and spot data.
-
-    Saves both unfiltered and filtered datasets, plus unique spot counts.
-    Headers are attached as attributes via :func:`store_binary_headers_in_h5`.
-
-    Args:
-        output_path:               Base path (e.g. ``results/image_001``).
-        orientations_unfiltered:   Sorted orientation array.
-        filtered_orientations:     Filtered orientation array.
-        spots_unfiltered:          Original spot array.
-        filtered_spots:            Filtered spot array.
-        orientation_unique_spots:  ``{grain_nr: {"unique_label_count": int, …}}``.
-    """
-    if not HAS_H5PY:
-        logger.error("h5py is required for H5 output but is not installed.")
-        return
-
-    output_h5 = f"{output_path}.output.h5"
-
-    # Build unique-count array [Grain_Nr, Unique_Label_Count]
-    unique_counts_list = []
-    if orientation_unique_spots:
-        for grain_nr, data in orientation_unique_spots.items():
-            unique_counts_list.append([grain_nr, data.get("unique_label_count", 0)])
-    unique_counts_array = (
-        np.array(unique_counts_list, dtype=np.int32)
-        if unique_counts_list
-        else np.empty((0, 2), dtype=np.int32)
-    )
-
-    try:
-        with h5py.File(output_h5, "a") as hf:
-            hf.require_group("/entry/results")
-
-            datasets = {
-                "orientations":                  orientations_unfiltered,
-                "filtered_orientations":         filtered_orientations,
-                "spots":                         spots_unfiltered,
-                "filtered_spots":                filtered_spots,
-                "unique_spots_per_orientation":   unique_counts_array,
-            }
-
-            for name, arr in datasets.items():
-                ds_path = f"/entry/results/{name}"
-                if ds_path in hf:
-                    del hf[ds_path]
-                hf.create_dataset(ds_path, data=arr)
-
-            logger.info(f"Saved orientation/spot data in {output_h5}")
-            store_binary_headers_in_h5(output_path, hf)
-
-    except Exception as e:
-        logger.error(f"Error creating H5 output '{output_h5}': {e}")
+# ---------------------------------------------------------------------------
+# Results I/O — HDF5 output
+#
+# REFACTOR_PLAN §6.5: moved to laue_index.output (single source of truth);
+# re-exported here so RunImage / laue_postprocess callers keep working.
+# ---------------------------------------------------------------------------
+from laue_index.output import (  # noqa: E402
+    store_txt_files_in_h5,
+    store_binary_headers_in_h5,
+    create_h5_output,
+)
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,11 @@
+{
+  "kept_grains": [
+    2,
+    8
+  ],
+  "kept_grains_by_quality": [
+    8,
+    2
+  ],
+  "n_kept": 2
+}

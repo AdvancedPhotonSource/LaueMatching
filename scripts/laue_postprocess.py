@@ -29,6 +29,15 @@ import numpy as np
 
 import laue_stream_utils as lsu
 
+# Typed solution-table column maps (REFACTOR_PLAN §6.1).
+_INSTALL_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _INSTALL_PATH not in sys.path:
+    sys.path.insert(0, _INSTALL_PATH)
+from laue_index.records import SOLUTION_FORMATS
+from laue_index.postprocess import PostProcessor
+_PP_RUNIMAGE = SOLUTION_FORMATS["runimage"]
+_PP_STREAM = SOLUTION_FORMATS["stream"]
+
 # Optional imports
 try:
     import h5py
@@ -116,25 +125,14 @@ def process_single_image(
     n_cols = spots.shape[1] if spots.ndim == 2 else 0
     n_sol_cols = orientations.shape[1] if orientations.ndim == 2 else 0
 
-    # Stream spots have ImageNr prepended (12 cols vs 11)
-    if n_cols > 10:
-        spot_x_col = 6
-        spot_y_col = 7
-        spot_grain_col = 1
-    else:
-        spot_x_col = 5
-        spot_y_col = 6
-        spot_grain_col = 0
-
-    # Stream solutions have ImageNr prepended (>30 cols typical)
-    # RunImage solutions have GrainNr at col 0; stream has ImageNr at col 0,
-    # GrainNr at col 1.  Use same heuristic as spots.
-    if n_sol_cols > 30:
-        orient_grain_col = 1
-        orient_quality_col = 5  # NMatches*sqrt(Intensity)
-    else:
-        orient_grain_col = 0
-        orient_quality_col = 4
+    # Stream layouts prepend an ImageNr column, so spots have EXACTLY 12 cols
+    # (vs 11 for RunImage) and solutions 35 (vs 34).  Detect by the exact stream
+    # widths (>=12 / >=35).  FIX: the old >10/>30 test misclassified RunImage's
+    # own 11-/34-column output as stream and read shifted columns (REFACTOR_PLAN
+    # §6.1 #3 fragile heuristic).
+    spot_fmt = _PP_STREAM if n_cols >= 12 else _PP_RUNIMAGE
+    sol_fmt = _PP_STREAM if n_sol_cols >= 35 else _PP_RUNIMAGE
+    spot_x_col, spot_y_col = spot_fmt.spot_x, spot_fmt.spot_y
 
     # Use real image segmentation labels if provided, otherwise build
     # simple per-pixel labels as a fallback.
@@ -152,34 +150,14 @@ def process_single_image(
                 labels[y, x] = label_counter
                 label_counter += 1
 
-    # Calculate unique spots per orientation
-    unique_info = lsu.calculate_unique_spots(
-        orientations, spots, labels,
-        grain_col=orient_grain_col, spot_grain_col=spot_grain_col,
-        spot_x_col=spot_x_col, spot_y_col=spot_y_col,
-        quality_col=orient_quality_col,
-    )
-
-    # Filter orientations
-    filtered_orient = lsu.filter_orientations(
-        orientations, unique_info, min_unique=min_unique,
-        grain_col=orient_grain_col, quality_col=orient_quality_col,
-    )
-
-    # Filter spots to only those belonging to filtered orientations
-    if filtered_orient.size > 0:
-        kept_grains = set(filtered_orient[:, orient_grain_col].astype(int))
-        grain_ids = spots[:, spot_grain_col].astype(int)
-        mask = np.isin(grain_ids, list(kept_grains))
-        filtered_spots = spots[mask] if mask.any() else np.empty((0, n_cols))
-    else:
-        filtered_spots = np.empty((0, n_cols))
-
-    # Sort filtered orientations by quality (descending)
-    if filtered_orient.size > 0:
-        filtered_orient = lsu.sort_orientations_by_quality(
-            filtered_orient, quality_col=orient_quality_col,
-        )
+    # Core (unique-spots -> legacy filter -> spot-filter -> sort) via the shared
+    # PostProcessor stage (REFACTOR_PLAN §6.5b reuse — same impl as RunImage).
+    ppr = PostProcessor(robust=False, min_unique=min_unique,
+                        space_group=int(cfg.get("space_group", 225) or 225),
+                        fmt=sol_fmt)(orientations, spots, labels)
+    filtered_orient = ppr.filtered_orientations
+    filtered_spots = ppr.filtered_spots
+    unique_info = ppr.unique_spot_info
 
     result["n_filtered"] = len(filtered_orient)
     result["filtered_orientations"] = filtered_orient

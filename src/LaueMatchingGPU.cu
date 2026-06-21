@@ -42,14 +42,17 @@ inline void gpuAssert(cudaError_t code, const char *file, int line,
 
 #define MAX_MATCHES 100000 // max matched orientations per image
 
-__global__ void compare(size_t nrPxX, size_t nOr, size_t nrMaxSpots,
-                        float minInt, size_t minSps, uint16_t *oA, uint8_t *im,
-                        float imScale, int *matchCount, int *matchIdx,
-                        float *matchScore, size_t chunkOffset) {
+__global__ void compare(size_t nrPxX, size_t nrPxY, size_t nOr,
+                        size_t nrMaxSpots, float minInt, size_t minSps,
+                        uint16_t *oA, float *im,
+                        int *matchCount, size_t *matchIdx, float *matchScore,
+                        size_t chunkOffset) {
   size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < nOr) {
     size_t loc = i * (1 + 2 * nrMaxSpots);
     size_t nrSpots = (size_t)oA[loc];
+    if (nrSpots > nrMaxSpots)
+      nrSpots = nrMaxSpots;
     size_t hklnr;
     size_t px, py;
     float thisInt, totInt = 0;
@@ -59,16 +62,18 @@ __global__ void compare(size_t nrPxX, size_t nOr, size_t nrMaxSpots,
       px = (size_t)oA[loc];
       loc++;
       py = (size_t)oA[loc];
-      uint8_t raw = __ldg(&im[py * nrPxX + px]);
-      if (raw > 0) {
-        totInt += (float)raw * imScale;
-        nSps++;
+      if (px < nrPxX && py < nrPxY) {
+        float raw = __ldg(&im[py * nrPxX + px]);
+        if (raw > 0) {
+          totInt += raw;
+          nSps++;
+        }
       }
     }
     if (nSps >= minSps && totInt >= minInt) {
       int pos = atomicAdd(matchCount, 1);
       if (pos < MAX_MATCHES) {
-        matchIdx[pos] = (int)(i + chunkOffset);
+        matchIdx[pos] = i + chunkOffset;
         matchScore[pos] = totInt * sqrtf((float)nSps);
       }
     }
@@ -112,14 +117,15 @@ int main(int argc, char *argv[]) {
     return 1;
   }
   char aline[1000], *str, dummy[1000], outfn[1000];
-  int LowNr, nrPxX, nrPxY, maxNrSpots = 500, minNrSpots = 5, doFwd = 1;
+  int LowNr, nrPxX = 0, nrPxY = 0, maxNrSpots = 500, minNrSpots = 5, doFwd = 1;
   sg_num = 225;
-  double pArr[3], rArr[3], pxX, pxY, Elo = 5, Ehi = 30;
+  double pArr[3] = {0, 0, 0}, rArr[3] = {0, 0, 0}, pxX = 0, pxY = 0, Elo = 5,
+         Ehi = 30;
   int iter;
   for (iter = 0; iter < 6; iter++)
     tol_LatC[iter] = 0;
   double minIntensity = 1000.0, maxAngle = 2.0;
-  double LatticeParameter[6];
+  double LatticeParameter[6] = {0, 0, 0, 0, 0, 0};
   puts("Reading parameter file");
   fflush(stdout);
   tol_c_over_a = 0;
@@ -252,6 +258,17 @@ int main(int argc, char *argv[]) {
   }
   c_over_a_orig = LatticeParameter[2] / LatticeParameter[0];
   fclose(fileParam);
+  if (nrPxX <= 0 || nrPxY <= 0) {
+    fprintf(stderr,
+            "FATAL: Invalid detector dimensions (NrPxX=%d, NrPxY=%d). Check "
+            "parameter file.\n",
+            nrPxX, nrPxY);
+    return 1;
+  }
+  if (LatticeParameter[0] == 0) {
+    fprintf(stderr, "FATAL: LatticeParameter not set in parameter file.\n");
+    return 1;
+  }
   puts("Parameters read");
 
   // Rotation matrix
@@ -301,6 +318,12 @@ int main(int argc, char *argv[]) {
     fflush(stdout);
   } else {
     orients = (double *)malloc(szFile);
+    if (orients == NULL) {
+      fprintf(stderr, "FATAL: Could not allocate orientations (%zu bytes).\n",
+              szFile);
+      fclose(orientF);
+      return 1;
+    }
     size_t rc = fread(orients, 1, szFile, orientF);
     if (rc != szFile) {
       printf(
@@ -349,6 +372,12 @@ int main(int argc, char *argv[]) {
     return 1;
   }
   double *image = (double *)malloc(nrPxX * nrPxY * sizeof(*image));
+  if (image == NULL) {
+    fprintf(stderr, "FATAL: Could not allocate image (%zu bytes).\n",
+            (size_t)nrPxX * nrPxY * sizeof(*image));
+    fclose(imageFile);
+    return 1;
+  }
   size_t read_cts = fread(image, nrPxX * nrPxY * sizeof(*image), 1, imageFile);
   if (read_cts != 1) {
     if (ferror(imageFile)) {
@@ -373,6 +402,11 @@ int main(int argc, char *argv[]) {
   // Create float image for CPU fitting (halves cache pressure vs double)
   size_t nPixels = (size_t)nrPxX * nrPxY;
   float *imageF = (float *)malloc(nPixels * sizeof(float));
+  if (imageF == NULL) {
+    fprintf(stderr, "FATAL: Could not allocate imageF (%zu bytes).\n",
+            nPixels * sizeof(float));
+    return 1;
+  }
   for (pxNr = 0; pxNr < (int)nPixels; pxNr++)
     imageF[pxNr] = (float)image[pxNr];
 
@@ -390,6 +424,11 @@ int main(int argc, char *argv[]) {
     return 1;
   }
   int numProcs = atoi(argv[5]);
+  if (numProcs < 1) {
+    fprintf(stderr, "FATAL: Invalid number of CPU cores (%d). Must be >= 1.\n",
+            numProcs);
+    return 1;
+  }
   printf("Now running using %d threads.\n", numProcs);
   fflush(stdout);
   double ki[3] = {0, 0, 1.0};
@@ -400,7 +439,7 @@ int main(int argc, char *argv[]) {
   calcRecipArray(LatticeParameter, sg_num, recip);
 
   // Compact match results from GPU path (NULL if forward sim path)
-  int *h_matchIdx = NULL;
+  size_t *h_matchIdx = NULL;
   float *h_matchScore = NULL;
   int h_matchCount = 0;
 
@@ -425,7 +464,12 @@ int main(int argc, char *argv[]) {
     // Forward simulation using OpenMP on CPUs, then save to file
     bool *pxImgAll =
         (bool *)calloc((size_t)nrPxX * nrPxY * numProcs, sizeof(*pxImgAll));
-    int fwdFd = open(outfn, O_CREAT | O_WRONLY | O_SYNC,
+    if (pxImgAll == NULL) {
+      fprintf(stderr, "FATAL: Could not allocate pxImgAll (%zu bytes).\n",
+              (size_t)nrPxX * nrPxY * numProcs * sizeof(*pxImgAll));
+      return 1;
+    }
+    int fwdFd = open(outfn, O_CREAT | O_WRONLY,
                      S_IRUSR | S_IWUSR); // FIX: open once
     if (fwdFd < 0) {
       printf("Could not open forward output file %s.\n", outfn);
@@ -568,6 +612,7 @@ int main(int argc, char *argv[]) {
       free(outArrThis);
       free(qhatarr);
     }
+    fsync(fwdFd);
     close(fwdFd);
     free(pxImgAll);
   } else {
@@ -619,7 +664,7 @@ int main(int argc, char *argv[]) {
     wt0 = omp_get_wtime();
     size_t freeMem = 0, totalMem = 0;
     gpuErrchk(cudaMemGetInfo(&freeMem, &totalMem));
-    size_t imageBytes = (size_t)nrPxX * nrPxY * sizeof(uint8_t);
+    size_t imageBytes = (size_t)nrPxX * nrPxY * sizeof(float);
     // Use up to 80% of free GPU memory for the outArr chunk buffer,
     // but cap at 4 GB to keep cudaMalloc + H2D fast.
     size_t usable = (freeMem > imageBytes + (freeMem / 5))
@@ -644,36 +689,30 @@ int main(int argc, char *argv[]) {
     // Allocate device buffers
     double wt_alloc = omp_get_wtime();
     uint16_t *d_outChunk;
-    uint8_t *d_image;
-    int *d_matchCount, *d_matchIdx;
+    float *d_image;
+    int *d_matchCount;
+    size_t *d_matchIdx;
     float *d_matchScore;
     gpuErrchk(cudaMalloc(&d_outChunk, chunkOutBytes));
     gpuErrchk(cudaMalloc(&d_image, imageBytes));
     gpuErrchk(cudaMalloc(&d_matchCount, sizeof(int)));
-    gpuErrchk(cudaMalloc(&d_matchIdx, MAX_MATCHES * sizeof(int)));
+    gpuErrchk(cudaMalloc(&d_matchIdx, MAX_MATCHES * sizeof(size_t)));
     gpuErrchk(cudaMalloc(&d_matchScore, MAX_MATCHES * sizeof(float)));
     printf("  cudaMalloc (%.1f GB + %.1f MB): %lf s\n", chunkOutBytes / 1e9,
            imageBytes / 1e6, omp_get_wtime() - wt_alloc);
 
-    // Convert image double→uint8 with scale and upload
-    double maxVal = 0;
-    for (int p = 0; p < nrPxX * nrPxY; p++)
-      if (image[p] > maxVal)
-        maxVal = image[p];
-    float imScale = (maxVal > 0) ? (float)(maxVal / 255.0) : 1.0f;
-    uint8_t *im_u8 = (uint8_t *)malloc(imageBytes);
-    double invScale = (maxVal > 0) ? 255.0 / maxVal : 0.0;
-    for (int p = 0; p < nrPxX * nrPxY; p++) {
-      if (image[p] > 0) {
-        double v = image[p] * invScale;
-        im_u8[p] = (v >= 255.0) ? 255 : (v < 1.0) ? 1 : (uint8_t)v;
-      } else {
-        im_u8[p] = 0;
-      }
+    // Convert image double→float (full precision) and upload
+    float *imF = (float *)malloc((size_t)nrPxX * nrPxY * sizeof(float));
+    if (imF == NULL) {
+      fprintf(stderr, "FATAL: Could not allocate imF (%zu bytes).\n",
+              imageBytes);
+      return 1;
     }
+    for (size_t p = 0; p < (size_t)nrPxX * nrPxY; p++)
+      imF[p] = (float)image[p];
     double wt_img = omp_get_wtime();
-    gpuErrchk(cudaMemcpy(d_image, im_u8, imageBytes, cudaMemcpyHostToDevice));
-    free(im_u8);
+    gpuErrchk(cudaMemcpy(d_image, imF, imageBytes, cudaMemcpyHostToDevice));
+    free(imF);
     printf("  image H2D (%.1f MB): %lf s\n", imageBytes / 1e6,
            omp_get_wtime() - wt_img);
 
@@ -698,9 +737,10 @@ int main(int argc, char *argv[]) {
       // Launch kernel
       double wt_kern = omp_get_wtime();
       int blocks = (int)((thisChunk + 1023) / 1024);
-      compare<<<blocks, 1024>>>(nrPxX, thisChunk, maxNrSpots, minIntensity,
-                                minNrSpots, d_outChunk, d_image, imScale,
-                                d_matchCount, d_matchIdx, d_matchScore, offset);
+      compare<<<blocks, 1024>>>(nrPxX, nrPxY, thisChunk, maxNrSpots,
+                                minIntensity, minNrSpots, d_outChunk, d_image,
+                                d_matchCount, d_matchIdx, d_matchScore,
+                                offset);
       gpuErrchk(cudaDeviceSynchronize());
       double kern_time = omp_get_wtime() - wt_kern;
 
@@ -711,11 +751,21 @@ int main(int argc, char *argv[]) {
     // D2H: compact results only
     gpuErrchk(cudaMemcpy(&h_matchCount, d_matchCount, sizeof(int),
                          cudaMemcpyDeviceToHost));
-    if (h_matchCount > MAX_MATCHES)
+    if (h_matchCount > MAX_MATCHES) {
+      fprintf(stderr,
+              "WARNING: match count %d exceeded MAX_MATCHES (%d); results "
+              "truncated.\n",
+              h_matchCount, MAX_MATCHES);
       h_matchCount = MAX_MATCHES;
-    int *h_matchIdx_dev = (int *)malloc(h_matchCount * sizeof(int));
+    }
+    size_t *h_matchIdx_dev = (size_t *)malloc(h_matchCount * sizeof(size_t));
     float *h_matchScore_dev = (float *)malloc(h_matchCount * sizeof(float));
-    gpuErrchk(cudaMemcpy(h_matchIdx_dev, d_matchIdx, h_matchCount * sizeof(int),
+    if (h_matchIdx_dev == NULL || h_matchScore_dev == NULL) {
+      fprintf(stderr, "FATAL: Could not allocate host match buffers.\n");
+      return 1;
+    }
+    gpuErrchk(cudaMemcpy(h_matchIdx_dev, d_matchIdx,
+                         h_matchCount * sizeof(size_t),
                          cudaMemcpyDeviceToHost));
     gpuErrchk(cudaMemcpy(h_matchScore_dev, d_matchScore,
                          h_matchCount * sizeof(float), cudaMemcpyDeviceToHost));
@@ -787,7 +837,7 @@ int main(int argc, char *argv[]) {
     // GPU path: use compact arrays directly
     for (int ci = 0; ci < (int)nrResults; ci++) {
       mA[ci] = (double)h_matchScore[ci];
-      rowNrs[ci] = (size_t)h_matchIdx[ci];
+      rowNrs[ci] = h_matchIdx[ci];
     }
     resultNr = (int)nrResults;
   } else {
