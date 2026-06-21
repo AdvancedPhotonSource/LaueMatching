@@ -29,6 +29,14 @@ import numpy as np
 
 import laue_stream_utils as lsu
 
+# Typed solution-table column maps (REFACTOR_PLAN §6.1).
+_INSTALL_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _INSTALL_PATH not in sys.path:
+    sys.path.insert(0, _INSTALL_PATH)
+from laue_index.records import SOLUTION_FORMATS
+_PP_RUNIMAGE = SOLUTION_FORMATS["runimage"]
+_PP_STREAM = SOLUTION_FORMATS["stream"]
+
 # Optional imports
 try:
     import h5py
@@ -116,25 +124,16 @@ def process_single_image(
     n_cols = spots.shape[1] if spots.ndim == 2 else 0
     n_sol_cols = orientations.shape[1] if orientations.ndim == 2 else 0
 
-    # Stream spots have ImageNr prepended (12 cols vs 11)
-    if n_cols > 10:
-        spot_x_col = 6
-        spot_y_col = 7
-        spot_grain_col = 1
-    else:
-        spot_x_col = 5
-        spot_y_col = 6
-        spot_grain_col = 0
-
-    # Stream solutions have ImageNr prepended (>30 cols typical)
-    # RunImage solutions have GrainNr at col 0; stream has ImageNr at col 0,
-    # GrainNr at col 1.  Use same heuristic as spots.
-    if n_sol_cols > 30:
-        orient_grain_col = 1
-        orient_quality_col = 5  # NMatches*sqrt(Intensity)
-    else:
-        orient_grain_col = 0
-        orient_quality_col = 4
+    # Stream layouts prepend an ImageNr column (spots: 12 vs 11; solutions: 35
+    # vs 34), so every field is shifted +1.  Select the named column map per the
+    # existing column-count heuristic (REFACTOR_PLAN §6.1 — no more inline magic
+    # numbers).  TODO(refactor §6.2): the >30/>10 heuristic is fragile (RunImage
+    # solutions already exceed 30 cols); pass an explicit fmt from the caller.
+    spot_fmt = _PP_STREAM if n_cols > 10 else _PP_RUNIMAGE
+    sol_fmt = _PP_STREAM if n_sol_cols > 30 else _PP_RUNIMAGE
+    spot_x_col, spot_y_col, spot_grain_col = (
+        spot_fmt.spot_x, spot_fmt.spot_y, spot_fmt.spot_grain)
+    orient_grain_col, orient_quality_col = sol_fmt.grain, sol_fmt.quality
 
     # Use real image segmentation labels if provided, otherwise build
     # simple per-pixel labels as a fallback.

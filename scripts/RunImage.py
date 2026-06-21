@@ -49,6 +49,13 @@ PYTHON_PATH = sys.executable
 import laue_stream_utils as lsu
 import laue_visualization as lv
 
+# Typed solution-table column map (REFACTOR_PLAN §6.1): replaces positional
+# "magic numbers" (OM=22:31, NMatches=5, grain=0) with named fields.
+if INSTALL_PATH not in sys.path:
+    sys.path.insert(0, INSTALL_PATH)
+from laue_index.records import SOLUTION_FORMATS
+_RI = SOLUTION_FORMATS["runimage"]  # RunImage solution layout (GrainNr at col 0)
+
 # Configuration system (extracted to laue_config.py)
 from laue_config import (
     LogLevel, setup_logger,
@@ -743,8 +750,8 @@ class EnhancedImageProcessor:
                     orientations = np.expand_dims(orientations, axis=0)
 
                 for orient in orientations:
-                    # Extract orientation matrix (columns 22-30) and write space-separated
-                    matrix_elements = orient[22:31]
+                    # Extract orientation matrix and write space-separated
+                    matrix_elements = orient[_RI.om_start:_RI.om_start + 9]
                     f.write(" ".join(map(str, matrix_elements)) + "\n")
             logger.debug(f"Created temporary orientation file for simulation: {sim_orient_input_file}")
 
@@ -1043,18 +1050,19 @@ class EnhancedImageProcessor:
             filtered_orientations = lsu.filter_orientations_robust(
                 orientations_sorted, orientation_unique_spots,
                 min_unique=min_unique_spots_required,
-                grain_col=0, quality_col=4, om_start_col=22, nmatches_col=5,
+                grain_col=_RI.grain, quality_col=_RI.quality,
+                om_start_col=_RI.om_start, nmatches_col=_RI.n_matches,
                 max_angle_deg=max_ang, min_total_spots=min_total,
                 csl_sigmas=(3,), csl_tol_deg=3.0, cubic=is_cubic,
             )
             if filtered_orientations.size > 0:
-                kept_grain_nrs = set(filtered_orientations[:, 0].astype(int))
+                kept_grain_nrs = set(filtered_orientations[:, _RI.grain].astype(int))
             filtered_out_count = len(orientations_sorted) - len(filtered_orientations)
         else:
             logger.info(f"Legacy filter: dropping orientations with <{min_unique_spots_required} unique spots...")
             indices_to_keep = []
             for i, orientation in enumerate(orientations_sorted):
-                grain_nr = int(orientation[0])
+                grain_nr = int(orientation[_RI.grain])
                 unique_spot_data = orientation_unique_spots.get(grain_nr)
                 if unique_spot_data and unique_spot_data["unique_label_count"] >= min_unique_spots_required:
                     indices_to_keep.append(i)
@@ -1065,7 +1073,7 @@ class EnhancedImageProcessor:
 
         # --- Filter Spots based on kept Grain Numbers ---
         if spots_unfiltered.size > 0 and kept_grain_nrs:
-            filtered_spots = spots_unfiltered[np.isin(spots_unfiltered[:, 0].astype(int), list(kept_grain_nrs))]
+            filtered_spots = spots_unfiltered[np.isin(spots_unfiltered[:, _RI.spot_grain].astype(int), list(kept_grain_nrs))]
         else:
             filtered_spots = np.empty((0, spots_unfiltered.shape[1])) # Keep shape if empty
 

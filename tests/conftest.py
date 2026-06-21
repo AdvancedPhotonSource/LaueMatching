@@ -12,6 +12,10 @@ import sys
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_SCRIPTS = os.path.join(_HERE, os.pardir, "scripts")
-if _SCRIPTS not in sys.path:
-    sys.path.insert(0, _SCRIPTS)
+_ROOT = os.path.abspath(os.path.join(_HERE, os.pardir))
+_SCRIPTS = os.path.join(_ROOT, "scripts")
+# Repo root first so ``import laue_index`` resolves the new package; scripts/
+# next so the legacy modules (laue_stream_utils, laue_config) import flat.
+for _p in (_SCRIPTS, _ROOT):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
