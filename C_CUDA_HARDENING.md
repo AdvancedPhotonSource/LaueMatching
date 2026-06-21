@@ -51,6 +51,15 @@ local toolchain — `.cu` changes are built/tested on **sentosa** (H200, CUDA 12
   `queue_destroy` (shutdown race); `SO_RCVTIMEO` + `EINTR` retry on `recv`;
   `signal()` → `sigaction` (no SA_RESTART); usage text float (was double).
 
+## VALIDATION (sentosa, CUDA 12.9 / H200 sm_90)
+- CPU.c + headers: local build clean, e2e DoFwd=0 golden byte-identical.
+- GPU.cu + GPUStream.cu: build clean (no warnings).
+- GPU functional run on the full 100M-orientation DB (frame 1040, 388 s):
+  3180 initial -> 145 unique; the two strong grains match the CPU golden
+  exactly by DB row + match count — row 76986273 (19 matches) and row
+  95915314 (18 matches).  Confirms the size_t/bounds hardening is correct at
+  scale and the GPU agrees with the CPU on indexed orientations.
+
 ## DEFERRED — behaviour-changing (need their own validation, not hardening)
 - `mergeDuplicateOrientations` O(N²) pairwise matrix: bound `nrResults` before
   the merge (changes results for pathological high-match frames; the NULL check

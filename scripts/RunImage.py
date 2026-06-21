@@ -1005,33 +1005,6 @@ class EnhancedImageProcessor:
         }
 
 
-    def _calculate_unique_spots_per_orientation(
-        self,
-        orientations: np.ndarray,
-        spots: np.ndarray,
-        labels: np.ndarray
-    ) -> Dict[int, Dict]:
-        """
-        Calculate the number of unique spots/labels for each orientation,
-        prioritizing assignments based on orientation quality score.
-        """
-        result = lsu.calculate_unique_spots(orientations, spots, labels)
-        logger.info(f"Calculated unique spots/labels for {len(result)} orientations based on quality.")
-        return result
-
-
-    def _sort_orientations_by_quality(
-        self,
-        orientations: np.ndarray,
-        orientation_unique_spots: Optional[Dict[int, Dict]] = None
-    ) -> np.ndarray:
-        """Sort orientations by quality score (col 4) descending. Delegates to lsu."""
-        sorted_arr = lsu.sort_orientations_by_quality(orientations)
-        if sorted_arr.size > 0:
-            logger.info(f"Sorted {len(sorted_arr)} orientations by quality score (column 4) descending.")
-        return sorted_arr
-
-
     def _create_h5_output(
         self,
         output_path: str,
