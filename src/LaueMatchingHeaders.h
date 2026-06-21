@@ -946,6 +946,23 @@ static inline int writeCalcOverlap(float *image, double euler[3], int *hkls,
   return nrSps;
 }
 
+// Cap on the number of coarse match results fed into the O(N^2) merge below.
+// Far above any realistic per-frame count (hundreds to a few thousand), so it
+// is a no-op for normal data; it only fires on a pathological frame to keep the
+// pairwise misorientation matrix (nrResults^2) from exhausting memory.
+#define MERGE_MAX_RESULTS 50000
+
+typedef struct {
+  double score;
+  size_t row;
+} ScoreRow_t;
+
+static int cmpScoreRowDesc(const void *a, const void *b) {
+  double sa = ((const ScoreRow_t *)a)->score;
+  double sb = ((const ScoreRow_t *)b)->score;
+  return (sa < sb) - (sa > sb); // descending by score
+}
+
 // ── Merge duplicate orientations (parallel) ──────────────────────────────
 // Clusters match results by misorientation angle using OMP-parallel
 // pairwise precomputation.  Returns number of unique solutions.
@@ -954,6 +971,30 @@ static inline int mergeDuplicateOrientations(double *orients, size_t *rowNrs,
                                              double maxAngle, int numProcs,
                                              double *FinOrientArr, int *dArr,
                                              int *bsArr, double *bsScoreArr) {
+  // Cap pathological result counts: keep the top MERGE_MAX_RESULTS by coarse
+  // score before the O(N^2) clustering.  No-op for realistic frames.
+  if (nrResults > MERGE_MAX_RESULTS) {
+    fprintf(stderr,
+            "WARNING: %d coarse matches exceed merge cap %d; keeping the "
+            "top-scored before clustering.\n",
+            nrResults, MERGE_MAX_RESULTS);
+    ScoreRow_t *sr = (ScoreRow_t *)malloc((size_t)nrResults * sizeof(ScoreRow_t));
+    if (sr == NULL) {
+      fprintf(stderr, "FATAL: could not allocate score-sort buffer.\n");
+      exit(EXIT_FAILURE);
+    }
+    for (int i = 0; i < nrResults; i++) {
+      sr[i].score = matchScores[i];
+      sr[i].row = rowNrs[i];
+    }
+    qsort(sr, (size_t)nrResults, sizeof(ScoreRow_t), cmpScoreRowDesc);
+    for (int i = 0; i < MERGE_MAX_RESULTS; i++) {
+      matchScores[i] = sr[i].score;
+      rowNrs[i] = sr[i].row;
+    }
+    free(sr);
+    nrResults = MERGE_MAX_RESULTS;
+  }
   int *doneArr = (int *)calloc(nrResults, sizeof(int));
   // Step 1: Precompute quaternions for all matches (parallel)
   double *quats = (double *)malloc((size_t)nrResults * 4 * sizeof(double));
