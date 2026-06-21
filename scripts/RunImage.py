@@ -892,14 +892,17 @@ class EnhancedImageProcessor:
              logger.error(f"GenerateHKLs.py script not found at {genhkl_script}")
              return {"success": False, "error": "GenerateHKLs.py not found"}
 
+        # GenerateHKLs.py expects -latticeParameter / -RArray / -PArray as
+        # multi-token nargs (6, 3, 3 floats); unpack the space-separated
+        # config strings.
         cmd = [
             PYTHON_PATH, genhkl_script,
             '-resultFileName', hkl_file,
             '-sgnum', str(sg_num),
             '-sym', sym,
-            '-latticeParameter', lat_c,
-            '-RArray', r_arr,
-            '-PArray', p_arr,
+            '-latticeParameter', *str(lat_c).split(),
+            '-RArray', *str(r_arr).split(),
+            '-PArray', *str(p_arr).split(),
             '-NumPxX', str(n_px_x),
             '-NumPxY', str(n_px_y),
             '-dx', str(dx),
@@ -1008,39 +1011,57 @@ class EnhancedImageProcessor:
              orientations_unfiltered, orientation_unique_spots # Pass unique spots info if needed for sorting
         )
 
-        # --- Filter Orientations based on Min Unique Spots ---
-        min_unique_spots_required = self.config.get("min_good_spots", 2) # Use MinGoodSpots from config
-        logger.info(f"Filtering orientations with less than {min_unique_spots_required} unique spots...")
+        # --- Filter Orientations: twin/CSL-aware robust dedup (default) ---
+        # The legacy unique-spot filter deletes real Sigma3-twinned crystals:
+        # the higher-goodness partner claims the shared coincident reflections
+        # (winner-take-all), starving the other of *unique* spots so it is
+        # dropped despite matching many spots.  filter_orientations_robust
+        # (a) keeps distinct solutions clearing an evidence floor, (b) merges
+        # near-duplicates by symmetry-reduced disorientation, and (c) EXEMPTS
+        # CSL/twin-related solutions (e.g. Sigma3 60deg/<111>) from the
+        # unique-spot test.  Set RobustFilter 0 in the config for legacy.
+        min_unique_spots_required = self.config.get("min_good_spots", 2) # MinGoodSpots
+        use_robust = bool(self.config.get("robust_filter", True))
+        sg = int(self.config.get("space_group", 225) or 225)
+        is_cubic = 195 <= sg <= 230
 
-        indices_to_keep = []
+        if orientations_sorted.size > 0 and len(orientations_sorted.shape) == 1:
+            orientations_sorted = np.expand_dims(orientations_sorted, axis=0)
+
         kept_grain_nrs = set()
         filtered_out_count = 0
 
-        if orientations_sorted.size > 0:
-            if len(orientations_sorted.shape) == 1: # Handle single orientation case
-                orientations_sorted = np.expand_dims(orientations_sorted, axis=0)
-
+        if orientations_sorted.size == 0:
+            filtered_orientations = orientations_sorted.copy()
+        elif use_robust:
+            min_total = int(self.config.get("min_nr_spots", 5))
+            max_ang = float(self.config.get("maxAngle", 5.0))
+            logger.info(
+                f"Robust (twin/CSL-aware) orientation filter: min_unique="
+                f"{min_unique_spots_required}, min_total={min_total}, "
+                f"max_angle={max_ang}, cubic={is_cubic}")
+            filtered_orientations = lsu.filter_orientations_robust(
+                orientations_sorted, orientation_unique_spots,
+                min_unique=min_unique_spots_required,
+                grain_col=0, quality_col=4, om_start_col=22, nmatches_col=5,
+                max_angle_deg=max_ang, min_total_spots=min_total,
+                csl_sigmas=(3,), csl_tol_deg=3.0, cubic=is_cubic,
+            )
+            if filtered_orientations.size > 0:
+                kept_grain_nrs = set(filtered_orientations[:, 0].astype(int))
+            filtered_out_count = len(orientations_sorted) - len(filtered_orientations)
+        else:
+            logger.info(f"Legacy filter: dropping orientations with <{min_unique_spots_required} unique spots...")
+            indices_to_keep = []
             for i, orientation in enumerate(orientations_sorted):
                 grain_nr = int(orientation[0])
                 unique_spot_data = orientation_unique_spots.get(grain_nr)
-
-                if unique_spot_data:
-                    # Use unique_label_count which counts distinct segmented regions
-                    unique_spot_count = unique_spot_data["unique_label_count"]
-                    if unique_spot_count >= min_unique_spots_required:
-                        indices_to_keep.append(i)
-                        kept_grain_nrs.add(grain_nr)
-                    else:
-                        logger.debug(f"Filtering out Grain Nr {grain_nr} (Unique Spots: {unique_spot_count} < {min_unique_spots_required})")
-                        filtered_out_count += 1
+                if unique_spot_data and unique_spot_data["unique_label_count"] >= min_unique_spots_required:
+                    indices_to_keep.append(i)
+                    kept_grain_nrs.add(grain_nr)
                 else:
-                    # Should not happen if calculation included all, but handle defensively
-                    logger.warning(f"Grain Nr {grain_nr} from sorted orientations not found in unique spot results. Filtering it out.")
                     filtered_out_count += 1
-
             filtered_orientations = orientations_sorted[indices_to_keep]
-        else:
-             filtered_orientations = np.empty((0, orientations_sorted.shape[1])) # Keep shape if empty
 
         # --- Filter Spots based on kept Grain Numbers ---
         if spots_unfiltered.size > 0 and kept_grain_nrs:

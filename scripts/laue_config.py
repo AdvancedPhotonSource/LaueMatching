@@ -162,6 +162,13 @@ class LaueConfig:
     min_good_spots: int = 5
     max_laue_spots: int = 7
     min_nr_spots: int = 5
+    # Twin/CSL-aware robust orientation filter (default on). When True, real
+    # Sigma3 twins are not deleted by the unique-spot dedup; set False for the
+    # legacy unique-spot-only filter.
+    robust_filter: bool = True
+    # Per-thread orientation batch size for the indexer.  Bounds memory:
+    # peak RAM ~= numProcs * batch_size * (1 + 2*max_laue_spots) * 2 bytes.
+    batch_size: int = 1_000_000
 
     # File paths
     result_dir: str = "results"
@@ -354,8 +361,8 @@ class ConfigurationManager:
                 self.config.space_group = get_val(1, int)
             elif key == 'Symmetry':
                 sym = get_val(1, str)
-                if sym not in 'FICAR' or len(sym) != 1:
-                    logger.error('Invalid value for Symmetry, must be one character from F,I,C,A,R')
+                if sym not in 'FICARPB' or len(sym) != 1:
+                    logger.error('Invalid value for Symmetry, must be one character from F,I,C,A,R,P,B')
                     raise ValueError('Invalid Symmetry')
                 self.config.symmetry = sym
             elif key == 'LatticeParameter':
@@ -417,10 +424,14 @@ class ConfigurationManager:
                 self.config.min_good_spots = get_val(1, int)
             elif key == 'MinNrSpots':
                 self.config.min_nr_spots = get_val(1, int)
+            elif key == 'RobustFilter':
+                self.config.robust_filter = bool(get_val(1, int))
             elif key == 'MaxAngle':
                 self.config.maxAngle = get_val(1, float)
             elif key == 'MaxNrLaueSpots':
                 self.config.max_laue_spots = get_val(1, int)
+            elif key == 'BatchSize':
+                self.config.batch_size = get_val(1, int)
             elif key == 'ResultDir':
                 self.config.result_dir = get_val(1, str)
             elif key == 'OrientationFile':
@@ -554,12 +565,14 @@ class ConfigurationManager:
             f.write("# --- Indexing Parameters (Executable) ---\n")
             f.write(f"MinNrSpots         {self.config.min_nr_spots}\n")
             f.write(f"MaxNrLaueSpots     {self.config.max_laue_spots}\n")
+            f.write(f"BatchSize          {self.config.batch_size} # Indexer batch size; bounds peak RAM\n")
             f.write(f"MaxAngle           {self.config.maxAngle}\n")
             f.write(f"MinIntensity       {self.config.min_intensity} # (May be deprecated by threshold methods)\n\n")
 
             # --- Filtering Parameters ---
             f.write("# --- Orientation Filtering (Python) ---\n")
-            f.write(f"MinGoodSpots       {self.config.min_good_spots} # Min unique spots to keep orientation\n\n")
+            f.write(f"MinGoodSpots       {self.config.min_good_spots} # Min unique spots to keep orientation\n")
+            f.write(f"RobustFilter       {int(self.config.robust_filter)} # 1=twin/CSL-aware filter (keep Sigma3 twins), 0=legacy unique-spot only\n\n")
 
             # --- Image Processing Parameters ---
             f.write("# --- Image Processing (Python) ---\n")
