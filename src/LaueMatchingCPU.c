@@ -8,6 +8,7 @@
 //
 
 #include "LaueMatchingHeaders.h"
+#include <errno.h>
 
 // ── Global variable definitions (declared extern in header) ─────────────
 double tol_LatC[6];
@@ -58,6 +59,7 @@ int main(int argc, char *argv[]) {
   }
   char aline[1000], *str, dummy[1000], outfn[1000];
   int LowNr, nrPxX, nrPxY, maxNrSpots = 500, minNrSpots = 5, doFwd = 1;
+  size_t batchSize = 1000000; // default 1M orientations per batch
   sg_num = 225;
   double pArr[3], rArr[3], pxX, pxY, Elo = 5, Ehi = 30;
   int iter;
@@ -142,6 +144,13 @@ int main(int argc, char *argv[]) {
     LowNr = strncmp(aline, str, strlen(str));
     if (LowNr == 0) {
       sscanf(aline, "%s %d", dummy, &maxNrSpots);
+      continue;
+    }
+    str = "BatchSize";
+    LowNr = strncmp(aline, str, strlen(str));
+    if (LowNr == 0) {
+      sscanf(aline, "%s %zu", dummy, &batchSize);
+      if (batchSize == 0) batchSize = 1000000; // guard against 0
       continue;
     }
     str = "MinNrSpots";
@@ -272,6 +281,11 @@ int main(int argc, char *argv[]) {
     return 1;
   }
   int *hkls = calloc(MaxNHKLS * 3, sizeof(*hkls));
+  if (hkls == NULL) {
+    fprintf(stderr, "FATAL: could not allocate hkls (%zu bytes).\n",
+            (size_t)MaxNHKLS * 3 * sizeof(*hkls));
+    return 1;
+  }
   int nhkls = 0;
   while (fgets(aline, 1000, hklf) != NULL) {
     if (nhkls >= MaxNHKLS) { // FIX: bounds check
@@ -294,7 +308,13 @@ int main(int argc, char *argv[]) {
     printf("Could not read image file %s.\n", imageFN);
     return 1;
   }
-  double *image = malloc(nrPxX * nrPxY * sizeof(*image));
+  double *image = malloc((size_t)nrPxX * nrPxY * sizeof(*image));
+  if (image == NULL) {
+    fprintf(stderr, "FATAL: could not allocate image buffer (%zu bytes).\n",
+            (size_t)nrPxX * nrPxY * sizeof(*image));
+    fclose(imageFile);
+    return 1;
+  }
   size_t read_cts = fread(image, nrPxX * nrPxY * sizeof(*image), 1, imageFile);
   if (read_cts != 1) {
     if (ferror(imageFile)) {
@@ -350,7 +370,17 @@ int main(int argc, char *argv[]) {
     return 1;
   }
   int numProcs = atoi(argv[5]);
-  printf("Now running using %d threads.\n", numProcs);
+  // Clamp BatchSize so we never over-allocate the per-thread batch buffer
+  // beyond the thread's own slab of orientations.
+  size_t nrOrientsThreadCap =
+      (nrOrients + (size_t)numProcs - 1) / (size_t)numProcs;
+  if (batchSize > nrOrientsThreadCap) batchSize = nrOrientsThreadCap;
+  size_t batchBytes =
+      batchSize * (size_t)(1 + 2 * maxNrSpots) * sizeof(uint16_t);
+  printf("Now running using %d threads. BatchSize=%zu (per-thread batch buffer "
+         "%.2f MB; %d threads => peak %.2f MB).\n",
+         numProcs, batchSize, (double)batchBytes / (1024.0 * 1024.0), numProcs,
+         (double)batchBytes * numProcs / (1024.0 * 1024.0));
   fflush(stdout);
   double start_time = omp_get_wtime();
   int global_iterator, k, l, nrResults = 0;
@@ -384,7 +414,16 @@ int main(int argc, char *argv[]) {
   int fwdFd = -1;
   if (doFwd == 1) {
     pxImgAll = calloc((size_t)nrPxX * nrPxY * numProcs, sizeof(*pxImgAll));
-    fwdFd = open(outfn, O_CREAT | O_WRONLY | O_SYNC,
+    if (pxImgAll == NULL) {
+      fprintf(stderr,
+              "FATAL: could not allocate pxImgAll (%zu bytes for %d threads).\n",
+              (size_t)nrPxX * nrPxY * numProcs * sizeof(*pxImgAll), numProcs);
+      return 1;
+    }
+    // No O_SYNC: with batched pwrites we'd otherwise sync per-batch,
+    // serializing writes against compute and inflating wallclock by ~5x.
+    // We fsync once at the very end of the parallel region instead.
+    fwdFd = open(outfn, O_CREAT | O_WRONLY,
                  S_IRUSR | S_IWUSR); // FIX: open once, not per-thread
     if (fwdFd < 0) {
       printf("Could not open forward output file %s.\n", outfn);
@@ -403,193 +442,245 @@ int main(int argc, char *argv[]) {
     }
   }
 
+  // Per-orientation forward simulation table is uint16[1 + 2*maxNrSpots]
+  // (entry 0 = spot count; remaining = spotNr × {ipx, ipy} pairs).  We
+  // process orientations in batches of size `batchSize` per thread so that
+  // the in-memory buffer is bounded regardless of how large the
+  // (orientations × MaxNrLaueSpots) cross-product becomes.  Disk layout of
+  // the cache file is unchanged: entry orientNr starts at byte offset
+  // orientNr × (1 + 2*maxNrSpots) × sizeof(uint16_t).
+  size_t entriesPerOrient = (size_t)(1 + 2 * maxNrSpots);
 #pragma omp parallel num_threads(numProcs)
   {
     int procNr = omp_get_thread_num();
-    int nrOrientsThread = (int)ceil((double)nrOrients / (double)numProcs);
-    uint16_t *outArrThis;
-    size_t szArr = nrOrientsThread * (1 + 2 * maxNrSpots);
-    size_t OffsetHere;
-    OffsetHere = procNr;
-    OffsetHere *= szArr;
-    OffsetHere *= sizeof(*outArrThis);
-    int startOrientNr = procNr * nrOrientsThread;
-    int endOrientNr = startOrientNr + nrOrientsThread;
-    if (endOrientNr > (int)nrOrients)
+    size_t nrOrientsThread =
+        (nrOrients + (size_t)numProcs - 1) / (size_t)numProcs;
+    size_t startOrientNr = (size_t)procNr * nrOrientsThread;
+    size_t endOrientNr = startOrientNr + nrOrientsThread;
+    if (endOrientNr > nrOrients)
       endOrientNr = nrOrients;
-    nrOrientsThread = endOrientNr - startOrientNr;
-    szArr = nrOrientsThread * (1 + 2 * maxNrSpots);
-    outArrThis = calloc(szArr, sizeof(*outArrThis));
-    if (outArrThis == NULL) {
-      printf("Could not allocate outArr per thread, needed %lldMB of RAM. "
-             "Behavior unexpected now.\n",
-             (long long int)nrOrientsThread * (10 + 5 * maxNrSpots) *
-                 sizeof(double) / (1024 * 1024));
+
+    // Per-thread batch buffer (big enough for one batch only).
+    size_t batchEntries = batchSize * entriesPerOrient;
+    uint16_t *outArrBatch = calloc(batchEntries, sizeof(*outArrBatch));
+    if (outArrBatch == NULL) {
+      fprintf(stderr,
+              "FATAL: thread %d failed to allocate %.2f MB batch buffer "
+              "(BatchSize=%zu, MaxNrLaueSpots=%d). Reduce BatchSize and "
+              "rerun.\n",
+              procNr,
+              (double)(batchEntries * sizeof(*outArrBatch)) / (1024.0 * 1024.0),
+              batchSize, maxNrSpots);
+      exit(EXIT_FAILURE);
     }
-    if (doFwd == 0) {
-      if (LowNr != 0) {
-        int result = open(outfn, O_RDONLY | O_SYNC, S_IRUSR | S_IWUSR);
-        ssize_t readBytes =
-            pread(result, outArrThis, szArr * sizeof(*outArrThis), OffsetHere);
-        if (readBytes != (ssize_t)(szArr * sizeof(*outArrThis))) {
-          OffsetHere += readBytes;
-          size_t offset_arr = readBytes / sizeof(*outArrThis);
-          size_t bytesRemaining = szArr * sizeof(*outArrThis) - readBytes;
-          readBytes = pread(result, outArrThis + offset_arr, bytesRemaining,
-                            OffsetHere);
-          if (readBytes != (ssize_t)bytesRemaining)
-            printf("Second try didn't work either."
-                   "Too big array. Update code. Read %zu bytes, but wanted to "
-                   "read %zu bytes.\n",
-                   (size_t)readBytes, bytesRemaining);
-        }
-        close(result);
-      } else {
-        size_t locOffset = OffsetHere / sizeof(*outArr);
-        outArrThis = &outArr[locOffset];
+    double *qhatarr = calloc((size_t)maxNrSpots * 3, sizeof(*qhatarr));
+    if (qhatarr == NULL) {
+      fprintf(stderr, "FATAL: thread %d failed to allocate qhatarr.\n", procNr);
+      exit(EXIT_FAILURE);
+    }
+
+    // Open the cache file for read once per thread (doFwd==0 + non-/dev/shm).
+    int rfd = -1;
+    if (doFwd == 0 && LowNr != 0) {
+      rfd = open(outfn, O_RDONLY, S_IRUSR | S_IWUSR);
+      if (rfd < 0) {
+        fprintf(stderr,
+                "FATAL: thread %d could not open cache for read: %s.\n",
+                procNr, strerror(errno));
+        exit(EXIT_FAILURE);
       }
     }
-    int orientNr;
-    double *qhatarr = calloc(maxNrSpots * 3, sizeof(*qhatarr));
-    size_t loc;
-    int ipx, ipy; // FIX: use int instead of uint16_t for bounds checking
-    double thisInt;
-    double tO[3][3], thisOrient[3][3];
-    int i, j;
-    int hklnr, badSpot;
-    double hkl[3], qvec[3], qlen, qhat[3], dot, kf[3], xyz[3], xp, yp, sinTheta,
-        E;
-    double ki[3] = {0, 0, 1.0};
-    int spotNr, iterNr;
-    int nSpots;
-    double totInt;
-    for (orientNr = startOrientNr; orientNr < endOrientNr; orientNr++) {
-      nSpots = 0;
-      totInt = 0;
-      if (doFwd == 1) {
-        bool *pxImg;
-        size_t offstBoolImg;
-        offstBoolImg = nrPxX;
-        offstBoolImg *= nrPxY;
-        offstBoolImg *= procNr;
-        pxImg = &pxImgAll[offstBoolImg];
-        spotNr = 0;
-        for (i = 0; i < 3; i++)
-          for (j = 0; j < 3; j++)
-            tO[i][j] = orients[orientNr * 9 + i * 3 + j];
-        MatrixMultF33(tO, recip, thisOrient);
-        for (hklnr = 0; hklnr < nhkls; hklnr++) {
-          hkl[0] = hkls[hklnr * 3 + 0];
-          hkl[1] = hkls[hklnr * 3 + 1];
-          hkl[2] = hkls[hklnr * 3 + 2];
-          MatrixMultF(thisOrient, hkl, qvec);
-          qlen = CalcLength(qvec[0], qvec[1], qvec[2]);
-          if (qlen == 0)
-            continue;
-          qhat[0] = qvec[0] / qlen;
-          qhat[1] = qvec[1] / qlen;
-          qhat[2] = qvec[2] / qlen;
-          dot = qhat[2];
-          kf[0] = ki[0] - 2 * dot * qhat[0];
-          kf[1] = ki[1] - 2 * dot * qhat[1];
-          kf[2] = ki[2] - 2 * dot * qhat[2];
-          MatrixMultF(rotTranspose, kf, xyz);
-          if (xyz[2] <= 0)
-            continue;
-          xyz[0] = xyz[0] * pArr[2] / xyz[2];
-          xyz[1] = xyz[1] * pArr[2] / xyz[2];
-          xyz[2] = pArr[2];
-          xp = xyz[0] - pArr[0];
-          yp = xyz[1] - pArr[1];
-          // FIX: compute as int first, then check bounds (uint16_t < 0 was
-          // always false)
-          ipx = (int)((xp / pxX) + (0.5 * (nrPxX - 1)));
-          if (ipx < 0 || ipx > (nrPxX - 1))
-            continue;
-          ipy = (int)((yp / pxY) + (0.5 * (nrPxY - 1)));
-          if (ipy < 0 || ipy > (nrPxY - 1))
-            continue;
-          sinTheta = -qhat[2];
-          E = hc_keVnm * qlen / (4 * M_PI * sinTheta);
-          if (E < Elo || E > Ehi)
-            continue;
-          badSpot = 0;
-          if (pxImg[ipx * nrPxY + ipy])
-            badSpot = 1;
-          if (badSpot == 0) {
-            pxImg[ipx * nrPxY + ipy] = true;
-            qhatarr[3 * spotNr + 0] = qhat[0];
-            qhatarr[3 * spotNr + 1] = qhat[1];
-            qhatarr[3 * spotNr + 2] = qhat[2];
-            outArrThis[(orientNr - startOrientNr) * (1 + 2 * maxNrSpots) + 1 +
-                       2 * spotNr + 0] = (uint16_t)ipx;
-            outArrThis[(orientNr - startOrientNr) * (1 + 2 * maxNrSpots) + 1 +
-                       2 * spotNr + 1] = (uint16_t)ipy;
-            thisInt = image[ipy * nrPxX + ipx];
-            if (thisInt > 0) {
-              totInt += thisInt;
+
+    // ── Batch loop ────────────────────────────────────────────────────────
+    for (size_t batchStart = startOrientNr; batchStart < endOrientNr;
+         batchStart += batchSize) {
+      size_t batchEnd = batchStart + batchSize;
+      if (batchEnd > endOrientNr)
+        batchEnd = endOrientNr;
+      size_t thisBatch = batchEnd - batchStart;
+      size_t batchByteOffset =
+          batchStart * entriesPerOrient * sizeof(*outArrBatch);
+      size_t bytesThisBatch = thisBatch * entriesPerOrient * sizeof(*outArrBatch);
+
+      // Populate the batch buffer for this batch.
+      if (doFwd == 0) {
+        if (LowNr == 0) {
+          // /dev/shm fast path: copy from the read-only mmap region.
+          size_t locOffset = batchStart * entriesPerOrient;
+          memcpy(outArrBatch, &outArr[locOffset], bytesThisBatch);
+        } else {
+          // Regular file: pread (loop until satisfied).
+          size_t bytesGot = 0;
+          while (bytesGot < bytesThisBatch) {
+            ssize_t rc =
+                pread(rfd, (char *)outArrBatch + bytesGot,
+                      bytesThisBatch - bytesGot, batchByteOffset + bytesGot);
+            if (rc <= 0) {
+              fprintf(stderr,
+                      "FATAL: thread %d cache pread failed at offset %zu "
+                      "(got %zu of %zu bytes): %s\n",
+                      procNr, batchByteOffset + bytesGot, bytesGot,
+                      bytesThisBatch,
+                      (rc < 0) ? strerror(errno) : "unexpected EOF");
+              exit(EXIT_FAILURE);
+            }
+            bytesGot += (size_t)rc;
+          }
+        }
+      } else {
+        // doFwd==1: clear the batch buffer to zero before fresh fill.
+        memset(outArrBatch, 0, bytesThisBatch);
+      }
+
+      // ── Inner orientation loop (within the batch) ────────────────────
+      int ipx, ipy;
+      double thisInt;
+      double tO[3][3], thisOrient[3][3];
+      int i, j;
+      int hklnr, badSpot;
+      double hkl[3], qvec[3], qlen, qhat[3], dot, kf[3], xyz[3], xp, yp,
+          sinTheta, E;
+      double ki[3] = {0, 0, 1.0};
+      int spotNr, iterNr;
+      int nSpots;
+      double totInt;
+      size_t loc;
+      for (size_t orientNr = batchStart; orientNr < batchEnd; orientNr++) {
+        nSpots = 0;
+        totInt = 0;
+        size_t local = orientNr - batchStart; // index within the batch buffer
+        if (doFwd == 1) {
+          bool *pxImg;
+          size_t offstBoolImg = (size_t)nrPxX * nrPxY * (size_t)procNr;
+          pxImg = &pxImgAll[offstBoolImg];
+          spotNr = 0;
+          for (i = 0; i < 3; i++)
+            for (j = 0; j < 3; j++)
+              tO[i][j] = orients[orientNr * 9 + (size_t)i * 3 + (size_t)j];
+          MatrixMultF33(tO, recip, thisOrient);
+          for (hklnr = 0; hklnr < nhkls; hklnr++) {
+            hkl[0] = hkls[hklnr * 3 + 0];
+            hkl[1] = hkls[hklnr * 3 + 1];
+            hkl[2] = hkls[hklnr * 3 + 2];
+            MatrixMultF(thisOrient, hkl, qvec);
+            qlen = CalcLength(qvec[0], qvec[1], qvec[2]);
+            if (qlen == 0)
+              continue;
+            qhat[0] = qvec[0] / qlen;
+            qhat[1] = qvec[1] / qlen;
+            qhat[2] = qvec[2] / qlen;
+            dot = qhat[2];
+            kf[0] = ki[0] - 2 * dot * qhat[0];
+            kf[1] = ki[1] - 2 * dot * qhat[1];
+            kf[2] = ki[2] - 2 * dot * qhat[2];
+            MatrixMultF(rotTranspose, kf, xyz);
+            if (xyz[2] <= 0)
+              continue;
+            xyz[0] = xyz[0] * pArr[2] / xyz[2];
+            xyz[1] = xyz[1] * pArr[2] / xyz[2];
+            xyz[2] = pArr[2];
+            xp = xyz[0] - pArr[0];
+            yp = xyz[1] - pArr[1];
+            ipx = (int)((xp / pxX) + (0.5 * (nrPxX - 1)));
+            if (ipx < 0 || ipx > (nrPxX - 1))
+              continue;
+            ipy = (int)((yp / pxY) + (0.5 * (nrPxY - 1)));
+            if (ipy < 0 || ipy > (nrPxY - 1))
+              continue;
+            sinTheta = -qhat[2];
+            E = hc_keVnm * qlen / (4 * M_PI * sinTheta);
+            if (E < Elo || E > Ehi)
+              continue;
+            badSpot = 0;
+            if (pxImg[ipx * nrPxY + ipy])
+              badSpot = 1;
+            if (badSpot == 0) {
+              pxImg[ipx * nrPxY + ipy] = true;
+              qhatarr[3 * spotNr + 0] = qhat[0];
+              qhatarr[3 * spotNr + 1] = qhat[1];
+              qhatarr[3 * spotNr + 2] = qhat[2];
+              outArrBatch[local * entriesPerOrient + 1 + 2 * spotNr + 0] =
+                  (uint16_t)ipx;
+              outArrBatch[local * entriesPerOrient + 1 + 2 * spotNr + 1] =
+                  (uint16_t)ipy;
+              thisInt = image[ipy * nrPxX + ipx];
+              if (thisInt > 0) {
+                totInt += thisInt;
+                nSpots++;
+              }
+              spotNr++;
+              if (spotNr == maxNrSpots)
+                break;
+            }
+          }
+          // Clear the per-thread pixel-occupancy mask for this orientation
+          // so the next orientation starts clean.
+          for (iterNr = 0; iterNr < spotNr; iterNr++) {
+            pxImg[outArrBatch[local * entriesPerOrient + 1 + 2 * iterNr + 0] *
+                      nrPxY +
+                  outArrBatch[local * entriesPerOrient + 1 + 2 * iterNr + 1]] =
+                false;
+          }
+          outArrBatch[local * entriesPerOrient + 0] = (uint16_t)spotNr;
+        } else {
+          loc = local * entriesPerOrient + 0;
+          spotNr = (int)outArrBatch[loc];
+          for (hklnr = 0; hklnr < spotNr; hklnr++) {
+            loc++;
+            ipx = outArrBatch[loc];
+            loc++;
+            ipy = outArrBatch[loc];
+            uint8_t raw = image_u8[ipy * nrPxX + ipx];
+            if (raw > 0) {
+              totInt += (double)raw * imScale;
               nSpots++;
             }
-            spotNr++;
-            if (spotNr == maxNrSpots)
-              break;
           }
         }
-        for (iterNr = 0; iterNr < spotNr; iterNr++) {
-          pxImg[outArrThis[(orientNr - startOrientNr) * (1 + 2 * maxNrSpots) +
-                           1 + 2 * iterNr + 0] *
-                    nrPxY +
-                outArrThis[(orientNr - startOrientNr) * (1 + 2 * maxNrSpots) +
-                           1 + 2 * iterNr + 1]] = false;
-        }
-        outArrThis[(orientNr - startOrientNr) * (1 + 2 * maxNrSpots) + 0] =
-            (uint16_t)spotNr;
-      } else {
-        loc = (orientNr - startOrientNr) * (1 + 2 * maxNrSpots) + 0;
-        spotNr = (int)outArrThis[loc];
-        for (hklnr = 0; hklnr < spotNr; hklnr++) {
-          loc++;
-          ipx = outArrThis[loc];
-          loc++;
-          ipy = outArrThis[loc];
-          uint8_t raw = image_u8[ipy * nrPxX + ipx];
-          if (raw > 0) {
-            totInt += (double)raw * imScale;
-            nSpots++;
-          }
-        }
-      }
-      if (nSpots >= minNrSpots && totInt >= minIntensity) {
+        if (nSpots >= minNrSpots && totInt >= minIntensity) {
 #pragma omp critical
-        {
-          nrResults++;
-        }
-        matchedArr[orientNr] = totInt * sqrt((double)nSpots);
-      }
-    }
-    if (doFwd == 1) {
-      ssize_t rc =
-          pwrite(fwdFd, outArrThis, szArr * sizeof(*outArrThis), OffsetHere);
-      if (rc < 0) {
-        perror("Error: Could not write to output file");
-      } else if (rc != (ssize_t)(szArr * sizeof(*outArrThis))) {
-        size_t off2 = OffsetHere + rc;
-        size_t offset_arr = rc / sizeof(*outArrThis);
-        size_t bytesRemaining = szArr * sizeof(*outArrThis) - rc;
-        rc = pwrite(fwdFd, outArrThis + offset_arr, bytesRemaining, off2);
-        if (rc != (ssize_t)bytesRemaining) {
-          perror("Error: Second write attempt failed");
-          printf("Partial write: Expected %zu bytes, wrote %zd\n",
-                 bytesRemaining, rc);
+          {
+            nrResults++;
+          }
+          matchedArr[orientNr] = totInt * sqrt((double)nSpots);
         }
       }
-    }
-    if (LowNr != 0)
-      free(outArrThis);
-    free(qhatarr); // FIX: was never freed
+      // ── End inner orientation loop ───────────────────────────────────
+
+      // Write this batch back to the cache (doFwd==1).
+      if (doFwd == 1) {
+        size_t bytesWritten = 0;
+        while (bytesWritten < bytesThisBatch) {
+          ssize_t rc =
+              pwrite(fwdFd, (char *)outArrBatch + bytesWritten,
+                     bytesThisBatch - bytesWritten,
+                     batchByteOffset + bytesWritten);
+          if (rc < 0) {
+            fprintf(stderr,
+                    "FATAL: thread %d pwrite failed at offset %zu "
+                    "(wrote %zu of %zu bytes): %s\n",
+                    procNr, batchByteOffset + bytesWritten, bytesWritten,
+                    bytesThisBatch, strerror(errno));
+            exit(EXIT_FAILURE);
+          }
+          bytesWritten += (size_t)rc;
+        }
+      }
+    } // end batch loop
+
+    if (rfd >= 0)
+      close(rfd);
+    free(outArrBatch);
+    free(qhatarr);
   }
-  if (fwdFd >= 0)
+  if (fwdFd >= 0) {
+    // Single fsync at end (instead of per-batch O_SYNC) so the cache
+    // is durable on disk before subsequent runs try to read it.
+    if (fsync(fwdFd) < 0) {
+      fprintf(stderr, "WARNING: fsync(fwdFd) failed: %s\n", strerror(errno));
+    }
     close(fwdFd);
+  }
 
   double time2 = omp_get_wtime() - start_time;
   printf("Finished comparing, time elapsed after comparing with forward "
