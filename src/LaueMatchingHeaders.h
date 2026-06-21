@@ -497,8 +497,8 @@ static inline double calcOverlap(float *image, double euler[3], int *hkls,
       outArrThis[3 * spotNr + 0] = qhat[0];
       outArrThis[3 * spotNr + 1] = qhat[1];
       outArrThis[3 * spotNr + 2] = qhat[2];
-      if (image[(int)((int)py * nrPxX + (int)px)] > 0) {
-        result += image[(int)((int)py * nrPxX + (int)px)];
+      if (image[(size_t)((size_t)py * nrPxX + (size_t)px)] > 0) {
+        result += image[(size_t)((size_t)py * nrPxX + (size_t)px)];
         nrPos++;
       }
       spotNr++;
@@ -622,8 +622,8 @@ calcOverlapFiltered(float *image, double euler[3], int *hkls, int *validIdx,
       outArrThis[3 * spotNr + 0] = qhat[0];
       outArrThis[3 * spotNr + 1] = qhat[1];
       outArrThis[3 * spotNr + 2] = qhat[2];
-      if (image[(int)((int)py * nrPxX + (int)px)] > 0) {
-        result += image[(int)((int)py * nrPxX + (int)px)];
+      if (image[(size_t)((size_t)py * nrPxX + (size_t)px)] > 0) {
+        result += image[(size_t)((size_t)py * nrPxX + (size_t)px)];
         nrPos++;
       }
       spotNr++;
@@ -824,8 +824,9 @@ static inline int writeCalcOverlap(float *image, double euler[3], int *hkls,
 
   char *outputBuf = NULL;
   size_t currentOffset = 0;
+  size_t outputBufCap = (size_t)maxNrSpots * 256;  // per-spot line budget
   if (saveExtraInfo != 0) {
-    outputBuf = (char *)malloc(maxNrSpots * 200);
+    outputBuf = (char *)malloc(outputBufCap);
     if (outputBuf)
       outputBuf[0] = '\0';
   }
@@ -876,23 +877,31 @@ static inline int writeCalcOverlap(float *image, double euler[3], int *hkls,
       outArrThis[3 * spotNr + 0] = qhat[0];
       outArrThis[3 * spotNr + 1] = qhat[1];
       outArrThis[3 * spotNr + 2] = qhat[2];
-      if (image[(int)((int)py * nrPxX + (int)px)] > 0) {
+      if (image[(size_t)((size_t)py * nrPxX + (size_t)px)] > 0) {
         if (saveExtraInfo != 0) {
           if (outputBuf != NULL) {
+            // snprintf with remaining space: never overrun outputBuf even if a
+            // line is unexpectedly wide (large hkl / imageNr / intensity).
+            size_t remBuf = (currentOffset < outputBufCap)
+                                ? outputBufCap - currentOffset : 0;
+            int wrote = 0;
             if (imageNr > 0)
-              currentOffset += sprintf(
-                  outputBuf + currentOffset,
+              wrote = snprintf(
+                  outputBuf + currentOffset, remBuf,
                   "%d\t%d\t%d\t%d\t%d\t%d\t%5d\t%5d\t%lf\t%lf\t%lf\t%lf\n",
                   imageNr, saveExtraInfo, spotNr, (int)hkl[0], (int)hkl[1],
                   (int)hkl[2], (int)px, (int)py, qhat[0], qhat[1], qhat[2],
-                  (double)image[(int)((int)py * nrPxX + (int)px)]);
+                  (double)image[(size_t)((size_t)py * nrPxX + (size_t)px)]);
             else
-              currentOffset += sprintf(
-                  outputBuf + currentOffset,
+              wrote = snprintf(
+                  outputBuf + currentOffset, remBuf,
                   "%d\t%d\t%d\t%d\t%d\t%5d\t%5d\t%lf\t%lf\t%lf\t%lf\n",
                   saveExtraInfo, spotNr, (int)hkl[0], (int)hkl[1], (int)hkl[2],
                   (int)px, (int)py, qhat[0], qhat[1], qhat[2],
-                  (double)image[(int)((int)py * nrPxX + (int)px)]);
+                  (double)image[(size_t)((size_t)py * nrPxX + (size_t)px)]);
+            if (wrote > 0)
+              currentOffset += ((size_t)wrote < remBuf) ? (size_t)wrote
+                                                        : (remBuf ? remBuf - 1 : 0);
           } else {
 #pragma omp critical
             {
@@ -902,18 +911,18 @@ static inline int writeCalcOverlap(float *image, double euler[3], int *hkls,
                     "%d\t%d\t%d\t%d\t%d\t%d\t%5d\t%5d\t%lf\t%lf\t%lf\t%lf\n",
                     imageNr, saveExtraInfo, spotNr, (int)hkl[0], (int)hkl[1],
                     (int)hkl[2], (int)px, (int)py, qhat[0], qhat[1], qhat[2],
-                    (double)image[(int)((int)py * nrPxX + (int)px)]);
+                    (double)image[(size_t)((size_t)py * nrPxX + (size_t)px)]);
               else
                 fprintf(ExtraInfo,
                         "%d\t%d\t%d\t%d\t%d\t%5d\t%5d\t%lf\t%lf\t%lf\t%lf\n",
                         saveExtraInfo, spotNr, (int)hkl[0], (int)hkl[1],
                         (int)hkl[2], (int)px, (int)py, qhat[0], qhat[1],
                         qhat[2],
-                        (double)image[(int)((int)py * nrPxX + (int)px)]);
+                        (double)image[(size_t)((size_t)py * nrPxX + (size_t)px)]);
             }
           }
         }
-        result += image[(int)((int)py * nrPxX + (int)px)];
+        result += image[(size_t)((size_t)py * nrPxX + (size_t)px)];
         nrPos++;
       }
       spotNr++;
@@ -947,7 +956,12 @@ static inline int mergeDuplicateOrientations(double *orients, size_t *rowNrs,
                                              int *bsArr, double *bsScoreArr) {
   int *doneArr = (int *)calloc(nrResults, sizeof(int));
   // Step 1: Precompute quaternions for all matches (parallel)
-  double *quats = (double *)malloc(nrResults * 4 * sizeof(double));
+  double *quats = (double *)malloc((size_t)nrResults * 4 * sizeof(double));
+  if ((doneArr == NULL || quats == NULL) && nrResults > 0) {
+    fprintf(stderr, "FATAL: mergeDuplicateOrientations could not allocate "
+            "quaternion arrays (nrResults=%d).\n", nrResults);
+    exit(EXIT_FAILURE);
+  }
 #pragma omp parallel for num_threads(numProcs)
   for (int qi = 0; qi < nrResults; qi++) {
     double or9[9];
@@ -958,6 +972,16 @@ static inline int mergeDuplicateOrientations(double *orients, size_t *rowNrs,
   // Step 2: Precompute pairwise misorientations (parallel)
   size_t nPairs = (size_t)nrResults * (nrResults - 1) / 2;
   float *misoDist = (float *)malloc(nPairs * sizeof(float));
+  // NOTE(perf): this pairwise matrix is O(nrResults^2) memory — for a
+  // pathological frame with very many candidate matches it can be enormous.
+  // Fail loudly here rather than segfault; bounding nrResults before the
+  // merge is a tracked follow-up (see C_CUDA_HARDENING.md).
+  if (misoDist == NULL && nPairs > 0) {
+    fprintf(stderr, "FATAL: mergeDuplicateOrientations could not allocate the "
+            "%zu-pair misorientation matrix (nrResults=%d). Too many matches.\n",
+            nPairs, nrResults);
+    exit(EXIT_FAILURE);
+  }
 #pragma omp parallel for num_threads(numProcs) schedule(dynamic)
   for (int i = 1; i < nrResults; i++) {
     for (int j = 0; j < i; j++) {
@@ -1018,6 +1042,10 @@ static inline void fitAndWriteOrientations(
     double q1[4], q2[4];
     int iJ, iK;
     double *outArrThisFit = (double *)calloc(3 * maxNrSpots, sizeof(double));
+    if (outArrThisFit == NULL) {
+      fprintf(stderr, "FATAL: could not allocate fit spot buffer.\n");
+      exit(EXIT_FAILURE);
+    }
     for (iJ = 0; iJ < 3; iJ++)
       for (iK = 0; iK < 3; iK++)
         orientBest[iJ][iK] = FinOrientArr[iterNr * 9 + 3 * iJ + iK];
@@ -1029,6 +1057,10 @@ static inline void fitAndWriteOrientations(
     double latCFit[6], recipFit[3][3], mv = 0;
     // Prefilter HKLs at coarse orientation
     int *validIdx = (int *)malloc(nhkls * sizeof(int));
+    if (validIdx == NULL) {
+      fprintf(stderr, "FATAL: could not allocate validIdx (nhkls=%d).\n", nhkls);
+      exit(EXIT_FAILURE);
+    }
     int nValid =
         prefilterHKLs(hkls, nhkls, eulerBest, recip, nrPxX, nrPxY, rotTranspose,
                       pArr, pxX, pxY, Elo, Ehi, validIdx, nhkls);

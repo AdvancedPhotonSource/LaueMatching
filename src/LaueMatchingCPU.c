@@ -57,16 +57,18 @@ int main(int argc, char *argv[]) {
     printf("Could not open parameter file %s.\n", paramFN);
     return 1;
   }
-  char aline[1000], *str, dummy[1000], outfn[1000];
-  int LowNr, nrPxX, nrPxY, maxNrSpots = 500, minNrSpots = 5, doFwd = 1;
+  char aline[1000], *str, dummy[1000], dummy2[1000], outfn[1000];
+  // Initialise detector/geometry params so a missing config key is detectable
+  // and never feeds a garbage value into an allocation or a division.
+  int LowNr, nrPxX = 0, nrPxY = 0, maxNrSpots = 500, minNrSpots = 5, doFwd = 1;
   size_t batchSize = 1000000; // default 1M orientations per batch
   sg_num = 225;
-  double pArr[3], rArr[3], pxX, pxY, Elo = 5, Ehi = 30;
+  double pArr[3] = {0}, rArr[3] = {0}, pxX = 0, pxY = 0, Elo = 5, Ehi = 30;
   int iter;
   for (iter = 0; iter < 6; iter++)
     tol_LatC[iter] = 0;
   double minIntensity = 1000.0, maxAngle = 2.0;
-  double LatticeParameter[6];
+  double LatticeParameter[6] = {0};
   puts("Reading parameter file");
   fflush(stdout);
   tol_c_over_a = 0;
@@ -194,8 +196,8 @@ int main(int argc, char *argv[]) {
     str = "Optimizer";
     LowNr = strncmp(aline, str, strlen(str));
     if (LowNr == 0) {
-      sscanf(aline, "%s %s", dummy, dummy);
-      if (strncmp(dummy, "NelderMead", 10) == 0)
+      sscanf(aline, "%s %s", dummy, dummy2);
+      if (strncmp(dummy2, "NelderMead", 10) == 0)
         useBobyqa = 0;
       continue;
     }
@@ -204,8 +206,19 @@ int main(int argc, char *argv[]) {
     for (iter = 0; iter < 6; iter++)
       tol_LatC[iter] = 0;
   }
-  c_over_a_orig = LatticeParameter[2] / LatticeParameter[0];
   fclose(fileParam);
+  // Validate the parameters that feed allocations / divisions before use.
+  if (nrPxX <= 0 || nrPxY <= 0) {
+    fprintf(stderr, "FATAL: NrPxX/NrPxY missing or non-positive (%d x %d). "
+            "Check the parameter file.\n", nrPxX, nrPxY);
+    return 1;
+  }
+  if (LatticeParameter[0] == 0.0) {
+    fprintf(stderr, "FATAL: LatticeParameter[a] is zero/unset. "
+            "Check the parameter file.\n");
+    return 1;
+  }
+  c_over_a_orig = LatticeParameter[2] / LatticeParameter[0];
   puts("Parameters read");
 
   // Rotation matrix (transpose = inverse for det=1 orthogonal matrix)
@@ -315,7 +328,8 @@ int main(int argc, char *argv[]) {
     fclose(imageFile);
     return 1;
   }
-  size_t read_cts = fread(image, nrPxX * nrPxY * sizeof(*image), 1, imageFile);
+  size_t read_cts =
+      fread(image, (size_t)nrPxX * nrPxY * sizeof(*image), 1, imageFile);
   if (read_cts != 1) {
     if (ferror(imageFile)) {
       perror("Error reading image file");
@@ -328,8 +342,10 @@ int main(int argc, char *argv[]) {
     fclose(imageFile);
     return 1;
   }
-  int pxNr, nonZeroPx = 0;
-  for (pxNr = 0; pxNr < nrPxX * nrPxY; pxNr++) {
+  size_t nPixels = (size_t)nrPxX * nrPxY;  // size_t throughout: large detectors
+  size_t pxNr;
+  int nonZeroPx = 0;
+  for (pxNr = 0; pxNr < nPixels; pxNr++) {
     if (image[pxNr] > 0)
       nonZeroPx++;
   }
@@ -337,15 +353,19 @@ int main(int argc, char *argv[]) {
   printf("Pixels with intensity: %d\n", nonZeroPx);
 
   // Create uint8 quantized image for cache-friendly matching
-  size_t nPixels = (size_t)nrPxX * nrPxY;
   double maxImgVal = 0;
-  for (pxNr = 0; pxNr < (int)nPixels; pxNr++)
+  for (pxNr = 0; pxNr < nPixels; pxNr++)
     if (image[pxNr] > maxImgVal)
       maxImgVal = image[pxNr];
   double imScale = (maxImgVal > 0) ? maxImgVal / 255.0 : 1.0;
   uint8_t *image_u8 = (uint8_t *)malloc(nPixels);
+  if (image_u8 == NULL) {
+    fprintf(stderr, "FATAL: could not allocate image_u8 (%zu bytes).\n", nPixels);
+    free(image);
+    return 1;
+  }
   double imInvScale = (maxImgVal > 0) ? 255.0 / maxImgVal : 0.0;
-  for (pxNr = 0; pxNr < (int)nPixels; pxNr++) {
+  for (pxNr = 0; pxNr < nPixels; pxNr++) {
     if (image[pxNr] > 0) {
       double v = image[pxNr] * imInvScale;
       image_u8[pxNr] = (v >= 255.0) ? 255 : (v < 1.0) ? 1 : (uint8_t)v;
@@ -358,7 +378,14 @@ int main(int argc, char *argv[]) {
 
   // Create float image for CPU fitting (halves cache pressure vs double)
   float *imageF = (float *)malloc(nPixels * sizeof(float));
-  for (pxNr = 0; pxNr < (int)nPixels; pxNr++)
+  if (imageF == NULL) {
+    fprintf(stderr, "FATAL: could not allocate imageF (%zu bytes).\n",
+            nPixels * sizeof(float));
+    free(image);
+    free(image_u8);
+    return 1;
+  }
+  for (pxNr = 0; pxNr < nPixels; pxNr++)
     imageF[pxNr] = (float)image[pxNr];
 
   // Forward simulation & matching
@@ -370,6 +397,10 @@ int main(int argc, char *argv[]) {
     return 1;
   }
   int numProcs = atoi(argv[5]);
+  if (numProcs < 1) {
+    fprintf(stderr, "FATAL: invalid thread count '%s' (need >= 1).\n", argv[5]);
+    return 1;
+  }
   // Clamp BatchSize so we never over-allocate the per-thread batch buffer
   // beyond the thread's own slab of orientations.
   size_t nrOrientsThreadCap =
@@ -383,7 +414,7 @@ int main(int argc, char *argv[]) {
          (double)batchBytes * numProcs / (1024.0 * 1024.0));
   fflush(stdout);
   double start_time = omp_get_wtime();
-  int global_iterator, k, l, nrResults = 0;
+  int global_iterator, nrResults = 0;
   double recip[3][3];
   calcRecipArray(LatticeParameter, sg_num, recip);
 
@@ -407,6 +438,7 @@ int main(int argc, char *argv[]) {
   }
 
   uint16_t *outArr = NULL;
+  size_t outArrMapLen = 0;  // tracked so it can be munmap'd at cleanup
   LowNr = 1;
   bool *pxImgAll = NULL;
 
@@ -436,9 +468,20 @@ int main(int argc, char *argv[]) {
     size_t szArrFull = nrOrients * (1 + 2 * maxNrSpots);
     if (LowNr == 0) {
       int fd = open(outfn, O_RDONLY);
-      outArr = (uint16_t *)mmap(0, szArrFull * sizeof(uint16_t), PROT_READ,
+      if (fd < 0) {
+        fprintf(stderr, "FATAL: could not open forward cache %s: %s\n",
+                outfn, strerror(errno));
+        return 1;
+      }
+      outArrMapLen = szArrFull * sizeof(uint16_t);
+      outArr = (uint16_t *)mmap(0, outArrMapLen, PROT_READ,
                                 MAP_SHARED, fd, 0);
-      close(fd); // FIX: fd was never closed
+      close(fd); // fd can be closed once mapped
+      if (outArr == MAP_FAILED) {
+        fprintf(stderr, "FATAL: mmap of forward cache %s failed: %s\n",
+                outfn, strerror(errno));
+        return 1;
+      }
     }
   }
 
@@ -704,6 +747,11 @@ int main(int argc, char *argv[]) {
   }
   sprintf(outFN, "%s.spots.txt", imageFN);
   FILE *ExtraInfo = fopen(outFN, "w");
+  if (ExtraInfo == NULL) {
+    printf("Could not open file for writing spots. Exiting.\n");
+    fclose(outF);
+    return (1);
+  }
   fprintf(ExtraInfo, "%%GrainNr\tSpotNr\th\tk\tl\tX\tY\tQhat[0]\tQhat[1]\tQhat["
                      "2]\tIntensity\n");
   fprintf(
@@ -724,6 +772,11 @@ int main(int argc, char *argv[]) {
   // Collect results
   double *mA = calloc(nrResults, sizeof(*mA));
   size_t *rowNrs = calloc(nrResults, sizeof(*rowNrs));
+  if ((mA == NULL || rowNrs == NULL) && nrResults > 0) {
+    fprintf(stderr, "FATAL: could not allocate result-collection arrays "
+            "(nrResults=%d).\n", nrResults);
+    return 1;
+  }
   int resultNr = 0;
   for (global_iterator = 0; global_iterator < (int)nrOrients;
        global_iterator++) {
@@ -734,10 +787,16 @@ int main(int argc, char *argv[]) {
     }
   }
 
-  double *FinOrientArr = calloc(nrResults * 9, sizeof(*FinOrientArr));
+  double *FinOrientArr = calloc((size_t)nrResults * 9, sizeof(*FinOrientArr));
   int *dArr = calloc(nrResults, sizeof(*dArr));
   int *bsArr = calloc(nrResults, sizeof(*bsArr));
   double *bsScoreArr = calloc(nrResults, sizeof(*bsScoreArr));
+  if ((FinOrientArr == NULL || dArr == NULL || bsArr == NULL ||
+       bsScoreArr == NULL) && nrResults > 0) {
+    fprintf(stderr, "FATAL: could not allocate merge arrays (nrResults=%d).\n",
+            nrResults);
+    return 1;
+  }
   int totalSols = mergeDuplicateOrientations(orients, rowNrs, mA, nrResults,
                                              maxAngle, numProcs, FinOrientArr,
                                              dArr, bsArr, bsScoreArr);
@@ -765,6 +824,8 @@ int main(int argc, char *argv[]) {
   free(hkls);
   if (orientsMapped)
     munmap(orients, szFile); // FIX: was never munmap'd
+  if (outArr != NULL && outArr != MAP_FAILED && outArrMapLen > 0)
+    munmap(outArr, outArrMapLen); // cached-forward mmap (was leaked)
   else
     free(orients);
   if (pxImgAll)
