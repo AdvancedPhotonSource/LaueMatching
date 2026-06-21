@@ -31,6 +31,13 @@ import numpy as np
 import cv2
 import scipy.ndimage as ndimg
 
+# REFACTOR_PLAN §6.2/§6.3: the filtering/geometry/threshold implementations live
+# in the laue_index package (single source of truth); ensure it is importable
+# (repo root one level above scripts/) before the re-exports below.
+_INSTALL_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _INSTALL_PATH not in sys.path:
+    sys.path.insert(0, _INSTALL_PATH)
+
 # Optional heavy imports — gracefully degrade
 try:
     import h5py
@@ -395,48 +402,11 @@ def enhance_image(
     return enhanced
 
 
-def apply_threshold(
-    image: np.ndarray,
-    method: str = "adaptive",
-    fixed_value: float = 0.0,
-    percentile: float = 90.0,
-) -> Tuple[np.ndarray, float]:
-    """
-    Threshold an image, returning (thresholded_image, threshold_used).
-
-    Methods: adaptive, percentile, otsu, fixed.
-    """
-    if method == "percentile":
-        thresh = np.percentile(image.ravel(), percentile)
-    elif method == "otsu" and HAS_SKIMAGE:
-        thresh = filters.threshold_otsu(image)
-    elif method == "fixed":
-        thresh = fixed_value
-    else:
-        # adaptive (default): robust per-frame NOISE-FLOOR threshold.
-        #
-        # The previous formula  max(60*(1 + std//60), 1)  used the whole-image
-        # std and a coarse 60-count step, giving ~240 for typical frames.  That
-        # is an (almost) fixed floor: faint frames (e.g. weak end-of-scan Laue
-        # patterns at ~1/3 intensity) have real Bragg spots BELOW 240, so they
-        # were zeroed and the frame failed to index even though the pattern was
-        # present.  Instead, estimate the noise floor robustly from the nonzero
-        # (typically background-subtracted) pixels and threshold a few sigma
-        # above it, so the cut scales with each frame's own noise:
-        #     thresh = median(nz) + k * 1.4826 * MAD(nz)
-        # Validated on Ni indent data: recovers faint frames (0 -> 8 matched
-        # spots) while keeping/improving bright frames (13 -> 18).
-        nz = image[image > 0]
-        if nz.size:
-            med = float(np.median(nz))
-            mad = 1.4826 * float(np.median(np.abs(nz - med)))
-            thresh = max(med + 4.0 * mad, 1.0)
-        else:
-            thresh = 1.0
-
-    out = image.copy()
-    out[image <= thresh] = 0
-    return out, float(thresh)
+# REFACTOR_PLAN §6.3: thresholding moved to laue_index.thresholds (single
+# source of truth, behind the ThresholdStrategy interface).  Re-exported here —
+# byte-for-byte equivalent, incl. the otsu->adaptive fallback when skimage is
+# absent — so preprocess_image / RunImage callers need no change.
+from laue_index.thresholds import apply_threshold  # noqa: E402,F401
 
 
 def find_connected_components(

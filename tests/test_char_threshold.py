@@ -63,9 +63,24 @@ def test_char_threshold_otsu():
     check_golden("threshold_otsu", _measure("otsu"))
 
 
+def test_threshold_strategy_classes_match_dispatch():
+    """The §6.3 ThresholdStrategy classes reproduce the string dispatch."""
+    from laue_index.thresholds import (NoiseFloorThreshold, PercentileThreshold,
+                                       FixedThreshold, apply_threshold)
+    img = _synthetic_frame(spot_amp=150.0, seed=3, n_hot=33)
+    for cls, kw, method, mkw in [
+        (NoiseFloorThreshold(k=4.0), {}, "adaptive", {}),
+        (PercentileThreshold(pct=99.5), {}, "percentile", {"percentile": 99.5}),
+        (FixedThreshold(240.0), {}, "fixed", {"fixed_value": 240.0}),
+    ]:
+        out_c, thr_c = cls(img)
+        out_f, thr_f = apply_threshold(img, method=method, **mkw)
+        assert thr_c == thr_f and np.array_equal(out_c, out_f), method
+
+
 if __name__ == "__main__":
     for fn in [test_char_threshold_adaptive, test_char_threshold_percentile,
-               test_char_threshold_fixed]:
+               test_char_threshold_fixed, test_threshold_strategy_classes_match_dispatch]:
         fn(); print(f"PASS  {fn.__name__}")
     if lsu.HAS_SKIMAGE:
         test_char_threshold_otsu(); print("PASS  test_char_threshold_otsu")
