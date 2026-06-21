@@ -60,6 +60,15 @@ local toolchain — `.cu` changes are built/tested on **sentosa** (H200, CUDA 12
   95915314 (18 matches).  Confirms the size_t/bounds hardening is correct at
   scale and the GPU agrees with the CPU on indexed orientations.
 
+## DONE since — score unify + streaming daemon (validated on sentosa)
+- GPU score now full-precision float (uint8 quantization dropped, CPU parity).
+  100M-DB run still matches the CPU golden grains exactly (rows 76986273/19,
+  95915314/18).
+- LaueMatchingGPUStream daemon functional test: loaded 100M cache (51 s), bound
+  port 60517 (4 CUDA streams), received a TCP frame, indexed it (GPU 101 ms,
+  0.425 s/frame total) to the SAME golden grains, and shut down cleanly on
+  SIGTERM ("exited cleanly" — sigaction + handler-join path).
+
 ## DEFERRED — behaviour-changing (need their own validation, not hardening)
 - `mergeDuplicateOrientations` O(N²) pairwise matrix: bound `nrResults` before
   the merge (changes results for pathological high-match frames; the NULL check

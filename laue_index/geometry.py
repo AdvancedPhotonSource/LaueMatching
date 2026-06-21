@@ -5,11 +5,17 @@ verbatim from ``laue_stream_utils`` so they have a single home that
 ``filtering.py`` depends on (and the legacy ``lsu`` re-exports for back-compat).
 
 Cubic point group only today; generalise via point-group ops keyed on the
-config space group (REFACTOR_PLAN §4b).
+config space group (REFACTOR_PLAN §4b) — ``midas_stress.orientation.make_symmetries``
+is space-group-aware and would deliver that.
 
-``# TODO(unify-after-publish)``: this math overlaps the orientation utilities in
-the paper-tied ``laue_torch``; per the §1.5 constraint box it is duplicated
-consciously until a shared leaf can be extracted post-submission.
+``# TODO(unify-after-publish)``: the canonical orientation/quat/misorientation
+primitives live in ``midas_stress.orientation`` (make_symmetries,
+misorientation_om, orient_mat_to_quat, fundamental_zone).  We deliberately do
+NOT depend on it here: LaueMatching is a standalone, published, numpy+C indexer
+and ``midas_stress`` pulls in ``torch``; also ``misorientation_om`` returns the
+angle only (the CSL twin filter needs the axis too).  Decision (kept): duplicate
+consciously now; the future single-source is a small numpy-only orientation leaf
+that both ``midas_stress`` and this package depend on (the §1.5 shared leaf).
 """
 from __future__ import annotations
 
