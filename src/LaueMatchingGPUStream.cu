@@ -68,7 +68,7 @@ inline void gpuAssert(cudaError_t code, const char *file, int line,
 
 __global__ void compare(size_t nrPxX, size_t nOr, size_t nrMaxSpots,
                         float minInt, size_t minSps, uint16_t *oA, uint8_t *im,
-                        float imScale, int *matchCount, int *matchIdx,
+                        float imScale, int *matchCount, size_t *matchIdx,
                         float *matchScore, size_t chunkOffset) {
   size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < nOr) {
@@ -92,7 +92,7 @@ __global__ void compare(size_t nrPxX, size_t nOr, size_t nrMaxSpots,
     if (nSps >= minSps && totInt >= minInt) {
       int pos = atomicAdd(matchCount, 1);
       if (pos < MAX_MATCHES) {
-        matchIdx[pos] = (int)(i + chunkOffset);
+        matchIdx[pos] = i + chunkOffset;
         matchScore[pos] = totInt * sqrtf((float)nSps);
       }
     }
@@ -120,12 +120,12 @@ typedef struct {
   cudaStream_t stream;
   uint8_t *d_image; // device image buffer (uint8 quantized)
   // Compact match output (device)
-  int *d_matchCount;   // atomic counter on device
-  int *d_matchIdx;     // matched orientation indices
-  float *d_matchScore; // matched orientation scores
+  int *d_matchCount;    // atomic counter on device
+  size_t *d_matchIdx;   // matched orientation indices
+  float *d_matchScore;  // matched orientation scores
   // Compact match output (host, pinned)
   int *h_matchCount;
-  int *h_matchIdx;
+  size_t *h_matchIdx;
   float *h_matchScore;
   // Async pipeline state
   int hasPendingWork; // 1 if GPU work submitted but not finalized
@@ -142,6 +142,41 @@ typedef struct {
 // ── Globals ────────────────────────────────────────────────────────────
 static ProcessQueue process_queue;
 static size_t g_imagePixels; // nrPxX * nrPxY
+
+// ── Client handler thread tracking ──────────────────────────────────────
+// Detached handler threads can be holding the queue mutex at shutdown.
+// Track their ids so they can be joined before queue/mutex destruction.
+#define MAX_HANDLERS MAX_CONNECTIONS
+static pthread_t g_handler_tids[MAX_HANDLERS];
+static int g_handler_count = 0;
+static pthread_mutex_t g_handlers_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+// Register a freshly-spawned handler thread. Returns 0 if tracked, -1 if the
+// tracking table is full (caller should fall back to detaching it).
+static int register_handler(pthread_t tid) {
+  pthread_mutex_lock(&g_handlers_mutex);
+  int ok = -1;
+  if (g_handler_count < MAX_HANDLERS) {
+    g_handler_tids[g_handler_count++] = tid;
+    ok = 0;
+  }
+  pthread_mutex_unlock(&g_handlers_mutex);
+  return ok;
+}
+
+// Join all tracked handler threads. Call after the listening socket has been
+// shut down (so handlers' recv() calls return) and before queue_destroy().
+static void join_handlers(void) {
+  pthread_mutex_lock(&g_handlers_mutex);
+  int n = g_handler_count;
+  pthread_t local[MAX_HANDLERS];
+  for (int i = 0; i < n; i++)
+    local[i] = g_handler_tids[i];
+  g_handler_count = 0;
+  pthread_mutex_unlock(&g_handlers_mutex);
+  for (int i = 0; i < n; i++)
+    pthread_join(local[i], NULL);
+}
 
 // ── Signal handler ─────────────────────────────────────────────────────
 void sigint_handler(int signum) {
@@ -263,6 +298,13 @@ void *handle_client(void *arg) {
   uint8_t header_buf[HEADER_SIZE];
   // Wire protocol: float pixels (4 bytes each), not double
   size_t wire_payload_size = g_imagePixels * sizeof(float);
+
+  // Bound recv() so a stalled client cannot pin this handler thread forever.
+  // On timeout recv() returns -1/EAGAIN; we loop back and re-check keep_running.
+  struct timeval recv_to;
+  recv_to.tv_sec = 5;
+  recv_to.tv_usec = 0;
+  setsockopt(client_socket, SOL_SOCKET, SO_RCVTIMEO, &recv_to, sizeof(recv_to));
   printf("Client handler started (socket %d), wire_payload=%zu bytes\n",
          client_socket, wire_payload_size);
 
@@ -280,8 +322,18 @@ void *handle_client(void *arg) {
     while (total_read < HEADER_SIZE) {
       int n = recv(client_socket, header_buf + total_read,
                    HEADER_SIZE - total_read, 0);
-      if (n <= 0)
-        goto done;
+      if (n < 0) {
+        if (errno == EINTR)
+          continue; // interrupted by signal, retry
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+          if (!keep_running)
+            goto done; // shutting down
+          continue;    // recv timeout, re-check and retry
+        }
+        goto done; // real error
+      }
+      if (n == 0)
+        goto done; // peer closed
       total_read += n;
     }
     uint16_t image_num;
@@ -292,8 +344,18 @@ void *handle_client(void *arg) {
     while (total_payload < wire_payload_size) {
       int n = recv(client_socket, (char *)recv_buf + total_payload,
                    wire_payload_size - total_payload, 0);
-      if (n <= 0)
-        goto done;
+      if (n < 0) {
+        if (errno == EINTR)
+          continue; // interrupted by signal, retry
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+          if (!keep_running)
+            goto done; // shutting down
+          continue;    // recv timeout, re-check and retry
+        }
+        goto done; // real error
+      }
+      if (n == 0)
+        goto done; // peer closed
       total_payload += n;
     }
 
@@ -349,7 +411,8 @@ void *accept_connections(void *server_fd_ptr) {
       perror("pthread_create");
       close(*csock);
       free(csock);
-    } else {
+    } else if (register_handler(tid) != 0) {
+      // Tracking table full: detach so the thread cleans up on its own.
       pthread_detach(tid);
     }
   }
@@ -363,7 +426,7 @@ static void usage(const char *prog) {
          "Contact hsharma@anl.gov\n\n"
          "Usage: %s parameterFile orientationFile hklFile nCPUs\n\n"
          "Listens on TCP port %d for binary images.\n"
-         "Wire protocol: uint16_t image_num + double[NrPxX*NrPxY]\n",
+         "Wire protocol: uint16_t image_num + float[NrPxX*NrPxY]\n",
          prog, PORT);
 }
 
@@ -390,8 +453,12 @@ static void finalize_stream(StreamContext *fc, double *orients, int *hkls,
   float *image = fc->pending_image;
   // Read compact match count
   int nrResults = *(fc->h_matchCount);
-  if (nrResults > MAX_MATCHES)
+  if (nrResults > MAX_MATCHES) {
+    fprintf(stderr,
+            "WARNING: match count %d exceeded MAX_MATCHES (%d); truncated.\n",
+            nrResults, MAX_MATCHES);
     nrResults = MAX_MATCHES;
+  }
   printf("[Image %u] GPU: %.0f ms (H2D:%.0f Kern:%.0f D2H:%.0f), "
          "%d matches\n",
          img_num, t_h2d + t_kern + t_d2h, t_h2d, t_kern, t_d2h, nrResults);
@@ -402,19 +469,29 @@ static void finalize_stream(StreamContext *fc, double *orients, int *hkls,
     return;
   }
   // Build match arrays from compact GPU results
-  int *matchIdx = fc->h_matchIdx;
+  size_t *matchIdx = fc->h_matchIdx;
   float *matchScore = fc->h_matchScore;
   double *mA = (double *)calloc(nrResults, sizeof(double));
   size_t *rowNrs = (size_t *)calloc(nrResults, sizeof(size_t));
+  if (!mA || !rowNrs) {
+    fprintf(stderr, "FATAL: calloc failed for match arrays (%d results)\n",
+            nrResults);
+    exit(EXIT_FAILURE);
+  }
   for (int ci = 0; ci < nrResults; ci++) {
     mA[ci] = matchScore[ci];
-    rowNrs[ci] = (size_t)matchIdx[ci];
+    rowNrs[ci] = matchIdx[ci];
   }
   // Merge duplicate orientations
   double *FinOrientArr = (double *)calloc(nrResults * 9, sizeof(double));
   int *dArr = (int *)calloc(nrResults, sizeof(int));
   int *bsArr = (int *)calloc(nrResults, sizeof(int));
   double *bsScoreArr = (double *)calloc(nrResults, sizeof(double));
+  if (!FinOrientArr || !dArr || !bsArr || !bsScoreArr) {
+    fprintf(stderr, "FATAL: calloc failed for merge arrays (%d results)\n",
+            nrResults);
+    exit(EXIT_FAILURE);
+  }
   double wt_merge = omp_get_wtime();
   int totalSols = mergeDuplicateOrientations(orients, rowNrs, mA, nrResults,
                                              maxAngle, numProcs, FinOrientArr,
@@ -462,8 +539,16 @@ int main(int argc, char *argv[]) {
     return 0;
   }
 
-  signal(SIGINT, sigint_handler);
-  signal(SIGTERM, sigint_handler);
+  // Use sigaction (not signal) and clear SA_RESTART so that accept()/recv()
+  // return with EINTR on signal rather than auto-restarting, letting threads
+  // observe keep_running == 0 and shut down cleanly.
+  struct sigaction sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sa_handler = sigint_handler;
+  sigemptyset(&sa.sa_mask);
+  sa.sa_flags = 0; // explicitly no SA_RESTART
+  sigaction(SIGINT, &sa, NULL);
+  sigaction(SIGTERM, &sa, NULL);
 
   double st_tm = omp_get_wtime();
 
@@ -668,8 +753,17 @@ int main(int argc, char *argv[]) {
   if (LowNr == 0) {
     fclose(orientF);
     int fd = open(orientFN, O_RDONLY);
+    if (fd < 0) {
+      fprintf(stderr, "FATAL: could not open orientation file %s for mmap.\n",
+              orientFN);
+      return 1;
+    }
     orients = (double *)mmap(0, szFile, PROT_READ, MAP_SHARED, fd, 0);
     close(fd);
+    if (orients == MAP_FAILED) {
+      fprintf(stderr, "FATAL: mmap of orientation file %s failed.\n", orientFN);
+      return 1;
+    }
     orientsMapped = 1;
     printf("%zu orientations mapped into memory\n", nrOrients);
   } else {
@@ -748,7 +842,11 @@ int main(int argc, char *argv[]) {
     double ki[3] = {0, 0, 1.0};
     bool *pxImgAll =
         (bool *)calloc((size_t)nrPxX * nrPxY * numProcs, sizeof(bool));
-    int fwdFd = open(outfn, O_CREAT | O_WRONLY | O_SYNC, S_IRUSR | S_IWUSR);
+    if (!matchedArrFwd || !pxImgAll) {
+      fprintf(stderr, "FATAL: calloc failed for forward-sim buffers.\n");
+      return 1;
+    }
+    int fwdFd = open(outfn, O_CREAT | O_WRONLY, S_IRUSR | S_IWUSR);
     if (fwdFd < 0) {
       printf("Could not open forward output file %s.\n", outfn);
       return 1;
@@ -756,21 +854,28 @@ int main(int argc, char *argv[]) {
 #pragma omp parallel num_threads(numProcs)
     {
       int procNr = omp_get_thread_num();
-      int nrOrientsThread = (int)ceil((double)nrOrients / (double)numProcs);
-      int startOrientNr = procNr * nrOrientsThread;
-      int endOrientNr = startOrientNr + nrOrientsThread;
-      if (endOrientNr > (int)nrOrients)
+      size_t nrOrientsThread =
+          (size_t)ceil((double)nrOrients / (double)numProcs);
+      size_t startOrientNr = (size_t)procNr * nrOrientsThread;
+      size_t endOrientNr = startOrientNr + nrOrientsThread;
+      if (endOrientNr > nrOrients)
         endOrientNr = nrOrients;
-      nrOrientsThread = endOrientNr - startOrientNr;
-      size_t szArrThread = (size_t)nrOrientsThread * (1 + 2 * maxNrSpots);
+      nrOrientsThread =
+          (endOrientNr > startOrientNr) ? endOrientNr - startOrientNr : 0;
+      size_t szArrThread = nrOrientsThread * (1 + 2 * maxNrSpots);
       size_t OffsetHere = (size_t)procNr;
       OffsetHere *= (size_t)((int)ceil((double)nrOrients / (double)numProcs)) *
                     (1 + 2 * maxNrSpots);
       OffsetHere *= sizeof(uint16_t);
       uint16_t *outArrThis = (uint16_t *)calloc(szArrThread, sizeof(uint16_t));
       double *qhatarr = (double *)calloc(maxNrSpots * 3, sizeof(double));
+      if (!outArrThis || !qhatarr) {
+        fprintf(stderr,
+                "FATAL: calloc failed for per-thread forward-sim buffers.\n");
+        exit(EXIT_FAILURE);
+      }
       bool *pxImg = &pxImgAll[(size_t)nrPxX * nrPxY * procNr];
-      int orientNr;
+      size_t orientNr;
       for (orientNr = startOrientNr; orientNr < endOrientNr; orientNr++) {
         int nSpots = 0, spotNr = 0;
         double totInt = 0;
@@ -839,6 +944,7 @@ int main(int argc, char *argv[]) {
       free(outArrThis);
       free(qhatarr);
     }
+    fsync(fwdFd);
     close(fwdFd);
     free(pxImgAll);
     free(matchedArrFwd);
@@ -851,18 +957,36 @@ int main(int argc, char *argv[]) {
   LowNr = strncmp(outfn, str, strlen(str));
   if (LowNr == 0) {
     int fd = open(outfn, O_RDONLY);
+    if (fd < 0) {
+      fprintf(stderr, "FATAL: could not open forward file %s for mmap.\n",
+              outfn);
+      return 1;
+    }
     outArr = (uint16_t *)mmap(0, szArr * sizeof(uint16_t), PROT_READ,
                               MAP_SHARED, fd, 0);
     close(fd);
+    if (outArr == MAP_FAILED) {
+      fprintf(stderr, "FATAL: mmap of forward file %s failed.\n", outfn);
+      return 1;
+    }
     outArrMapped = 1;
   } else {
     outArr = (uint16_t *)calloc(szArr, sizeof(uint16_t));
+    if (!outArr) {
+      fprintf(stderr, "FATAL: calloc failed for forward array (%zu bytes)\n",
+              szArr * sizeof(uint16_t));
+      return 1;
+    }
     FILE *fwdFN = fopen(outfn, "rb");
     if (!fwdFN) {
       printf("Could not open forward file %s.\n", outfn);
       return 1;
     }
-    fread(outArr, szArr * sizeof(uint16_t), 1, fwdFN);
+    if (fread(outArr, szArr * sizeof(uint16_t), 1, fwdFN) != 1) {
+      fprintf(stderr, "FATAL: short read of forward file %s.\n", outfn);
+      fclose(fwdFN);
+      return 1;
+    }
     fclose(fwdFN);
   }
   printf("Forward simulation loaded: %lf s (%zu orientations, stride=%zu)\n",
@@ -918,7 +1042,7 @@ int main(int argc, char *argv[]) {
   size_t perStreamCost =
       imageBytes + // d_image
       sizeof(int) +
-      MAX_MATCHES * (sizeof(int) + sizeof(float)); // compact output
+      MAX_MATCHES * (sizeof(size_t) + sizeof(float)); // compact output
   int numStreams = (int)(freeMem / (perStreamCost + (1 << 20))); // +1MB margin
   if (numStreams > MAX_STREAMS)
     numStreams = MAX_STREAMS;
@@ -935,13 +1059,13 @@ int main(int argc, char *argv[]) {
     gpuErrchk(cudaMalloc(&streams[s].d_image, imageBytes));
     // Compact output (device)
     gpuErrchk(cudaMalloc(&streams[s].d_matchCount, sizeof(int)));
-    gpuErrchk(cudaMalloc(&streams[s].d_matchIdx, MAX_MATCHES * sizeof(int)));
+    gpuErrchk(cudaMalloc(&streams[s].d_matchIdx, MAX_MATCHES * sizeof(size_t)));
     gpuErrchk(
         cudaMalloc(&streams[s].d_matchScore, MAX_MATCHES * sizeof(float)));
     // Compact output (host, pinned)
     gpuErrchk(cudaMallocHost((void **)&streams[s].h_matchCount, sizeof(int)));
     gpuErrchk(cudaMallocHost((void **)&streams[s].h_matchIdx,
-                             MAX_MATCHES * sizeof(int)));
+                             MAX_MATCHES * sizeof(size_t)));
     gpuErrchk(cudaMallocHost((void **)&streams[s].h_matchScore,
                              MAX_MATCHES * sizeof(float)));
     gpuErrchk(cudaEventCreate(&streams[s].ev_start));
@@ -1084,6 +1208,11 @@ int main(int argc, char *argv[]) {
     float imScale = (maxVal > 0) ? maxVal / 255.0f : 1.0f;
     // Quantize to uint8
     uint8_t *im_u8 = (uint8_t *)malloc(g_imagePixels);
+    if (!im_u8) {
+      fprintf(stderr, "FATAL: malloc failed for quantized image (%zu bytes)\n",
+              g_imagePixels);
+      exit(EXIT_FAILURE);
+    }
     float invScale = (maxVal > 0) ? 255.0f / maxVal : 0.0f;
     for (size_t p = 0; p < g_imagePixels; p++) {
       if (image[p] > 0) {
@@ -1129,8 +1258,8 @@ int main(int argc, char *argv[]) {
     gpuErrchk(cudaMemcpyAsync(ctx->h_matchCount, ctx->d_matchCount, sizeof(int),
                               cudaMemcpyDeviceToHost, ctx->stream));
     gpuErrchk(cudaMemcpyAsync(ctx->h_matchIdx, ctx->d_matchIdx,
-                              MAX_MATCHES * sizeof(int), cudaMemcpyDeviceToHost,
-                              ctx->stream));
+                              MAX_MATCHES * sizeof(size_t),
+                              cudaMemcpyDeviceToHost, ctx->stream));
     gpuErrchk(cudaMemcpyAsync(ctx->h_matchScore, ctx->d_matchScore,
                               MAX_MATCHES * sizeof(float),
                               cudaMemcpyDeviceToHost, ctx->stream));
@@ -1176,6 +1305,11 @@ int main(int argc, char *argv[]) {
   g_server_fd = -1;
   pthread_cancel(accept_tid);
   pthread_join(accept_tid, NULL);
+  // Join all client handler threads before destroying the queue/mutex they may
+  // still be using. The listening socket is already shut down and keep_running
+  // is 0, so each handler's recv() returns (peer close or SO_RCVTIMEO timeout)
+  // and the handler exits.
+  join_handlers();
   queue_destroy(&process_queue);
 
   // Close output files

@@ -32,23 +32,24 @@ local toolchain — `.cu` changes are built/tested on **sentosa** (H200, CUDA 12
 - NULL checks in `mergeDuplicateOrientations` (`doneArr/quats/misoDist`) and the
   per-iteration fit (`outArrThisFit/validIdx`) — fail loudly, no segfault.
 
-## TODO — GPU `.cu` (build + test on sentosa)
-CRITICAL
-- **`matchIdx` is `int` → overflows at 100M orientations** (`i + chunkOffset`
-  > INT_MAX) → out-of-bounds orientation reads. The exact bug the CPU `size_t`
-  change fixed. Make match/orientation indices `size_t`/`int64` end-to-end
-  (both GPU.cu and GPUStream.cu, incl. forward-sim thread partitioning).
-HIGH
-- Silent `MAX_MATCHES` truncation: `atomicAdd` counts past the cap; host clamps
-  and processes a racy subset / stale pinned-buffer tail. Warn + handle.
-- Missing malloc/cudaMalloc/mmap/fread checks throughout (sibling has them).
-- Forward writers still `open(..., O_SYNC)` — the per-write-sync pattern the CPU
-  dropped for one end-of-run `fsync`. Drop O_SYNC + single fsync.
-- Kernel lacks `px/py` bounds + `nrSpots` clamp before image load (stale/corrupt
-  forward cache → illegal address).
-- GPUStream daemon: detached client threads never joined → race with
-  `queue_destroy`/mutex-destroy on shutdown; no `recv` timeout (a stalled client
-  pins a handler); `signal()` → `sigaction`.
+## DONE — GPU `.cu` (built clean on sentosa, CUDA 12.9 / H200; behaviour-preserving)
+- Match/orientation indices `int` → `size_t` end-to-end in both `.cu`
+  (kernel sig, device/host buffers, memcpy sizes, downstream `rowNrs`), plus the
+  GPUStream forward-sim thread partitioning.  NOTE: at the current 1e8-orientation
+  DB an `int` *index* (max 1e8) is below INT_MAX, so this is **defensive**
+  (needed for >2.1e9-orientation DBs); the byte-offset products that *do*
+  overflow `int` at 1e8 (`orientNr*stride ≈ 1e11`) were already `size_t` in the
+  kernels.  Safe widening regardless.
+- `MAX_MATCHES` truncation now warns to stderr before clamping; results read with
+  the clamped count only.
+- malloc/cudaMalloc/mmap/fread/MAP_FAILED checks added throughout both files.
+- Forward writers: `O_SYNC` dropped, single `fsync()` before close (CPU parity).
+- `compare` kernel: `nrSpots` clamped to `nrMaxSpots`; `px/py` bounds-checked
+  before the image load (added `nrPxY` kernel param).
+- GPU.cu: `nrPxX/nrPxY/LatticeParameter` init + validation + `numProcs>=1` guard.
+- GPUStream daemon: client handler threads tracked + joined before
+  `queue_destroy` (shutdown race); `SO_RCVTIMEO` + `EINTR` retry on `recv`;
+  `signal()` → `sigaction` (no SA_RESTART); usage text float (was double).
 
 ## DEFERRED — behaviour-changing (need their own validation, not hardening)
 - `mergeDuplicateOrientations` O(N²) pairwise matrix: bound `nrResults` before
