@@ -44,7 +44,7 @@ inline void gpuAssert(cudaError_t code, const char *file, int line,
 
 __global__ void compare(size_t nrPxX, size_t nrPxY, size_t nOr,
                         size_t nrMaxSpots, float minInt, size_t minSps,
-                        uint16_t *oA, uint8_t *im, float imScale,
+                        uint16_t *oA, float *im,
                         int *matchCount, size_t *matchIdx, float *matchScore,
                         size_t chunkOffset) {
   size_t i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -63,9 +63,9 @@ __global__ void compare(size_t nrPxX, size_t nrPxY, size_t nOr,
       loc++;
       py = (size_t)oA[loc];
       if (px < nrPxX && py < nrPxY) {
-        uint8_t raw = __ldg(&im[py * nrPxX + px]);
+        float raw = __ldg(&im[py * nrPxX + px]);
         if (raw > 0) {
-          totInt += (float)raw * imScale;
+          totInt += raw;
           nSps++;
         }
       }
@@ -664,7 +664,7 @@ int main(int argc, char *argv[]) {
     wt0 = omp_get_wtime();
     size_t freeMem = 0, totalMem = 0;
     gpuErrchk(cudaMemGetInfo(&freeMem, &totalMem));
-    size_t imageBytes = (size_t)nrPxX * nrPxY * sizeof(uint8_t);
+    size_t imageBytes = (size_t)nrPxX * nrPxY * sizeof(float);
     // Use up to 80% of free GPU memory for the outArr chunk buffer,
     // but cap at 4 GB to keep cudaMalloc + H2D fast.
     size_t usable = (freeMem > imageBytes + (freeMem / 5))
@@ -689,7 +689,7 @@ int main(int argc, char *argv[]) {
     // Allocate device buffers
     double wt_alloc = omp_get_wtime();
     uint16_t *d_outChunk;
-    uint8_t *d_image;
+    float *d_image;
     int *d_matchCount;
     size_t *d_matchIdx;
     float *d_matchScore;
@@ -701,30 +701,18 @@ int main(int argc, char *argv[]) {
     printf("  cudaMalloc (%.1f GB + %.1f MB): %lf s\n", chunkOutBytes / 1e9,
            imageBytes / 1e6, omp_get_wtime() - wt_alloc);
 
-    // Convert image double→uint8 with scale and upload
-    double maxVal = 0;
-    for (size_t p = 0; p < (size_t)nrPxX * nrPxY; p++)
-      if (image[p] > maxVal)
-        maxVal = image[p];
-    float imScale = (maxVal > 0) ? (float)(maxVal / 255.0) : 1.0f;
-    uint8_t *im_u8 = (uint8_t *)malloc(imageBytes);
-    if (im_u8 == NULL) {
-      fprintf(stderr, "FATAL: Could not allocate im_u8 (%zu bytes).\n",
+    // Convert image double→float (full precision) and upload
+    float *imF = (float *)malloc((size_t)nrPxX * nrPxY * sizeof(float));
+    if (imF == NULL) {
+      fprintf(stderr, "FATAL: Could not allocate imF (%zu bytes).\n",
               imageBytes);
       return 1;
     }
-    double invScale = (maxVal > 0) ? 255.0 / maxVal : 0.0;
-    for (size_t p = 0; p < (size_t)nrPxX * nrPxY; p++) {
-      if (image[p] > 0) {
-        double v = image[p] * invScale;
-        im_u8[p] = (v >= 255.0) ? 255 : (v < 1.0) ? 1 : (uint8_t)v;
-      } else {
-        im_u8[p] = 0;
-      }
-    }
+    for (size_t p = 0; p < (size_t)nrPxX * nrPxY; p++)
+      imF[p] = (float)image[p];
     double wt_img = omp_get_wtime();
-    gpuErrchk(cudaMemcpy(d_image, im_u8, imageBytes, cudaMemcpyHostToDevice));
-    free(im_u8);
+    gpuErrchk(cudaMemcpy(d_image, imF, imageBytes, cudaMemcpyHostToDevice));
+    free(imF);
     printf("  image H2D (%.1f MB): %lf s\n", imageBytes / 1e6,
            omp_get_wtime() - wt_img);
 
@@ -751,7 +739,7 @@ int main(int argc, char *argv[]) {
       int blocks = (int)((thisChunk + 1023) / 1024);
       compare<<<blocks, 1024>>>(nrPxX, nrPxY, thisChunk, maxNrSpots,
                                 minIntensity, minNrSpots, d_outChunk, d_image,
-                                imScale, d_matchCount, d_matchIdx, d_matchScore,
+                                d_matchCount, d_matchIdx, d_matchScore,
                                 offset);
       gpuErrchk(cudaDeviceSynchronize());
       double kern_time = omp_get_wtime() - wt_kern;

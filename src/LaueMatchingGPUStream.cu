@@ -67,8 +67,8 @@ inline void gpuAssert(cudaError_t code, const char *file, int line,
 #define MAX_MATCHES 100000 // max matched orientations per image
 
 __global__ void compare(size_t nrPxX, size_t nOr, size_t nrMaxSpots,
-                        float minInt, size_t minSps, uint16_t *oA, uint8_t *im,
-                        float imScale, int *matchCount, size_t *matchIdx,
+                        float minInt, size_t minSps, uint16_t *oA, float *im,
+                        int *matchCount, size_t *matchIdx,
                         float *matchScore, size_t chunkOffset) {
   size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < nOr) {
@@ -83,9 +83,9 @@ __global__ void compare(size_t nrPxX, size_t nOr, size_t nrMaxSpots,
       px = (size_t)oA[loc];
       loc++;
       py = (size_t)oA[loc];
-      uint8_t raw = __ldg(&im[py * nrPxX + px]);
+      float raw = __ldg(&im[py * nrPxX + px]);
       if (raw > 0) {
-        totInt += (float)raw * imScale;
+        totInt += raw;
         nSps++;
       }
     }
@@ -118,7 +118,7 @@ typedef struct {
 // Per-stream GPU context
 typedef struct {
   cudaStream_t stream;
-  uint8_t *d_image; // device image buffer (uint8 quantized)
+  float *d_image; // device image buffer (full-precision float)
   // Compact match output (device)
   int *d_matchCount;    // atomic counter on device
   size_t *d_matchIdx;   // matched orientation indices
@@ -996,7 +996,7 @@ int main(int argc, char *argv[]) {
   // ── GPU memory allocation ────────────────────────────────────────
   // Upload forward simulation to GPU once (shared, read-only)
   size_t outArrBytes = szArr * sizeof(uint16_t);
-  size_t imageBytes = g_imagePixels * sizeof(uint8_t);
+  size_t imageBytes = g_imagePixels * sizeof(float);
 
   size_t freeMem = 0, totalMem = 0;
   gpuErrchk(cudaMemGetInfo(&freeMem, &totalMem));
@@ -1198,33 +1198,11 @@ int main(int argc, char *argv[]) {
     // Reset match counter on device
     gpuErrchk(cudaMemsetAsync(ctx->d_matchCount, 0, sizeof(int), ctx->stream));
 
-    // H2D: quantize image float→uint8 and upload
+    // H2D: upload full-precision float image directly (no quantization).
+    // Scoring is now on raw intensities, matching the CPU score exactly.
     gpuErrchk(cudaEventRecord(ctx->ev_start, ctx->stream));
-    // Find max intensity for scaling
-    float maxVal = 0;
-    for (size_t p = 0; p < g_imagePixels; p++)
-      if (image[p] > maxVal)
-        maxVal = image[p];
-    float imScale = (maxVal > 0) ? maxVal / 255.0f : 1.0f;
-    // Quantize to uint8
-    uint8_t *im_u8 = (uint8_t *)malloc(g_imagePixels);
-    if (!im_u8) {
-      fprintf(stderr, "FATAL: malloc failed for quantized image (%zu bytes)\n",
-              g_imagePixels);
-      exit(EXIT_FAILURE);
-    }
-    float invScale = (maxVal > 0) ? 255.0f / maxVal : 0.0f;
-    for (size_t p = 0; p < g_imagePixels; p++) {
-      if (image[p] > 0) {
-        float v = image[p] * invScale;
-        im_u8[p] = (v >= 255.0f) ? 255 : (v < 1.0f) ? 1 : (uint8_t)v;
-      } else {
-        im_u8[p] = 0;
-      }
-    }
-    gpuErrchk(cudaMemcpyAsync(ctx->d_image, im_u8, imageBytes,
+    gpuErrchk(cudaMemcpyAsync(ctx->d_image, image, imageBytes,
                               cudaMemcpyHostToDevice, ctx->stream));
-    free(im_u8);
     gpuErrchk(cudaEventRecord(ctx->ev_h2d_done, ctx->stream));
 
     // GPU matching (chunked or full)
@@ -1248,7 +1226,7 @@ int main(int argc, char *argv[]) {
           outArrOnGPU ? d_outArr + offset * stride : d_outArr;
       compare<<<blocks, 1024, 0, ctx->stream>>>(
           nrPxX, thisChunk, maxNrSpots, minIntensity, minNrSpots, d_chunkPtr,
-          ctx->d_image, imScale, ctx->d_matchCount, ctx->d_matchIdx,
+          ctx->d_image, ctx->d_matchCount, ctx->d_matchIdx,
           ctx->d_matchScore, offset);
     }
 
