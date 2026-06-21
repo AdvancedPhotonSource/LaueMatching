@@ -55,6 +55,7 @@ if INSTALL_PATH not in sys.path:
     sys.path.insert(0, INSTALL_PATH)
 from laue_index.records import SOLUTION_FORMATS
 from laue_index.filtering import LegacyUniqueSpotFilter, RobustCSLAwareFilter
+from laue_index.indexer import run_indexer
 _RI = SOLUTION_FORMATS["runimage"]  # RunImage solution layout (GrainNr at col 0)
 
 # Configuration system (extracted to laue_config.py)
@@ -594,50 +595,28 @@ class EnhancedImageProcessor:
         """
         compute_type = self.config.get("processing_type", "CPU").upper()
         ncpus = self.config.get("num_cpus", 1)
-
-        # Find executable path relative to repo root (one level above scripts/)
-        script_dir = os.path.dirname(os.path.realpath(__file__))
-        repo_root = os.path.dirname(script_dir)
-        build_dir = os.path.join(repo_root, 'bin')
-
-        # Choose the appropriate executable
         do_forward = self.config.get("do_forward", False)
-        if compute_type == 'GPU' and not do_forward:
-             executable_name = 'LaueMatchingGPU'
-        else:
-             executable_name = 'LaueMatchingCPU'
-             if compute_type == 'GPU' and do_forward:
-                 logger.warning("GPU requested but DoFwd is enabled. Using CPU implementation (LaueMatchingCPU).")
-             elif compute_type != 'CPU':
-                 logger.warning(f"Processing type '{compute_type}' not recognized or incompatible. Using CPU implementation.")
+        repo_root = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 
-        executable_path = os.path.join(build_dir, executable_name)
-
-        # Check if executable exists
-        if not os.path.exists(executable_path):
-             logger.error(f"Indexing executable not found at: {executable_path}")
-             logger.error("Please ensure the code is compiled (e.g., run 'make' in the build directory).")
-             return {"success": False, "error": "Indexing executable not found"}
-
-        # --- Prepare required input files ---
+        # --- Prepare required input files (orchestration) ---
         config_file = self.config.config_file
         orient_db_file = self.config.get("orientation_file", "orientations.bin")
         hkl_file = self.config.get("hkl_file", "hkls.bin")
-        indexing_input_image = f"{output_path}.bin" # The blurred image saved to file
+        indexing_input_image = f"{output_path}.bin"  # blurred image saved to file
 
         # Ensure orientation database exists (copy default if needed)
         if not os.path.exists(orient_db_file):
-            default_orient_db = os.path.join(INSTALL_PATH, '100MilOrients.bin') # Default name/location
+            default_orient_db = os.path.join(INSTALL_PATH, '100MilOrients.bin')
             if os.path.exists(default_orient_db):
-                 logger.info(f"Orientation database '{orient_db_file}' not found. Copying default from '{default_orient_db}'.")
-                 try:
-                      shutil.copy2(default_orient_db, orient_db_file)
-                 except Exception as e:
-                      logger.error(f"Failed to copy default orientation database: {e}")
-                      return {"success": False, "error": "Orientation database missing and copy failed"}
+                logger.info(f"Orientation database '{orient_db_file}' not found. Copying default from '{default_orient_db}'.")
+                try:
+                    shutil.copy2(default_orient_db, orient_db_file)
+                except Exception as e:
+                    logger.error(f"Failed to copy default orientation database: {e}")
+                    return {"success": False, "error": "Orientation database missing and copy failed"}
             else:
-                 logger.error(f"Orientation database '{orient_db_file}' not found, and default DB '{default_orient_db}' is also missing.")
-                 return {"success": False, "error": "Orientation database missing"}
+                logger.error(f"Orientation database '{orient_db_file}' not found, and default DB '{default_orient_db}' is also missing.")
+                return {"success": False, "error": "Orientation database missing"}
 
         # Generate HKL file if it doesn't exist
         if not os.path.exists(hkl_file):
@@ -646,67 +625,16 @@ class EnhancedImageProcessor:
             if not hkl_gen_result["success"]:
                 return {"success": False, "error": f"Failed to generate HKL file: {hkl_gen_result.get('error', 'Unknown')}"}
 
-        # --- Set up environment for executable (LD_LIBRARY_PATH) ---
-        env = dict(os.environ)
-        lib_path_nlopt = os.path.join(repo_root, 'LIBS', 'NLOPT', 'lib')
-        lib_path_nlopt64 = os.path.join(repo_root, 'LIBS', 'NLOPT', 'lib64')
-        current_ld_path = env.get('LD_LIBRARY_PATH', '')
-        # Prepend NLopt paths
-        env['LD_LIBRARY_PATH'] = f"{lib_path_nlopt}:{lib_path_nlopt64}:{current_ld_path}"
-
-        # --- Construct and Run the Indexing Command ---
-        indexing_cmd = [
-             executable_path,
-             config_file,
-             orient_db_file,
-             hkl_file,
-             indexing_input_image,
-             str(ncpus)
-        ]
-        logger.info(f'Running indexing command: {" ".join(indexing_cmd)}')
-        stdout_log = f'{output_path}.LaueMatching_stdout.txt'
-        stderr_log = f'{output_path}.LaueMatching_stderr.txt'
-
-        try:
-             # Use subprocess.run for better control
-             process = subprocess.run(
-                 indexing_cmd,
-                 env=env,
-                 capture_output=True, # Capture stdout/stderr
-                 text=True,           # Decode as text
-                 check=False           # Don't raise exception on non-zero exit code immediately
-             )
-
-             # Save stdout/stderr regardless of exit code
-             with open(stdout_log, 'w') as f_out:
-                 f_out.write(process.stdout)
-             with open(stderr_log, 'w') as f_err:
-                 f_err.write(process.stderr)
-
-             # Check return code
-             if process.returncode == 0:
-                 logger.info(f"Indexing command completed successfully (exit code 0). Output saved to {stdout_log}")
-                 return {"success": True}
-             else:
-                 logger.error(f"Indexing command failed with exit code {process.returncode}.")
-                 logger.error(f"Check logs for details: {stdout_log} and {stderr_log}")
-                 logger.error(f"Stderr tail:\n{process.stderr[-500:]}") # Show last part of stderr
-                 return {
-                     "success": False,
-                     "error": f"Indexing command failed with code {process.returncode}"
-                 }
-
-        except FileNotFoundError:
-             logger.error(f"Executable not found at {executable_path} when trying to run.")
-             return {"success": False, "error": "Indexing executable not found during execution"}
-        except Exception as e:
-             logger.error(f"An unexpected error occurred while running indexing: {str(e)}")
-             # Save any partial output if possible
-             if 'process' in locals() and hasattr(process, 'stdout'):
-                 with open(stdout_log, 'a') as f_out: f_out.write(f"\n\nERROR DURING EXECUTION: {e}\n{process.stdout}")
-             if 'process' in locals() and hasattr(process, 'stderr'):
-                 with open(stderr_log, 'a') as f_err: f_err.write(f"\n\nERROR DURING EXECUTION: {e}\n{process.stderr}")
-             return {"success": False, "error": f"Unexpected error during indexing execution: {e}"}
+        # --- Run the indexing binary (Indexer stage, REFACTOR_PLAN §6.5) ---
+        result = run_indexer(
+            repo_root=repo_root, config_file=config_file,
+            orient_db_file=orient_db_file, hkl_file=hkl_file,
+            image_bin=indexing_input_image, ncpus=ncpus, output_path=output_path,
+            compute_type=compute_type, do_forward=do_forward,
+        )
+        if result.success:
+            return {"success": True}
+        return {"success": False, "error": result.error}
 
 
     def _run_simulation(
