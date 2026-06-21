@@ -54,6 +54,7 @@ import laue_visualization as lv
 if INSTALL_PATH not in sys.path:
     sys.path.insert(0, INSTALL_PATH)
 from laue_index.records import SOLUTION_FORMATS
+from laue_index.filtering import LegacyUniqueSpotFilter, RobustCSLAwareFilter
 _RI = SOLUTION_FORMATS["runimage"]  # RunImage solution layout (GrainNr at col 0)
 
 # Configuration system (extracted to laue_config.py)
@@ -1038,38 +1039,32 @@ class EnhancedImageProcessor:
         kept_grain_nrs = set()
         filtered_out_count = 0
 
-        if orientations_sorted.size == 0:
-            filtered_orientations = orientations_sorted.copy()
-        elif use_robust:
+        # Select the orientation-filter strategy from config (REFACTOR_PLAN
+        # §4c/§6.2).  The implementations live in laue_index.filtering — the
+        # single source of truth; the old inline legacy loop here is gone.
+        if use_robust:
             min_total = int(self.config.get("min_nr_spots", 5))
             max_ang = float(self.config.get("maxAngle", 5.0))
             logger.info(
                 f"Robust (twin/CSL-aware) orientation filter: min_unique="
                 f"{min_unique_spots_required}, min_total={min_total}, "
                 f"max_angle={max_ang}, cubic={is_cubic}")
-            filtered_orientations = lsu.filter_orientations_robust(
-                orientations_sorted, orientation_unique_spots,
-                min_unique=min_unique_spots_required,
-                grain_col=_RI.grain, quality_col=_RI.quality,
-                om_start_col=_RI.om_start, nmatches_col=_RI.n_matches,
-                max_angle_deg=max_ang, min_total_spots=min_total,
-                csl_sigmas=(3,), csl_tol_deg=3.0, cubic=is_cubic,
-            )
+            ofilter = RobustCSLAwareFilter(
+                min_unique=min_unique_spots_required, min_total_spots=min_total,
+                max_angle_deg=max_ang, csl_sigmas=(3,), csl_tol_deg=3.0,
+                cubic=is_cubic, fmt=_RI)
+        else:
+            logger.info(f"Legacy filter: dropping orientations with <{min_unique_spots_required} unique spots...")
+            ofilter = LegacyUniqueSpotFilter(
+                min_unique=min_unique_spots_required, fmt=_RI)
+
+        if orientations_sorted.size == 0:
+            filtered_orientations = orientations_sorted.copy()
+        else:
+            filtered_orientations = ofilter(orientations_sorted, orientation_unique_spots)
             if filtered_orientations.size > 0:
                 kept_grain_nrs = set(filtered_orientations[:, _RI.grain].astype(int))
             filtered_out_count = len(orientations_sorted) - len(filtered_orientations)
-        else:
-            logger.info(f"Legacy filter: dropping orientations with <{min_unique_spots_required} unique spots...")
-            indices_to_keep = []
-            for i, orientation in enumerate(orientations_sorted):
-                grain_nr = int(orientation[_RI.grain])
-                unique_spot_data = orientation_unique_spots.get(grain_nr)
-                if unique_spot_data and unique_spot_data["unique_label_count"] >= min_unique_spots_required:
-                    indices_to_keep.append(i)
-                    kept_grain_nrs.add(grain_nr)
-                else:
-                    filtered_out_count += 1
-            filtered_orientations = orientations_sorted[indices_to_keep]
 
         # --- Filter Spots based on kept Grain Numbers ---
         if spots_unfiltered.size > 0 and kept_grain_nrs:

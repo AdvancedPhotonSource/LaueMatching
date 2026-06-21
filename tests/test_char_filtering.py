@@ -60,7 +60,27 @@ def test_char_filter_robust():
     check_golden("filter_robust", snap)
 
 
+def test_filter_strategy_classes_match_functions():
+    """The §6.2 OrientationFilter classes reproduce the bare functions exactly."""
+    from laue_index.filtering import (LegacyUniqueSpotFilter, RobustCSLAwareFilter,
+                                      filter_orientations, filter_orientations_robust)
+    sol, spots, labels = _load()
+    usi = lsu.calculate_unique_spots(sol, spots, labels)
+
+    legacy_cls = LegacyUniqueSpotFilter(min_unique=2)(sol, usi)
+    legacy_fn = filter_orientations(sol, usi, min_unique=2)
+    assert np.array_equal(legacy_cls, legacy_fn)
+
+    robust_cls = RobustCSLAwareFilter(
+        min_unique=2, min_total_spots=5, max_angle_deg=5.0,
+        csl_sigmas=(3,), csl_tol_deg=3.0, cubic=True)(sol, usi)
+    robust_fn = filter_orientations_robust(
+        sol, usi, min_unique=2, min_total_spots=5, max_angle_deg=5.0,
+        csl_sigmas=(3,), csl_tol_deg=3.0, cubic=True)
+    assert np.array_equal(robust_cls, robust_fn)
+
+
 if __name__ == "__main__":
     for fn in [test_char_unique_spots, test_char_filter_legacy,
-               test_char_filter_robust]:
+               test_char_filter_robust, test_filter_strategy_classes_match_functions]:
         fn(); print(f"PASS  {fn.__name__}")

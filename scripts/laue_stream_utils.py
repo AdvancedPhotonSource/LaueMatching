@@ -761,274 +761,29 @@ def split_solutions_by_image(
 
 
 # ---------------------------------------------------------------------------
-# Orientation filtering (unique-spot counting)
-# ---------------------------------------------------------------------------
-
-def calculate_unique_spots(
-    orientations: np.ndarray,
-    spots: np.ndarray,
-    labels: np.ndarray,
-    grain_col: int = 0,
-    quality_col: int = 4,
-    spot_grain_col: int = 0,
-    spot_x_col: int = 5,
-    spot_y_col: int = 6,
-) -> Dict[int, Dict]:
-    """
-    Calculate unique spots per orientation, prioritized by quality score.
-
-    Orientations are sorted by quality (descending) using a stable sort so
-    that ties preserve the original input order.  Higher-quality orientations
-    claim spots first; once a label or pixel position is assigned, lower-
-    quality orientations cannot reuse it.
-
-    Returns:
-        {grain_nr: {"count": int, "unique_label_count": int,
-                     "unique_labels": set, "positions": set}}
-    """
-    results: Dict[int, Dict] = {}
-    if orientations.size == 0:
-        return results
-
-    if orientations.ndim == 1:
-        orientations = np.expand_dims(orientations, 0)
-
-    # Sort by quality descending with *stable* tie-breaking (matches the
-    # original Python list .sort() used in RunImage._calculate_unique_spots).
-    sorted_idx = np.argsort(orientations[:, quality_col], kind='stable')[::-1]
-
-    assigned_labels: set = set()
-    assigned_positions: set = set()
-
-    for idx in sorted_idx:
-        orient = orientations[idx]
-        gn = int(orient[grain_col])
-        results[gn] = {
-            "count": 0,
-            "unique_label_count": 0,
-            "unique_labels": set(),
-            "positions": set(),
-        }
-
-        orient_spots = spots[spots[:, spot_grain_col].astype(int) == gn]
-        if orient_spots.size == 0:
-            continue
-
-        for spot in orient_spots:
-            try:
-                x, y = int(spot[spot_x_col]), int(spot[spot_y_col])
-            except (IndexError, ValueError):
-                continue
-            pos = (x, y)
-            if pos in assigned_positions:
-                continue
-
-            if 0 <= y < labels.shape[0] and 0 <= x < labels.shape[1]:
-                lbl = labels[y, x]
-                if lbl > 0 and lbl in assigned_labels:
-                    continue
-                results[gn]["positions"].add(pos)
-                assigned_positions.add(pos)
-                if lbl > 0:
-                    results[gn]["unique_labels"].add(lbl)
-                    assigned_labels.add(lbl)
-            else:
-                # Out-of-bounds: still claim the position so lower-quality
-                # orientations cannot reuse it (matches original behaviour).
-                results[gn]["positions"].add(pos)
-                assigned_positions.add(pos)
-
-        results[gn]["count"] = len(results[gn]["positions"])
-        results[gn]["unique_label_count"] = len(results[gn]["unique_labels"])
-
-    return results
-
-
-def filter_orientations(
-    orientations: np.ndarray,
-    unique_spot_info: Dict[int, Dict],
-    min_unique: int = 2,
-    grain_col: int = 0,
-    quality_col: int = 4,
-) -> np.ndarray:
-    """
-    Filter orientations by minimum unique spot (label) count.
-
-    Returns a new array with only the qualifying rows, sorted by quality.
-    """
-    if orientations.size == 0:
-        return orientations.copy()
-
-    if orientations.ndim == 1:
-        orientations = np.expand_dims(orientations, 0)
-
-    # Sort by quality descending first
-    sorted_orient = orientations[np.argsort(orientations[:, quality_col])[::-1]]
-
-    keep = []
-    for row in sorted_orient:
-        gn = int(row[grain_col])
-        info = unique_spot_info.get(gn, {})
-        if info.get("unique_label_count", 0) >= min_unique:
-            keep.append(row)
-
-    if keep:
-        return np.array(keep)
-    return np.empty((0, orientations.shape[1]))
-
-
-# ---------------------------------------------------------------------------
-# Twin/CSL-aware, symmetry-reduced orientation filtering (robust dedup).
+# Orientation filtering + CSL geometry
 #
-# The legacy filter_orientations() above drops any solution whose *unique*
-# spot count (after winner-take-all spot claiming, highest quality first) is
-# < min_unique.  For Sigma3 (and other CSL) twins this misfires: the twin and
-# matrix share the coincident-site reflections, so whichever scores higher
-# quality claims them first and STARVES the other of unique spots -- deleting
-# a real, strong crystal (e.g. an FCC matrix matched on 11 spots) purely
-# because it shares reflections with its twin.
-#
-# filter_orientations_robust() separates the two jobs the legacy filter
-# conflated:
-#   (B.1) merge genuinely-redundant near-duplicate orientations
-#         (symmetry-reduced disorientation < max_angle_deg);
-#   (B.2) keep every remaining DISTINCT solution that clears a physical
-#         evidence threshold (total matched spots >= min_total_spots);
-#   (A)   EXEMPT solutions that are CSL/twin-related (e.g. Sigma3 60deg/<111>)
-#         to an already-kept solution from the unique-spot test, so real twins
-#         are never cannibalised.  Non-CSL spurious overlaps still face the
-#         unique-spot test and are removed.
+# REFACTOR_PLAN §6.2: the implementations now live in the laue_index package
+# (single source of truth).  This module re-exports them under their historical
+# names so existing callers (laue_postprocess, laue_image_server, tests) keep
+# working unchanged, while the duplicate inline copy in RunImage is removed.
 # ---------------------------------------------------------------------------
+_INSTALL_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _INSTALL_PATH not in sys.path:
+    sys.path.insert(0, _INSTALL_PATH)
 
-def _cubic_proper_ops() -> np.ndarray:
-    """24 proper (det=+1) rotation matrices of the cubic point group m-3m."""
-    import itertools as _it
-    ops = []
-    for perm in _it.permutations(range(3)):
-        for signs in _it.product((1.0, -1.0), repeat=3):
-            M = np.zeros((3, 3))
-            for i, p in enumerate(perm):
-                M[i, p] = signs[i]
-            if abs(np.linalg.det(M) - 1.0) < 1e-6:
-                ops.append(M)
-    return np.array(ops)
-
-
-_CUBIC_OPS = _cubic_proper_ops()
-
-# CSL boundaries for cubic: Sigma -> (disorientation angle deg, sorted-|axis|).
-_CSL_TABLE = {
-    3:  (60.00, np.array([0.57735, 0.57735, 0.57735])),  # 60 / <111>
-    9:  (38.94, np.array([0.00000, 0.70711, 0.70711])),  # 38.94 / <110>
-    11: (50.48, np.array([0.00000, 0.70711, 0.70711])),  # 50.48 / <110>
-}
-
-
-def _disorientation_deg_axis(A: np.ndarray, B: np.ndarray, ops: np.ndarray = _CUBIC_OPS):
-    """Symmetry-reduced disorientation angle (deg) and rotation-axis family
-    (sorted |components|) between two 3x3 orientation matrices, minimised over
-    both-sided point-group symmetry.  Crystal-frame misorientation M = A^T B."""
-    M = A.T @ B
-    best_ang, best_M = 999.0, M
-    for O1 in ops:
-        OM = O1 @ M
-        for O2 in ops:
-            m = OM @ O2
-            tr = max(-1.0, min(1.0, (np.trace(m) - 1.0) / 2.0))
-            ang = np.degrees(np.arccos(tr))
-            if ang < best_ang:
-                best_ang, best_M = ang, m
-    w, v = np.linalg.eig(best_M)
-    axis = np.real(v[:, int(np.argmin(np.abs(w - 1.0)))])
-    n = np.linalg.norm(axis)
-    axis = axis / n if n > 0 else axis
-    return best_ang, np.sort(np.abs(axis))
-
-
-def is_csl_related(A, B, sigmas=(3,), tol_deg: float = 3.0, ops: np.ndarray = _CUBIC_OPS) -> bool:
-    """True if A,B are related by one of the requested cubic CSL boundaries."""
-    ang, axfam = _disorientation_deg_axis(A, B, ops)
-    for s in sigmas:
-        ref = _CSL_TABLE.get(s)
-        if ref is None:
-            continue
-        ang_ref, ax_ref = ref
-        if abs(ang - ang_ref) < tol_deg and np.linalg.norm(axfam - ax_ref) < 0.08:
-            return True
-    return False
-
-
-def filter_orientations_robust(
-    orientations: np.ndarray,
-    unique_spot_info: Dict[int, Dict],
-    *,
-    min_unique: int = 2,
-    grain_col: int = 0,
-    quality_col: int = 4,
-    om_start_col: int = 22,
-    nmatches_col: int = 5,
-    max_angle_deg: float = 5.0,
-    min_total_spots: int = 5,
-    csl_sigmas=(3,),
-    csl_tol_deg: float = 3.0,
-    cubic: bool = True,
-) -> np.ndarray:
-    """Twin/CSL-aware orientation filter (see module note above).
-
-    Keeps a solution (processed best-quality first) when it clears the evidence
-    floor (>= min_total_spots total matched spots) AND one of:
-      * it is the top solution so far (nothing kept yet), or
-      * it has >= min_unique exclusive spots (genuinely independent), or
-      * it is CSL/twin-related (e.g. Sigma3) to an already-kept solution.
-    Near-duplicates (disorientation < max_angle_deg of a kept one) are dropped.
-    With cubic=False the CSL exemption and symmetry dedup are skipped and the
-    legacy unique-spot behaviour is reproduced.
-    """
-    if orientations.size == 0:
-        return orientations.copy()
-    if orientations.ndim == 1:
-        orientations = np.expand_dims(orientations, 0)
-
-    order = np.argsort(orientations[:, quality_col])[::-1]  # quality descending
-    kept_rows, kept_oms = [], []
-    for idx in order:
-        row = orientations[idx]
-        gn = int(row[grain_col])
-        info = unique_spot_info.get(gn, {})
-        uniq = int(info.get("unique_label_count", 0))
-        ntot = int(info.get("count", 0))
-        if ntot == 0 and orientations.shape[1] > nmatches_col:
-            try:
-                ntot = int(round(float(row[nmatches_col])))
-            except (ValueError, TypeError):
-                ntot = 0
-        om = None
-        if cubic and orientations.shape[1] >= om_start_col + 9:
-            try:
-                om = np.asarray(row[om_start_col:om_start_col + 9], dtype=float).reshape(3, 3)
-            except (ValueError, TypeError):
-                om = None
-
-        # (B.1) drop near-duplicates of an already-kept distinct orientation
-        if om is not None and kept_oms and \
-                any(_disorientation_deg_axis(om, k)[0] < max_angle_deg for k in kept_oms):
-            continue
-
-        # (A) CSL/twin-related to a kept solution + clears evidence -> exempt
-        csl_exempt = (
-            om is not None and bool(kept_oms) and ntot >= min_total_spots
-            and any(is_csl_related(om, k, csl_sigmas, csl_tol_deg) for k in kept_oms)
-        )
-
-        if ntot >= min_total_spots and (csl_exempt or uniq >= min_unique or not kept_rows):
-            kept_rows.append(row)
-            if om is not None:
-                kept_oms.append(om)
-
-    if kept_rows:
-        out = np.array(kept_rows)
-        return out[np.argsort(out[:, quality_col])[::-1]]
-    return np.empty((0, orientations.shape[1]))
+from laue_index.geometry import (  # noqa: E402
+    cubic_proper_ops as _cubic_proper_ops,
+    CUBIC_OPS as _CUBIC_OPS,
+    CSL_TABLE as _CSL_TABLE,
+    disorientation_deg_axis as _disorientation_deg_axis,
+    is_csl_related,
+)
+from laue_index.filtering import (  # noqa: E402
+    calculate_unique_spots,
+    filter_orientations,
+    filter_orientations_robust,
+)
 
 
 # ---------------------------------------------------------------------------
