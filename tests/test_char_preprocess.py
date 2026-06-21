@@ -56,6 +56,20 @@ def test_char_preprocess_real_frame():
     check_golden("preprocess_real_frame", snap)
 
 
+@pytest.mark.skipif(local_fixture(_FRAME) is None,
+                    reason=f"local fixture {_FRAME} unavailable")
+def test_preprocessor_class_matches_function():
+    """§6.5c Preprocessor wrapper == preprocess_image (same zero background)."""
+    from laue_index.preprocess import Preprocessor
+    raw = lsu.load_h5_image(str(local_fixture(_FRAME)))
+    cfg = lsu.parse_config(str(fixture("params_NiIndent.txt")))
+    bg = np.zeros_like(raw)
+    a = lsu.preprocess_image(raw, cfg, background=bg)
+    b = Preprocessor(cfg, background=bg)(raw)
+    for x, y in zip(a, b[:3]):  # blurred, filt_img, filt_labels arrays
+        assert np.array_equal(np.asarray(x), np.asarray(y))
+
+
 if __name__ == "__main__":
     if local_fixture(_FRAME) is None:
         print(f"SKIP  preprocess (no {_FRAME})")
