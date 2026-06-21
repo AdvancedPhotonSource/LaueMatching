@@ -1,0 +1,36 @@
+# Python packaging for the LaueMatching orchestration package (laue_index).
+# The C/CUDA core (src/, built via CMakeLists.txt + build.sh) is independent;
+# this packages only the Python side (REFACTOR_PLAN §6.6).
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "laue-index"
+version = "0.1.0"
+description = "LaueMatching Python orchestration: typed pipeline stages for white-beam Laue indexing"
+readme = "laue_index/README.md"
+requires-python = ">=3.9"
+license = { text = "See repository LICENSE" }
+authors = [{ name = "Hemant Sharma", email = "hsharma@anl.gov" }]
+dependencies = [
+    "numpy",
+]
+
+# Heavier, environment-specific deps used by the full pipeline (preprocessing,
+# I/O).  Kept optional so the pure core (records/geometry/filtering/thresholds/
+# config_schema) imports with numpy alone.
+[project.optional-dependencies]
+pipeline = ["opencv-python-headless", "scipy", "h5py"]
+preprocess = ["diplib", "scikit-image"]
+dev = ["pytest"]
+
+[tool.setuptools]
+packages = ["laue_index"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# The full end-to-end test is opt-in (needs the orientation DB + C binary +
+# forward cache); it auto-skips unless LAUE_E2E=1, so `pytest` is CI-safe with
+# SKIP_DOWNLOAD=1 (no orientation database required for the unit suite).
+addopts = "-q"
