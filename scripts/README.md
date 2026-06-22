@@ -25,10 +25,18 @@ Python scripts for image preprocessing, orientation indexing, streaming pipeline
 
 ## Module Architecture
 
+The scripts here are **orchestrators and utilities**.  The actual pipeline
+logic lives in the `laue_index` package (typed stages: preprocess, indexer,
+postprocess, output, plus records / filtering / thresholds / geometry /
+config_schema).  `laue_stream_utils.py` is a thin **re-export shim** over
+`laue_index`, so `RunImage.py`, `laue_image_server.py`, and
+`laue_postprocess.py` get the one canonical implementation while their imports
+stay unchanged.
+
 ```mermaid
 graph TD
     subgraph "Single-Image Mode"
-        RunImage["RunImage.py"]
+        RunImage["RunImage.py<br/>(orchestrator)"]
     end
 
     subgraph "Streaming Mode"
@@ -43,18 +51,36 @@ graph TD
         Server -->|labels.h5| Post
     end
 
-    subgraph "Shared Modules"
+    subgraph "laue_index package (typed stages)"
+        Pre["preprocess"]
+        Idx["indexer (run_indexer)"]
+        PostP["postprocess (PostProcessor)"]
+        Out["output"]
+        Filt["filtering / thresholds / geometry"]
+        Rec["records / config_schema"]
+    end
+
+    subgraph "Script-level shared modules"
         Config["laue_config.py"]
-        Utils["laue_stream_utils.py<br/>(KDTree sigma, preprocessing)"]
+        Shim["laue_stream_utils.py<br/>(re-export shim → laue_index)"]
         Viz["laue_visualization.py"]
+        Sim["laue_simulation.py"]
     end
 
     RunImage --> Config
-    RunImage --> Utils
+    RunImage --> Pre
+    RunImage --> Idx
+    RunImage --> PostP
+    RunImage --> Out
     RunImage --> Viz
-    Server --> Utils
-    Post --> Utils
+    RunImage --> Sim
+    Server --> Shim
+    Post --> PostP
     Post --> Viz
+    Shim --> Filt
+    Shim --> Pre
+    PostP --> Filt
+    PostP --> Rec
 ```
 
 ---
@@ -236,16 +262,28 @@ Dataclass-based configuration with three main sections:
 
 ### `laue_stream_utils.py`
 
-Reusable utilities shared across all scripts:
+A **back-compat re-export shim** over the `laue_index` package: it keeps the
+historical function names (so `laue_image_server.py`, `laue_postprocess.py`,
+etc. import unchanged) while the implementations live in `laue_index`. Its own
+code is now just H5 image loading, the dict-based `parse_config`, TCP helpers,
+and frame-mapping I/O; everything else is re-exported.
 
-| Category | Functions |
-|----------|-----------|
-| **I/O** | `parse_config`, `load_h5_image`, `count_h5_frames`, `load_background`, `save_frame_mapping`, `load_frame_mapping` |
-| **Preprocessing** | `compute_background`, `preprocess_image` (full pipeline: bg sub → enhance → threshold → filter → blur) |
-| **TCP** | `send_image`, `LAUE_STREAM_PORT` |
-| **Results** | `read_solutions`, `read_spots`, `split_spots_by_image`, `split_solutions_by_image` |
-| **Orientation** | `calculate_unique_spots`, `filter_orientations`, `sort_orientations_by_quality` |
-| **HDF5** | `store_results_h5` |
+| Category | Functions | Now implemented in |
+|----------|-----------|--------------------|
+| **I/O (local)** | `parse_config`, `load_h5_image`, `count_h5_frames`, `save_frame_mapping`, `load_frame_mapping` | `laue_stream_utils` |
+| **Preprocessing** | `compute_background`, `preprocess_image`, `find_connected_components`, `filter_small_components`, `load_background` | `laue_index.preprocess` |
+| **Thresholding** | `apply_threshold` | `laue_index.thresholds` |
+| **Orientation** | `calculate_unique_spots`, `filter_orientations`, `filter_orientations_robust`, `is_csl_related` | `laue_index.filtering` / `geometry` |
+| **Results parse** | `read_solutions`, `read_spots`, `split_spots_by_image`, `split_solutions_by_image` | `laue_stream_utils` |
+| **HDF5 output** | `create_h5_output`, `store_binary_headers_in_h5`, `store_txt_files_in_h5` | `laue_index.output` |
+| **TCP** | `send_image`, `LAUE_STREAM_PORT` | `laue_stream_utils` |
+
+### `laue_simulation.py`
+
+The diffraction-simulation step (shells out to `GenerateSimulation.py`, loads
+the simulated spots/images back, and optionally renders an
+experimental-vs-simulated comparison). Extracted from `RunImage.py` so the
+orchestrator stays thin; `run_simulation(config, output_path, orientations, …)`.
 
 ### `laue_visualization.py`
 
