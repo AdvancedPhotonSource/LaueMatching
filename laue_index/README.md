@@ -18,6 +18,7 @@ but stays **independent** of the paper-tied packages (`laue_torch` / `laue_jax`
 | `postprocess.py` | `PostProcessor`: unique-spots → sort → filter → spot-filter. |
 | `output.py` | HDF5 result writer. |
 | `config_schema.py` | One declarative `SCHEMA` table driving config parse + write. |
+| `cli.py` | `laue-index` console entry: `parse` (summarise a solutions table) and `filter` (re-run post-processing on existing C output, no re-indexing). |
 
 ## Relationship to `scripts/`
 The legacy `scripts/laue_stream_utils.py` is now a **thin shim** that re-exports
