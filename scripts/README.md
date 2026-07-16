@@ -166,6 +166,15 @@ python scripts/laue_postprocess.py \
 | `--flush-time` | `5` | Seconds to wait after server finishes before killing daemon |
 | `--min-unique` | `2` | Minimum unique spots for orientation filtering |
 | `--log-level` | `INFO` | Logging verbosity |
+| `--watch` | off | Real-time mode: keep watching `--folder` and stream new `.h5` files as they arrive (works with an initially empty folder). Stop with a `STOP_LAUE` file in the folder or `--watch-idle`. |
+| `--watch-poll` | `2` | Seconds between folder rescans in watch mode |
+| `--watch-idle` | `0` | Exit watch mode after N seconds with no new files (0 = never) |
+
+The daemon TCP port is passed to `LaueMatchingGPUStream` via the
+`LAUE_STREAM_PORT` environment variable (default `60517`), so several
+daemons — e.g. two phases of one sample — can run on one host on different
+GPUs: select the GPU with `CUDA_VISIBLE_DEVICES` and give each orchestrator
+its own `--port`.
 
 ### `laue_image_server.py` — CLI Reference
 
@@ -180,6 +189,10 @@ python scripts/laue_postprocess.py \
 | `--host` | `127.0.0.1` | Daemon host address |
 | `--port` | `60517` | Daemon TCP port |
 | `--log-level` | `INFO` | Logging verbosity |
+| `--watch` | off | Keep watching the folder for new files (real-time mode) |
+| `--watch-poll` | `2` | Seconds between folder rescans in watch mode |
+| `--watch-idle` | `0` | Exit after N seconds with no new files (0 = never) |
+| `--settle` | `3` | Only pick up files whose mtime is ≥ N seconds old (guards half-written files) |
 
 #### Wire Protocol
 

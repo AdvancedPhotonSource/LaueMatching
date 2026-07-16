@@ -21,6 +21,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -700,7 +701,7 @@ FitOrientation(float *image, double euler[3], int *hkls, int nhkls, int nrPxX,
                double pxX, double pxY, double Elo, double Ehi, double tol,
                double latc[6], double eulerFit[3], double latCUpd[6],
                double *minVal, int doCrystalFit, int *validHKLIdx,
-               int nValidHKL) {
+               int nValidHKL, int forceNelderMead, double initStepRad) {
   int i, j;
   unsigned n;
   if (doCrystalFit == 0) {
@@ -767,10 +768,18 @@ FitOrientation(float *image, double euler[3], int *hkls, int nhkls, int nrPxX,
   f_data.Ehi = Ehi;
   void *trp = (void *)&f_data;
   nlopt_opt opt;
-  opt = nlopt_create(useBobyqa ? NLOPT_LN_BOBYQA : NLOPT_LN_NELDERMEAD, n);
+  // BOBYQA builds a smooth quadratic model, which fails on the piecewise-
+  // constant (integer-pixel) overlap objective when the seed is far from the
+  // peak.  The coarse stage forces Nelder-Mead, which tolerates the
+  // non-smooth objective and climbs the blurred gradient.
+  opt = nlopt_create((useBobyqa && !forceNelderMead) ? NLOPT_LN_BOBYQA
+                                                     : NLOPT_LN_NELDERMEAD,
+                     n);
   nlopt_set_lower_bounds(opt, xl);
   nlopt_set_upper_bounds(opt, xu);
   nlopt_set_min_objective(opt, problem_function, trp);
+  if (initStepRad > 0.0)
+    nlopt_set_initial_step1(opt, initStepRad);
   nlopt_set_ftol_rel(opt, 1e-6);
   nlopt_set_xtol_rel(opt, 1e-6);
   nlopt_set_maxeval(opt, 200);
@@ -1004,14 +1013,103 @@ static inline int mergeDuplicateOrientations(double *orients, size_t *rowNrs,
 // writeCalcOverlap, fprintf results.
 // imageNum > 0: prepend image number column (streaming mode)
 // imageNum <= 0: no image column (batch mode)
+// Geometry-scaled coarse-fit blur width (px).  Chosen so ~3 sigma covers the
+// spot displacement of a worst-case orientation-grid seed error (~1.3x the
+// grid spacing): displacement_px = 1.3 * gridDeg * (Lsd/pxSize).  Clamped to
+// the empirically safe window [4,12] px -- below ~4 the blur cannot bridge the
+// gap; above ~12 it over-smooths and merges neighbouring spots.  Callers may
+// override with an explicit CoarseFitSigma.
+static inline double autoCoarseSigma(double Lsd, double pxSize,
+                                     double gridDeg) {
+  if (gridDeg <= 0.0)
+    gridDeg = 0.4; // default 100M-orientation DB spacing
+  double sigma = 1.3 * gridDeg * deg2rad * (Lsd / pxSize) / 3.0;
+  if (sigma < 4.0)
+    sigma = 4.0;
+  if (sigma > 12.0)
+    sigma = 12.0;
+  return sigma;
+}
+
+// Separable Gaussian blur of a float image (row-major, width nx).  Used to
+// widen the match "capture radius" for the coarse stage of orientation
+// refinement so a coarse-grid seed (up to ~one grid spacing off, i.e. tens of
+// pixels of spot displacement) still has a smooth gradient path to the true
+// peak.  Without this, a seed whose spots land outside the sharp-image spot
+// blobs sits on a flat objective and the local optimizer cannot converge.
+static inline void gaussianBlurImage(const float *in, float *out, int nx,
+                                     int ny, double sigma) {
+  int rad = (int)(3.0 * sigma + 0.5);
+  if (rad < 1)
+    rad = 1;
+  int klen = 2 * rad + 1;
+  double *kern = (double *)malloc((size_t)klen * sizeof(double));
+  float *tmp = (float *)malloc((size_t)nx * ny * sizeof(float));
+  if (kern == NULL || tmp == NULL) {
+    fprintf(stderr, "FATAL: gaussianBlurImage allocation failed.\n");
+    exit(EXIT_FAILURE);
+  }
+  double ksum = 0.0;
+  for (int i = -rad; i <= rad; i++) {
+    double w = exp(-(double)(i * i) / (2.0 * sigma * sigma));
+    kern[i + rad] = w;
+    ksum += w;
+  }
+  for (int i = 0; i < klen; i++)
+    kern[i] /= ksum;
+  // Horizontal pass (clamped edges).
+  for (int y = 0; y < ny; y++) {
+    for (int x = 0; x < nx; x++) {
+      double acc = 0.0;
+      for (int k = -rad; k <= rad; k++) {
+        int xx = x + k;
+        if (xx < 0)
+          xx = 0;
+        else if (xx >= nx)
+          xx = nx - 1;
+        acc += kern[k + rad] * in[(size_t)y * nx + xx];
+      }
+      tmp[(size_t)y * nx + x] = (float)acc;
+    }
+  }
+  // Vertical pass (clamped edges).
+  for (int y = 0; y < ny; y++) {
+    for (int x = 0; x < nx; x++) {
+      double acc = 0.0;
+      for (int k = -rad; k <= rad; k++) {
+        int yy = y + k;
+        if (yy < 0)
+          yy = 0;
+        else if (yy >= ny)
+          yy = ny - 1;
+        acc += kern[k + rad] * tmp[(size_t)yy * nx + x];
+      }
+      out[(size_t)y * nx + x] = (float)acc;
+    }
+  }
+  free(tmp);
+  free(kern);
+}
+
 static inline void fitAndWriteOrientations(
     float *image, double *FinOrientArr, int *dArr, int *bsArr,
     double *bsScoreArr, int totalSols, int *hkls, int nhkls, int nrPxX,
     int nrPxY, double recip[3][3], double rotTranspose[3][3], double pArr[3],
     double pxX, double pxY, double Elo, double Ehi, double tol,
     double *LatticeParameter, int maxNrSpots, int minNrSpots, int numProcs,
-    FILE *outF, FILE *ExtraInfo, int imageNum) {
+    FILE *outF, FILE *ExtraInfo, int imageNum, double coarseFitSigma) {
   int iterNr;
+  // Blur the match image once (shared, read-only across threads) to give the
+  // coarse fit stage a wide capture radius.
+  float *imageCoarse = (float *)malloc((size_t)nrPxX * nrPxY * sizeof(float));
+  if (imageCoarse == NULL) {
+    fprintf(stderr, "FATAL: could not allocate coarse-fit image buffer.\n");
+    exit(EXIT_FAILURE);
+  }
+  double coarseSigma = (coarseFitSigma > 0.0)
+                           ? coarseFitSigma
+                           : autoCoarseSigma(pArr[2], pxX, 0.4);
+  gaussianBlurImage(image, imageCoarse, nrPxX, nrPxY, coarseSigma);
 #pragma omp parallel for num_threads(numProcs)
   for (iterNr = 0; iterNr < totalSols; iterNr++) {
     double orientBest[3][3], eulerBest[3], eulerFit[3], orientFit[3][3];
@@ -1032,11 +1130,30 @@ static inline void fitAndWriteOrientations(
     int nValid =
         prefilterHKLs(hkls, nhkls, eulerBest, recip, nrPxX, nrPxY, rotTranspose,
                       pArr, pxX, pxY, Elo, Ehi, validIdx, nhkls);
-    // Single-pass fit: orientation + crystal
-    FitOrientation(image, eulerBest, hkls, nhkls, nrPxX, nrPxY, recip,
+    // Coarse-to-fine fit.  Stage 1: orientation-only against the blurred
+    // image (wide capture radius) to bridge a coarse-grid seed error that
+    // would otherwise leave the true peak outside the sharp-image spot basin.
+    double eulerCoarse[3], latCdummy[6], mvCoarse = 0;
+    FitOrientation(imageCoarse, eulerBest, hkls, nhkls, nrPxX, nrPxY, recip,
+                   outArrThisFit, maxNrSpots, rotTranspose, pArr, pxX, pxY, Elo,
+                   Ehi, tol, LatticeParameter, eulerCoarse, latCdummy, &mvCoarse,
+                   0 /*doCrystalFit*/, NULL /*all HKLs*/, 0,
+                   1 /*forceNelderMead*/, 0.2 * deg2rad /*initStep*/);
+    // Re-prefilter HKLs at the coarse solution (spots can move on/off the
+    // detector after a ~grid-spacing correction), then fine-fit on the sharp
+    // image for full precision (orientation + crystal).
+    free(validIdx);
+    validIdx = (int *)malloc(nhkls * sizeof(int));
+    nValid = prefilterHKLs(hkls, nhkls, eulerCoarse, recip, nrPxX, nrPxY,
+                           rotTranspose, pArr, pxX, pxY, Elo, Ehi, validIdx,
+                           nhkls);
+    memset(outArrThisFit, 0, 3 * maxNrSpots * sizeof(double));
+    // Stage 2: full-precision fit on the sharp image, seeded from the coarse
+    // solution.
+    FitOrientation(image, eulerCoarse, hkls, nhkls, nrPxX, nrPxY, recip,
                    outArrThisFit, maxNrSpots, rotTranspose, pArr, pxX, pxY, Elo,
                    Ehi, tol, LatticeParameter, eulerFit, latCFit, &mv,
-                   doCrystalFit, validIdx, nValid);
+                   doCrystalFit, validIdx, nValid, 0 /*BOBYQA*/, 0.0);
     free(validIdx);
     Euler2OrientMat(eulerFit, orientFit);
     OrientMat2Quat33(orientBest, q1);
@@ -1077,6 +1194,7 @@ static inline void fitAndWriteOrientations(
     }
     free(outArrThisFit);
   }
+  free(imageCoarse);
 }
 
 #endif /* LAUE_MATCHING_HEADERS_H */

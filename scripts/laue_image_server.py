@@ -94,10 +94,21 @@ def serve_images(
     save_interval: int = 50,
     host: str = "127.0.0.1",
     port: int = lsu.LAUE_STREAM_PORT,
+    watch: bool = False,
+    watch_poll: float = 2.0,
+    watch_idle: float = 0.0,
+    settle: float = 3.0,
 ) -> dict:
     """
     Iterate over all H5 files in *folder*, preprocess each frame, and send
     it to the GPU daemon listening on *host:port*.
+
+    With *watch* the server keeps polling *folder* every *watch_poll* seconds
+    for newly arrived files and streams them as they appear (real-time mode).
+    A file is only picked up once its mtime is at least *settle* seconds old
+    (guards against half-written files). The watch loop ends when a file named
+    ``STOP_LAUE`` appears in *folder*, or after *watch_idle* seconds with no
+    new files (0 = wait forever).
 
     Returns the final frame-mapping dict.
     """
@@ -130,22 +141,42 @@ def serve_images(
         logger.warning(f"Could not write image-server provenance: {prov_exc}")
 
     # --- 2. Discover H5 files ---
-    h5_files = sorted(glob.glob(os.path.join(folder, "*.h5")))
-    if not h5_files:
-        # Also try .hdf5
-        h5_files = sorted(glob.glob(os.path.join(folder, "*.hdf5")))
-    if not h5_files:
-        logger.error(f"No H5 files found in {folder}")
-        return {}
+    def _glob_h5():
+        files = sorted(glob.glob(os.path.join(folder, "*.h5")))
+        if not files:
+            files = sorted(glob.glob(os.path.join(folder, "*.hdf5")))
+        return files
 
-    # Count total frames for progress
+    def _settled(path):
+        try:
+            return (time.time() - os.path.getmtime(path)) >= settle
+        except OSError:
+            return False
+
+    h5_files = _glob_h5()
+    if not h5_files:
+        if not watch:
+            logger.error(f"No H5 files found in {folder}")
+            return {}
+        logger.info(f"No H5 files in {folder} yet — watching for arrivals...")
+        stop_file = os.path.join(folder, "STOP_LAUE")
+        while not h5_files:
+            if os.path.exists(stop_file):
+                logger.info("STOP_LAUE found before any data; exiting.")
+                return {}
+            time.sleep(watch_poll)
+            h5_files = [f for f in _glob_h5() if _settled(f)]
+        logger.info(f"First file(s) arrived: {[os.path.basename(f) for f in h5_files]}")
+
+    # Count total frames for progress (initial batch only; watch mode grows)
     total_frames = 0
     file_frame_counts = []
     for h5f in h5_files:
         n = lsu.count_h5_frames(h5f, h5loc)
         file_frame_counts.append(n)
         total_frames += n
-    logger.info(f"Found {len(h5_files)} H5 file(s), {total_frames} total frame(s)")
+    logger.info(f"Found {len(h5_files)} H5 file(s), {total_frames} total frame(s)"
+                + (" [watch mode: more may arrive]" if watch else ""))
 
     # Validate image number fits in uint16 (max 65535)
     if total_frames > 65535:
@@ -260,38 +291,74 @@ def serve_images(
 
     try:
         with ProcessPoolExecutor(max_workers=PREPROCESS_WORKERS) as pool:
-            # Stage 1: Submit ALL frames to the pool upfront
-            all_futures = []  # (future, image_num, h5_basename, frame_idx)
-            img_num = 1
-            for file_idx, (h5_path, n_frames) in enumerate(
-                zip(h5_files, file_frame_counts)
-            ):
-                h5_basename = os.path.basename(h5_path)
-                logger.info(
-                    f"[{file_idx+1}/{len(h5_files)}] Queuing {h5_basename} "
-                    f"({n_frames} frame{'s' if n_frames > 1 else ''})"
-                )
-                for frame_idx in range(n_frames):
-                    if img_num > 65535:
-                        break
-                    fut = pool.submit(
-                        _preprocess_one,
-                        h5_path, h5loc, frame_idx,
-                        nr_px_y, nr_px_x, cfg, background,
-                    )
-                    all_futures.append((fut, img_num, h5_basename, frame_idx))
-                    img_num += 1
-                if img_num > 65535:
-                    break
+            # Stage 1: Producer — submit frames to the pool as files are known.
+            # Single-pass mode: submit the initial batch and finish.
+            # Watch mode: keep rescanning the folder for new (settled) files.
+            futures_q: queue.Queue = queue.Queue(maxsize=512)
+            totals = {"frames": total_frames}
+            stop_file = os.path.join(folder, "STOP_LAUE")
 
-            logger.info(f"Submitted {len(all_futures)} frames for preprocessing")
+            def _producer_thread():
+                img_num = 1
+                seen = set()
+                batch = list(zip(h5_files, file_frame_counts))
+                last_new = time.time()
+                while True:
+                    for h5_path, n_frames in batch:
+                        seen.add(h5_path)
+                        h5_basename = os.path.basename(h5_path)
+                        logger.info(
+                            f"Queuing {h5_basename} "
+                            f"({n_frames} frame{'s' if n_frames > 1 else ''})"
+                        )
+                        for frame_idx in range(n_frames):
+                            if img_num > 65535:
+                                break
+                            fut = pool.submit(
+                                _preprocess_one,
+                                h5_path, h5loc, frame_idx,
+                                nr_px_y, nr_px_x, cfg, background,
+                            )
+                            futures_q.put((fut, img_num, h5_basename, frame_idx))
+                            img_num += 1
+                        if img_num > 65535:
+                            break
+                    if batch:
+                        totals["frames"] = img_num - 1 if watch else totals["frames"]
+                    if img_num > 65535:
+                        logger.warning("uint16 image_num exhausted (65535); stopping intake.")
+                        break
+                    if not watch:
+                        break
+                    # --- watch rescan ---
+                    if os.path.exists(stop_file):
+                        logger.info("STOP_LAUE found — finishing after queued frames.")
+                        break
+                    fresh = [f for f in _glob_h5() if f not in seen and _settled(f)]
+                    if fresh:
+                        batch = [(f, lsu.count_h5_frames(f, h5loc)) for f in fresh]
+                        last_new = time.time()
+                        continue
+                    if watch_idle > 0 and (time.time() - last_new) > watch_idle:
+                        logger.info(f"No new files for {watch_idle:.0f}s — finishing.")
+                        break
+                    batch = []
+                    time.sleep(watch_poll)
+                futures_q.put(None)  # sentinel: no more frames
+
+            producer = threading.Thread(target=_producer_thread, daemon=True)
+            producer.start()
 
             # Stage 2: Consumer thread — drains futures in order → send queue
             def _consumer_thread():
                 nonlocal skip_count
-                for fut, img_num, h5bn, fr_idx in all_futures:
-                    if send_error:
+                while True:
+                    item = futures_q.get()
+                    if item is None:
                         break
+                    fut, img_num, h5bn, fr_idx = item
+                    if send_error:
+                        continue  # keep draining queue after error
                     try:
                         result = fut.result()
                     except Exception as e:
@@ -323,11 +390,18 @@ def serve_images(
                     if processed > 0 and (processed % 10 == 0 or processed == 1):
                         elapsed = time.time() - t_start
                         rate = processed / elapsed if elapsed > 0 else 0
-                        remaining = (total_frames - processed) / rate if rate > 0 else 0
-                        logger.info(
-                            f"  Progress: {processed}/{total_frames} "
-                            f"({rate:.1f} img/s, ETA {remaining:.0f}s)"
-                        )
+                        tot = totals["frames"]
+                        if watch:
+                            logger.info(
+                                f"  Progress: {processed}/{tot}+ (watching) "
+                                f"({rate:.1f} img/s)"
+                            )
+                        else:
+                            remaining = (tot - processed) / rate if rate > 0 else 0
+                            logger.info(
+                                f"  Progress: {processed}/{tot} "
+                                f"({rate:.1f} img/s, ETA {remaining:.0f}s)"
+                            )
                     if processed > 0 and processed % save_interval == 0:
                         lsu.save_frame_mapping(frame_mapping, mapping_file)
 
@@ -337,6 +411,7 @@ def serve_images(
             consumer = threading.Thread(target=_consumer_thread, daemon=True)
             consumer.start()
             consumer.join()  # wait for all futures to be consumed
+            producer.join(timeout=10)
 
     except KeyboardInterrupt:
         logger.warning("Interrupted by user.")
@@ -423,6 +498,23 @@ def main() -> None:
         "--labels-file", default="labels.h5",
         help="Output HDF5 file for image segmentation labels (default: labels.h5)"
     )
+    parser.add_argument(
+        "--watch", action="store_true",
+        help="Keep watching the folder for new files (real-time mode). "
+             "Stop with a STOP_LAUE file in the folder or --watch-idle."
+    )
+    parser.add_argument(
+        "--watch-poll", type=float, default=2.0,
+        help="Seconds between folder rescans in watch mode (default: 2)"
+    )
+    parser.add_argument(
+        "--watch-idle", type=float, default=0.0,
+        help="Exit after N seconds with no new files (default: 0 = never)"
+    )
+    parser.add_argument(
+        "--settle", type=float, default=3.0,
+        help="Only pick up files whose mtime is at least N seconds old (default: 3)"
+    )
     args = parser.parse_args()
 
     _setup_logging(args.log_level)
@@ -443,6 +535,10 @@ def main() -> None:
         save_interval=args.save_interval,
         host=args.host,
         port=args.port,
+        watch=args.watch,
+        watch_poll=args.watch_poll,
+        watch_idle=args.watch_idle,
+        settle=args.settle,
     )
 
 
