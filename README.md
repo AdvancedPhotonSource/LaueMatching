@@ -146,26 +146,48 @@ LaueMatching/
 │   ├── LaueMatchingGPU.cu            # GPU single-image (CUDA)
 │   ├── LaueMatchingGPUStream.cu      # GPU streaming daemon (CUDA + TCP)
 │   └── LaueMatchingHeaders.h         # Shared definitions and utilities
-├── scripts/                          # Python scripts (see scripts/README.md)
-│   ├── RunImage.py                   # Single-image indexing pipeline
+├── laue_index/                       # Typed pipeline-stage package (the Python core)
+│   ├── records.py                    #   Solution record + parse_solutions (typed; no column magic)
+│   ├── geometry.py                   #   pure CSL / disorientation helpers
+│   ├── filtering.py                  #   OrientationFilter strategies (single source of truth)
+│   ├── thresholds.py                 #   ThresholdStrategy classes
+│   ├── preprocess.py                 #   background → threshold → components → blur (+ Preprocessor)
+│   ├── indexer.py                    #   thin C-binary wrapper (run_indexer)
+│   ├── postprocess.py                #   PostProcessor (unique-spots → filter → spot-filter)
+│   ├── output.py                     #   HDF5 result writer
+│   ├── config_schema.py              #   one declarative table → config parse + write
+│   └── cli.py                        #   `laue-index` CLI (parse / filter)
+├── scripts/                          # Orchestration + utilities (see scripts/README.md)
+│   ├── RunImage.py                   # Single-image indexing pipeline (orchestrator)
 │   ├── laue_orchestrator.py          # Streaming pipeline entry point
 │   ├── laue_image_server.py          # H5 → preprocess → TCP sender
-│   ├── laue_postprocess.py           # Results filtering + per-image HDF5
-│   ├── laue_config.py                # Configuration dataclasses & manager
-│   ├── laue_stream_utils.py          # Shared I/O, preprocessing, TCP utilities
+│   ├── laue_postprocess.py           # Streaming results filtering + per-image HDF5
+│   ├── laue_simulation.py            # Diffraction-simulation step (GenerateSimulation.py wrapper)
+│   ├── laue_config.py                # Configuration dataclasses & manager (schema-driven)
+│   ├── laue_stream_utils.py          # Back-compat re-export shim over laue_index
 │   ├── laue_visualization.py         # 8 standalone visualization functions
 │   ├── GenerateHKLs.py               # Generate valid HKL list
 │   ├── GenerateSimulation.py         # Create synthetic Laue patterns
 │   └── ImageCleanup.py               # Pre-process raw detector images
+├── tests/                            # pytest suite + golden characterization anchors
 ├── bin/                              # Compiled binaries (created by build)
 ├── logos/                            # Project logo
 ├── LIBS/NLOPT/                       # NLopt dependency (auto-downloaded)
 ├── simulation/                       # Example data and parameter files
-├── CMakeLists.txt                    # CMake build system
+├── CMakeLists.txt                    # CMake build system (C/CUDA)
 ├── build.sh                          # Convenience build script
+├── pyproject.toml                    # Python package (laue-index) + pytest config
 ├── requirements.txt                  # Python dependencies
 └── 100MilOrients.bin                 # Pre-computed orientations (~6.7 GB)
 ```
+
+The Python side is a small package of **typed pipeline stages** (`laue_index`)
+with **strategy objects** for the two things that vary (thresholding,
+orientation filtering) and one declarative config schema.  `scripts/` holds the
+orchestrators (`RunImage.py`, the streaming pipeline) and utilities;
+`laue_stream_utils.py` is a thin re-export shim so existing imports keep working.
+See [scripts/README.md](scripts/README.md) and
+[laue_index/README.md](laue_index/README.md).
 
 ---
 
@@ -197,6 +219,15 @@ cd LaueMatching
 
 ```bash
 pip install -r requirements.txt
+```
+
+Or install the Python package itself (exposes the `laue-index` CLI and lets you
+`import laue_index`):
+
+```bash
+pip install -e .                 # core (numpy)
+pip install -e '.[pipeline]'     # + opencv / scipy / h5py for the full pipeline
+pip install -e '.[dev]'          # + pytest
 ```
 
 ### GPU Build (Requires CUDA)
@@ -353,6 +384,34 @@ See `simulation/params_sim.txt` for a complete example.
 
 ---
 
+## Testing
+
+The Python side has a `pytest` suite under `tests/` built on **golden
+characterization anchors** — small fixtures pin the current behaviour of each
+pipeline stage (parsing, thresholding, filtering, geometry, config round-trip,
+preprocessing) so refactors are provably behaviour-preserving.
+
+```bash
+pip install -e '.[dev]'
+pytest                      # unit suite (no orientation DB or C binary needed)
+```
+
+The full end-to-end test (`tests/test_char_e2e.py`) runs the real
+`RunImage → indexer → filter` pipeline and is **opt-in** — it needs the
+orientation DB, the built C binary, and a prebuilt forward cache:
+
+```bash
+LAUE_E2E=1 pytest tests/test_char_e2e.py
+```
+
+Without `LAUE_E2E=1` it skips, so CI stays green with `SKIP_DOWNLOAD=1` (the
+6.7 GB database is not required for the unit suite). A mocked-indexer test
+(`tests/test_runimage_orchestration.py`) covers RunImage's orchestration without
+the binary or DB. To regenerate a golden after an *intentional* behaviour change:
+`UPDATE_GOLDEN=1 pytest`.
+
+---
+
 ## Citation
 
 If you use LaueMatching in your research, please cite:
@@ -393,6 +452,27 @@ H. Sharma, D. Sheyfer, R. Harder and J.Z. Tischler (2026). *J. Appl. Cryst.* **5
   next to the existing `100MilOrients.bin`. Hooked into `build.sh`.
 - **`GenerateHKLs.py` -Ehi flag**: the max-energy cutoff is no longer
   silently hardcoded to 30 keV.
+- **`laue_index` package**: the Python orchestration is restructured into typed
+  pipeline stages (records / geometry / filtering / thresholds / preprocess /
+  indexer / postprocess / output / config_schema / cli).  Positional column
+  "magic numbers" are replaced by a typed `Solution` record; the orientation
+  filter (incl. the twin/CSL-aware variant) lives in one place; thresholding is
+  pluggable; one declarative schema drives config parse **and** write.
+  `scripts/laue_stream_utils.py` is now a thin re-export shim and `RunImage.py`
+  is a thin orchestrator over the stages.  pip-installable (`pip install -e .`,
+  `laue-index` CLI).  Behaviour-preserving, guarded by a golden-anchored
+  characterization test suite under `tests/`.
+- **C / CUDA hardening**: `size_t` indexing (large-DB overflow safety), full
+  malloc/`mmap`/`fread` checks, single end-of-run `fsync` (was per-write
+  `O_SYNC`), `snprintf` bounds, kernel pixel-bounds + spot-count clamps, and a
+  cap on the O(N²) duplicate-merge.  The GPU now scores on full-precision
+  intensity (uint8 quantization dropped) for parity with the CPU.  Streaming
+  daemon: clean-shutdown thread join, `recv` timeout, `sigaction`.  Built and
+  functionally validated on H200 (GPU and streaming-daemon runs reproduce the
+  CPU result).
+- **Robustness fixes**: twin/CSL-aware orientation filter (keeps real Σ3 twins),
+  adaptive noise-floor threshold (recovers faint frames), and a fixed
+  stream/RunImage column-format heuristic.
 
 ### v2.1 (2026-03-03)
 

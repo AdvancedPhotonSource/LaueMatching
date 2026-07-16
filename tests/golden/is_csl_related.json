@@ -1,0 +1,18 @@
+{
+  "generic_210_25": {
+    "sigma3": false,
+    "sigma3_9_11": false
+  },
+  "sigma3_111_60": {
+    "sigma3": true,
+    "sigma3_9_11": true
+  },
+  "sigma9_110_3894": {
+    "sigma3": false,
+    "sigma3_9_11": true
+  },
+  "small_100_1p5": {
+    "sigma3": false,
+    "sigma3_9_11": false
+  }
+}
