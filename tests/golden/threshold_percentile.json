@@ -1,0 +1,18 @@
+{
+  "bright": {
+    "nonzero": 328,
+    "thresh": 401.289838
+  },
+  "empty": {
+    "nonzero": 0,
+    "thresh": 0.0
+  },
+  "faint": {
+    "nonzero": 328,
+    "thresh": 81.145828
+  },
+  "faint_with_hot": {
+    "nonzero": 328,
+    "thresh": 151.719655
+  }
+}
