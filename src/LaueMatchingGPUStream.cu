@@ -39,7 +39,10 @@ double Symm[24][4];
 int useBobyqa = 1;
 
 // ── Constants ───────────────────────────────────────────────────────────
-#define PORT 60517
+// Default TCP port; override with env LAUE_STREAM_PORT (lets two daemons —
+// e.g. Ti alpha + beta phases — run on one host on different GPUs).
+#define DEFAULT_PORT 60517
+static int PORT = DEFAULT_PORT;
 #define MAX_CONNECTIONS 10
 #define MAX_QUEUE_SIZE 32
 #define MAX_STREAMS 4
@@ -429,7 +432,8 @@ static void finalize_stream(StreamContext *fc, double *orients, int *hkls,
                           totalSols, hkls, nhkls, nrPxX, nrPxY, recip,
                           rotTranspose, pArr, pxX, pxY, Elo, Ehi, tol,
                           LatticeParameter, maxNrSpots, minGoodSpots, numProcs,
-                          outF, ExtraInfo, (int)img_num);
+                          outF, ExtraInfo, (int)img_num,
+                          0.0 /* auto geometry-scaled coarse-fit sigma */);
   double wt_flush_start = omp_get_wtime();
   fflush(outF);
   fflush(ExtraInfo);
@@ -460,6 +464,18 @@ int main(int argc, char *argv[]) {
   if (argc != 5) {
     usage(argv[0]);
     return 0;
+  }
+
+  // Optional port override (run multiple daemons on one host)
+  const char *portEnv = getenv("LAUE_STREAM_PORT");
+  if (portEnv) {
+    int p = atoi(portEnv);
+    if (p > 0 && p < 65536) {
+      PORT = p;
+    } else {
+      printf("Invalid LAUE_STREAM_PORT '%s', using default %d\n", portEnv,
+             DEFAULT_PORT);
+    }
   }
 
   signal(SIGINT, sigint_handler);
@@ -748,7 +764,10 @@ int main(int argc, char *argv[]) {
     double ki[3] = {0, 0, 1.0};
     bool *pxImgAll =
         (bool *)calloc((size_t)nrPxX * nrPxY * numProcs, sizeof(bool));
-    int fwdFd = open(outfn, O_CREAT | O_WRONLY | O_SYNC, S_IRUSR | S_IWUSR);
+    // No O_SYNC: on network filesystems synchronous writes serialize the
+    // 12 GB forward table against every pwrite and effectively stall. Write
+    // buffered and fsync once at the end (matches LaueMatchingCPU).
+    int fwdFd = open(outfn, O_CREAT | O_WRONLY, S_IRUSR | S_IWUSR);
     if (fwdFd < 0) {
       printf("Could not open forward output file %s.\n", outfn);
       return 1;
@@ -839,6 +858,9 @@ int main(int argc, char *argv[]) {
       free(outArrThis);
       free(qhatarr);
     }
+    if (fsync(fwdFd) < 0)
+      fprintf(stderr, "WARNING: fsync(forward file) failed: %s\n",
+              strerror(errno));
     close(fwdFd);
     free(pxImgAll);
     free(matchedArrFwd);

@@ -167,6 +167,9 @@ def run_pipeline(
     min_unique: int = 2,
     write_indexfile: bool = True,
     indexfile_dir: str = "",
+    watch: bool = False,
+    watch_poll: float = 2.0,
+    watch_idle: float = 0.0,
 ) -> None:
     """
     Run the full LaueMatching streaming pipeline.
@@ -292,11 +295,14 @@ def run_pipeline(
     logger.info(f"Starting daemon: {' '.join(daemon_cmd)}")
 
     daemon_logf = open(daemon_log, "w")
+    daemon_env = os.environ.copy()
+    daemon_env["LAUE_STREAM_PORT"] = str(port)  # daemon reads this (default 60517)
     daemon_proc = subprocess.Popen(
         daemon_cmd,
         stdout=daemon_logf,
         stderr=subprocess.STDOUT,
         cwd=output_dir,
+        env=daemon_env,
     )
     logger.info(f"Daemon started (pid {daemon_proc.pid}), log → {daemon_log}")
 
@@ -326,6 +332,10 @@ def run_pipeline(
         "--port", str(port),
         "--log-level", "INFO",
     ]
+    if watch:
+        server_cmd += ["--watch", "--watch-poll", str(watch_poll)]
+        if watch_idle > 0:
+            server_cmd += ["--watch-idle", str(watch_idle)]
     logger.info(f"Starting image server...")
 
     server_logf = open(server_log, "w")
@@ -592,6 +602,19 @@ def main() -> None:
         "--indexfile-out", default="",
         help="Directory for .indexing.txt files (default: alongside HDF5 outputs)"
     )
+    parser.add_argument(
+        "--watch", action="store_true",
+        help="Real-time mode: image server keeps watching the folder for new "
+             "files. Stop with a STOP_LAUE file in the folder or --watch-idle."
+    )
+    parser.add_argument(
+        "--watch-poll", type=float, default=2.0,
+        help="Seconds between folder rescans in watch mode (default: 2)"
+    )
+    parser.add_argument(
+        "--watch-idle", type=float, default=0.0,
+        help="Watch mode exits after N seconds with no new files (default: 0 = never)"
+    )
     args = parser.parse_args()
 
     _setup_logging(args.log_level)
@@ -618,6 +641,9 @@ def main() -> None:
         min_unique=args.min_unique,
         write_indexfile=not args.no_indexfile,
         indexfile_dir=args.indexfile_out,
+        watch=args.watch,
+        watch_poll=args.watch_poll,
+        watch_idle=args.watch_idle,
     )
 
 

@@ -66,6 +66,8 @@ int main(int argc, char *argv[]) {
   for (iter = 0; iter < 6; iter++)
     tol_LatC[iter] = 0;
   double minIntensity = 1000.0, maxAngle = 2.0;
+  double orientSpacing = 0.4;       // orientation-DB grid spacing (deg)
+  double coarseFitSigmaParam = 0.0; // >0 overrides geometry-scaled coarse blur
   double LatticeParameter[6];
   puts("Reading parameter file");
   fflush(stdout);
@@ -96,6 +98,18 @@ int main(int argc, char *argv[]) {
     LowNr = strncmp(aline, str, strlen(str));
     if (LowNr == 0) {
       sscanf(aline, "%s %lf", dummy, &tol_c_over_a);
+      continue;
+    }
+    str = "OrientationSpacing";
+    LowNr = strncmp(aline, str, strlen(str));
+    if (LowNr == 0) {
+      sscanf(aline, "%s %lf", dummy, &orientSpacing);
+      continue;
+    }
+    str = "CoarseFitSigma";
+    LowNr = strncmp(aline, str, strlen(str));
+    if (LowNr == 0) {
+      sscanf(aline, "%s %lf", dummy, &coarseFitSigmaParam);
       continue;
     }
     str = "PxX";
@@ -338,23 +352,6 @@ int main(int argc, char *argv[]) {
 
   // Create uint8 quantized image for cache-friendly matching
   size_t nPixels = (size_t)nrPxX * nrPxY;
-  double maxImgVal = 0;
-  for (pxNr = 0; pxNr < (int)nPixels; pxNr++)
-    if (image[pxNr] > maxImgVal)
-      maxImgVal = image[pxNr];
-  double imScale = (maxImgVal > 0) ? maxImgVal / 255.0 : 1.0;
-  uint8_t *image_u8 = (uint8_t *)malloc(nPixels);
-  double imInvScale = (maxImgVal > 0) ? 255.0 / maxImgVal : 0.0;
-  for (pxNr = 0; pxNr < (int)nPixels; pxNr++) {
-    if (image[pxNr] > 0) {
-      double v = image[pxNr] * imInvScale;
-      image_u8[pxNr] = (v >= 255.0) ? 255 : (v < 1.0) ? 1 : (uint8_t)v;
-    } else {
-      image_u8[pxNr] = 0;
-    }
-  }
-  printf("Quantized image: %.1f MB (double) -> %.1f MB (uint8)\n",
-         nPixels * sizeof(double) / 1e6, nPixels / 1e6);
 
   // Create float image for CPU fitting (halves cache pressure vs double)
   float *imageF = (float *)malloc(nPixels * sizeof(float));
@@ -389,18 +386,41 @@ int main(int argc, char *argv[]) {
 
   // Check if forward file already exists
   if (doFwd == 0) {
-    printf("Trying to see if the forward simulation exists. Looking for %s "
-           "file.\n",
-           outfn);
-    int result = open(outfn, O_RDONLY, S_IRUSR | S_IWUSR);
-    if (result < 0) { // FIX: was <1, but open returns -1 on error
-      printf("Could not read the forward simulation file. Running in "
-             "simulation mode!\n");
+    size_t expectedSz =
+        (size_t)nrOrients * (1 + 2 * maxNrSpots) * sizeof(uint16_t);
+    if (outfn[0] == '\0') {
+      // No ForwardFile specified: don't blindly open a blank/default path
+      // (which could pick up a stale, incompatible cache).
+      printf("No ForwardFile specified. Running in simulation mode!\n");
       doFwd = 1;
     } else {
-      printf("%s file was found. Will not do forward simulation.\n",
-             outfn); // FIX: missing outfn arg
-      close(result);
+      printf("Trying to see if the forward simulation exists. Looking for %s "
+             "file.\n",
+             outfn);
+      int result = open(outfn, O_RDONLY, S_IRUSR | S_IWUSR);
+      if (result < 0) { // FIX: was <1, but open returns -1 on error
+        printf("Could not read the forward simulation file. Running in "
+               "simulation mode!\n");
+        doFwd = 1;
+      } else {
+        // Validate the cache size against the current (nrOrients, maxNrSpots)
+        // so a stale cache from a different run is regenerated instead of
+        // silently misread (which gave wrong solution counts).
+        struct stat cst;
+        if (fstat(result, &cst) == 0 && (size_t)cst.st_size != expectedSz) {
+          printf("Forward cache %s size %lld B != expected %zu B for %zu "
+                 "orientations x (1+2*%d); ignoring stale cache, running in "
+                 "simulation mode.\n",
+                 outfn, (long long)cst.st_size, expectedSz, (size_t)nrOrients,
+                 maxNrSpots);
+          close(result);
+          doFwd = 1;
+        } else {
+          printf("%s file was found. Will not do forward simulation.\n",
+                 outfn); // FIX: missing outfn arg
+          close(result);
+        }
+      }
     }
   } else {
     printf("Forward simulation was requested, will be saved to %s.\n", outfn);
@@ -630,9 +650,14 @@ int main(int argc, char *argv[]) {
             ipx = outArrBatch[loc];
             loc++;
             ipy = outArrBatch[loc];
-            uint8_t raw = image_u8[ipy * nrPxX + ipx];
-            if (raw > 0) {
-              totInt += (double)raw * imScale;
+            // Count on the true (double) image, identical to the fresh path
+            // (line ~606), so a cached run round-trips to the same nSpots and
+            // totInt.  The quantized image_u8 clamps faint pixels up to 1,
+            // inflating totInt and flipping the minIntensity test -> the cache
+            // path used to report more solutions than the fresh path.
+            double thisIntC = image[ipy * nrPxX + ipx];
+            if (thisIntC > 0) {
+              totInt += thisIntC;
               nSpots++;
             }
           }
@@ -744,10 +769,17 @@ int main(int argc, char *argv[]) {
   double time3 = omp_get_wtime() - start_time;
   printf("Finished finding unique solutions, took: %lf seconds.\n",
          time3 - time2);
+  double coarseFitSigmaValue =
+      (coarseFitSigmaParam > 0.0)
+          ? coarseFitSigmaParam
+          : autoCoarseSigma(pArr[2], pxX, orientSpacing);
+  printf("Coarse-fit blur sigma: %.2f px (orientation grid %.2f deg).\n",
+         coarseFitSigmaValue, orientSpacing);
   fitAndWriteOrientations(
       imageF, FinOrientArr, dArr, bsArr, bsScoreArr, totalSols, hkls, nhkls,
       nrPxX, nrPxY, recip, rotTranspose, pArr, pxX, pxY, Elo, Ehi, tol,
-      LatticeParameter, maxNrSpots, minNrSpots, numProcs, outF, ExtraInfo, 0);
+      LatticeParameter, maxNrSpots, minNrSpots, numProcs, outF, ExtraInfo, 0,
+      coarseFitSigmaValue);
   fclose(ExtraInfo);
   fclose(outF);
 
@@ -759,7 +791,6 @@ int main(int argc, char *argv[]) {
   free(dArr);
   free(bsArr);
   free(bsScoreArr);
-  free(image_u8);
   free(imageF);
   free(image);
   free(hkls);

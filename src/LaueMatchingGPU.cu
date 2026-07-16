@@ -815,7 +815,8 @@ int main(int argc, char *argv[]) {
   fitAndWriteOrientations(
       imageF, FinOrientArr, dArr, bsArr, bsScoreArr, totalSols, hkls, nhkls,
       nrPxX, nrPxY, recip, rotTranspose, pArr, pxX, pxY, Elo, Ehi, tol,
-      LatticeParameter, maxNrSpots, minNrSpots, numProcs, outF, ExtraInfo, 0);
+      LatticeParameter, maxNrSpots, minNrSpots, numProcs, outF, ExtraInfo, 0,
+      0.0 /* auto geometry-scaled coarse-fit sigma */);
   fclose(ExtraInfo);
   fclose(outF);
 

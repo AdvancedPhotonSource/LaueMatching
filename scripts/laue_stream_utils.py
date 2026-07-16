@@ -471,25 +471,34 @@ def filter_small_components(
     Returns (filtered_image, filtered_labels, centers).
     Centers format: [[label, (cx, cy), area], ...]
     """
+    # Vectorized: the previous per-label loop did a full-image `labels == lbl`
+    # for every small component, which is O(n_components * n_pixels) and takes
+    # ~100 s when a low threshold yields tens of thousands of noise blobs.
+    # Here we build one keep-mask via a label lookup table (O(n_pixels)) and
+    # compute all centers-of-mass in a single scipy call.
     filt_img = image.copy()
     filt_lbl = labels.copy()
     centers: List = []
+    if nlabels <= 1:
+        return filt_img, filt_lbl, centers
 
-    for lbl in range(1, nlabels):
-        idx = lbl - 1
-        if areas[idx] >= min_area:
-            x, y, w, h = bboxes[idx]
-            mask = labels[y : y + h, x : x + w] == lbl
-            region = image[y : y + h, x : x + w] * mask
-            try:
-                com = ndimg.center_of_mass(region)
-                centers.append([lbl, (com[1] + x, com[0] + y), areas[idx]])
-            except Exception:
-                filt_img[labels == lbl] = 0
-                filt_lbl[labels == lbl] = 0
-        else:
-            filt_img[labels == lbl] = 0
-            filt_lbl[labels == lbl] = 0
+    areas = np.asarray(areas)
+    keep_idx = np.where(areas >= min_area)[0]      # 0-based component index
+    keep_lbls = keep_idx + 1                        # label ids are 1-based
+
+    keep_lut = np.zeros(nlabels + 1, dtype=bool)
+    if keep_lbls.size:
+        keep_lut[keep_lbls] = True
+    drop_mask = ~keep_lut[labels]                   # True where component is small/background
+    filt_img[drop_mask] = 0
+    filt_lbl[drop_mask] = 0
+
+    if keep_lbls.size:
+        coms = ndimg.center_of_mass(image, labels, keep_lbls)
+        if len(keep_lbls) == 1:
+            coms = [coms]
+        for lbl, com, a in zip(keep_lbls, coms, areas[keep_idx]):
+            centers.append([int(lbl), (float(com[1]), float(com[0])), int(a)])
 
     return filt_img, filt_lbl, centers
 
