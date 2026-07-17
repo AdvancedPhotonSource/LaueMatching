@@ -1,0 +1,44 @@
+# =============================================================================
+# LaueMatching parameter file -- BETA phase example (a two-phase hcp/bcc alloy, BCC).
+# Identical to the alpha template except the crystal block. Copy to
+# params_beta.txt and edit the geometry to match your alpha file.
+# =============================================================================
+
+# --- crystal --------------------------------------------------------------
+SpaceGroup 229                                    # 229 = beta-Ti (BCC, Im-3m)
+Symmetry I
+LatticeParameter 0.330650 0.330650 0.330650 90.000000 90.000000 90.000000
+
+# --- geometry (SAME as your alpha file) -----------------------------------
+P_Array 0.028834 0.002715 0.513399
+R_Array -1.20334591 -1.2137853 -1.21669634
+PxX 0.000200
+PxY 0.000200
+NrPxX 2048
+NrPxY 2048
+
+# --- incident spectrum window ---------------------------------------------
+Elo 5.0
+Ehi 30.0
+
+# --- detection ------------------------------------------------------------
+ThresholdMethod percentile
+ThresholdPercentile 99.8
+MinNrSpots 8
+MinGoodSpots 4
+MinIntensity 50
+MinArea 4
+GaussSigmaMax 2.5
+WatershedImage 1
+MaxNrLaueSpots 30
+MaxAngle 3
+
+# --- orientation search + database ----------------------------------------
+OrientationSpacing 0.4
+DoFwd 0
+SimulationSmoothingWidth 2.0
+OrientationFile   /path/to/db/100MilOrients.bin   # SAME database as alpha
+ForwardFile       /path/to/db/forward_beta.bin    # beta-specific forward cache
+HKLFile           /path/to/params/valid_hkls_beta.csv
+BackgroundFile    /path/to/db/background_beta.bin
+ResultDir         /path/to/results/beta
