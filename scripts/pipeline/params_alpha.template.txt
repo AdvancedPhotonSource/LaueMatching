@@ -1,0 +1,44 @@
+# =============================================================================
+# LaueMatching parameter file -- ALPHA phase example (Ti-6Al-4V, HCP).
+# Copy to params_alpha.txt and edit the marked values for your experiment.
+# All lengths in metres, angles in degrees, energies in keV, cell edges in nm.
+# =============================================================================
+
+# --- crystal --------------------------------------------------------------
+SpaceGroup 194                                    # 194 = alpha-Ti (HCP, P6_3/mmc)
+Symmetry P
+LatticeParameter 0.292100 0.292100 0.466500 90.000000 90.000000 120.000000   # a b c alpha beta gamma
+
+# --- geometry (FROM YOUR REFINED geoN FIT -- edit) -------------------------
+P_Array 0.028834 0.002715 0.513399                # detector origin (m)
+R_Array -1.20334591 -1.2137853 -1.21669634        # detector orientation (Rodrigues)
+PxX 0.000200                                      # pixel size x (m)
+PxY 0.000200                                      # pixel size y (m)
+NrPxX 2048
+NrPxY 2048
+
+# --- incident spectrum window ---------------------------------------------
+Elo 5.0                                           # low energy cutoff (keV)
+Ehi 30.0                                          # high energy cutoff (keV)
+
+# --- detection (two-image strategy: aggressive threshold for the search) ---
+ThresholdMethod percentile
+ThresholdPercentile 99.8
+MinNrSpots 8
+MinGoodSpots 4
+MinIntensity 50
+MinArea 4
+GaussSigmaMax 2.5                                 # cap on auto detection-blur (peel widens it)
+WatershedImage 1
+MaxNrLaueSpots 30
+MaxAngle 3
+
+# --- orientation search + database (build once per material) --------------
+OrientationSpacing 0.4                            # SO(3) grid (deg); DB must match
+DoFwd 0
+SimulationSmoothingWidth 2.0
+OrientationFile   /path/to/db/100MilOrients.bin   # 100M-orientation database (GenerateOrientations)
+ForwardFile       /path/to/db/forward_alpha.bin   # forward-spot cache      (GenerateSimulation)
+HKLFile           /path/to/params/valid_hkls_alpha.csv   # allowed reflections (GenerateHKLs)
+BackgroundFile    /path/to/db/background_alpha.bin       # optional precomputed background
+ResultDir         /path/to/results/alpha
