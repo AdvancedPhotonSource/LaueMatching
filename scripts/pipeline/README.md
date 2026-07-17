@@ -21,21 +21,23 @@ cd $LAUE_WORK     # working dir (params, database, launcher)
 touch /path/to/DATA_FOLDER/STOP_LAUE                  # stop
 ```
 
-The `run_laue.sh` in that working directory is preconfigured for this beamline — it bakes in the
-three things you would otherwise set by hand:
+There is **one** launcher — `scripts/pipeline/run_laue.sh` — and the `run_laue.sh` in the working
+directory is a symlink to it. Its **CONFIG block at the top** holds the values you would otherwise
+set by hand; on this beamline they are already filled in:
 
-| | Location |
+| CONFIG value | Set to (34-ID-E) |
 |---|---|
-| **LaueMatching install** | `/home/beams/EPIX34ID/opt/LaueMatching` (this pipeline: `scripts/pipeline/`) |
-| **Python environment**   | `laue_rt` conda env → `/home/beams/EPIX34ID/conda-envs/laue_rt/bin/python` |
-| **Working dir**          | `$LAUE_WORK` (parameter files, the orientation database, results) |
+| `SCRIPTS` — LaueMatching install | `/home/beams/EPIX34ID/opt/LaueMatching/scripts` |
+| `PY` — Python environment | `/home/beams/EPIX34ID/conda-envs/laue_rt/bin/python` (the `laue_rt` conda env) |
+| `WORK` — working dir | `$LAUE_WORK` (parameter files, database, results) |
+| `ALPHA_CONFIG` / `BETA_CONFIG` | `$WORK/params/params_Ti_alpha.txt` / `..._beta.txt` |
 
-The analysis scripts in `analysis/` are run with that same Python, e.g.
+**To change `WORK`, `PY`, or the config paths, edit that CONFIG block** — that is the one place they
+live. (You can also override any of them for a single run as an environment variable, e.g.
+`WORK=/somewhere ./run_laue.sh DATA_FOLDER`.)
+
+The analysis scripts in `analysis/` are run with the same Python, e.g.
 `/home/beams/EPIX34ID/conda-envs/laue_rt/bin/python analysis/parentbeta_reconstruct.py 30`.
-
-To run **elsewhere**, use the general `scripts/pipeline/run_laue.sh` and set `PY`
-(your python-with-LaueMatching), `SCRIPTS` (the `LaueMatching/scripts` directory), and the config
-paths in its CONFIG block. The sections below describe that general setup.
 
 ---
 
