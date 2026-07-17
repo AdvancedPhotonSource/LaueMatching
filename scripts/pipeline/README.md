@@ -11,6 +11,34 @@ values in the parameter file to run on a different instrument or material.
 
 ---
 
+## Quick start — this beamline (34-ID-E)
+
+Everything is already installed and configured; the command is one line:
+
+```bash
+cd /net/hpcs34/data34c/for_Hemant/lauematching_ti     # working dir (params, database, launcher)
+./run_laue.sh  /path/to/DATA_FOLDER                   # index alpha+beta live as frames land
+touch /path/to/DATA_FOLDER/STOP_LAUE                  # stop
+```
+
+The `run_laue.sh` in that working directory is preconfigured for this beamline — it bakes in the
+three things you would otherwise set by hand:
+
+| | Location |
+|---|---|
+| **LaueMatching install** | `/home/beams/EPIX34ID/opt/LaueMatching` (this pipeline: `scripts/pipeline/`) |
+| **Python environment**   | `laue_rt` conda env → `/home/beams/EPIX34ID/conda-envs/laue_rt/bin/python` |
+| **Working dir**          | `/net/hpcs34/data34c/for_Hemant/lauematching_ti` (parameter files, the orientation database, results) |
+
+The analysis scripts in `analysis/` are run with that same Python, e.g.
+`/home/beams/EPIX34ID/conda-envs/laue_rt/bin/python analysis/parentbeta_reconstruct.py 30`.
+
+To run **elsewhere**, use the general `scripts/pipeline/run_laue.sh` and set `PY`
+(your python-with-LaueMatching), `SCRIPTS` (the `LaueMatching/scripts` directory), and the config
+paths in its CONFIG block. The sections below describe that general setup.
+
+---
+
 ## 0. Prerequisites (once)
 
 - LaueMatching installed with a CUDA GPU (the indexer runs on the GPU; the refinement stage uses CPU cores).
