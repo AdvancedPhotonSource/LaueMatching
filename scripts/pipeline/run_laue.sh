@@ -26,7 +26,10 @@ BETA_CONFIG=${BETA_CONFIG:-"$WORK/params/params_beta.txt"}  # set BETA_CONFIG=""
 ALPHA_GPU=${ALPHA_GPU:-0};  ALPHA_PORT=${ALPHA_PORT:-60517}
 BETA_GPU=${BETA_GPU:-1};    BETA_PORT=${BETA_PORT:-60518}
 NCPUS=${NCPUS:-32}                                   # CPU cores for the refinement stage
-WATCH=${WATCH:-"--watch"}                            # set WATCH="" to batch an existing folder
+# NB: "-" not ":-" — ${WATCH:-...} would substitute the default for an *empty*
+# WATCH too, so the documented WATCH="" (batch an existing folder) never took
+# effect and every run silently stayed in watch mode.
+WATCH=${WATCH-"--watch"}                             # set WATCH="" to batch an existing folder
 # -----------------------------------------------------------------------------
 
 FOLDER=${1:?usage: run_laue.sh DATA_FOLDER [H5_LOCATION]}
