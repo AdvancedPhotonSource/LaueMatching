@@ -430,19 +430,35 @@ def run_pipeline(
     logger.info(f"Image server exited (code {server_proc.returncode}). "
                 f"Waiting for daemon to write results...")
 
-    # Poll for solutions.txt (mirrors integrator_batch_process.py pattern)
-    flush_deadline = time.time() + flush_time + 60
+    # Wait for the daemon to finish WRITING, not merely to have started.
+    #
+    # solutions.txt is appended to as each frame is fitted, so "the file exists and
+    # is non-empty" means the *first* frame landed, not the last. Breaking there and
+    # SIGTERMing the daemon two seconds later silently discards everything still in
+    # its queue — and the daemon is routinely behind (it logs "receive queue was full
+    # N times (backpressure from processing)"). Observed: a 6561-frame batch run lost
+    # the last 31 frames, contiguously, with no error anywhere.
+    #
+    # Instead, wait until the file stops growing: that is the daemon actually draining.
+    quiet_needed = max(flush_time, 10.0)
+    flush_deadline = time.time() + flush_time + 3600
+    last_size, last_change = -1, time.time()
     while time.time() < flush_deadline:
-        if os.path.isfile(solutions_file) and os.path.getsize(solutions_file) > 0:
-            logger.info(f"solutions.txt detected ({os.path.getsize(solutions_file)} bytes)")
-            time.sleep(2.0)  # extra wait for file to be fully flushed
-            break
         if daemon_proc.poll() is not None:
             logger.info("Daemon exited on its own.")
             break
+        size = os.path.getsize(solutions_file) if os.path.isfile(solutions_file) else 0
+        now = time.time()
+        if size != last_size:
+            last_size, last_change = size, now
+        elif size > 0 and (now - last_change) >= quiet_needed:
+            logger.info(f"solutions.txt quiescent at {size} bytes after "
+                        f"{quiet_needed:.0f}s without growth — daemon has drained")
+            break
         time.sleep(1.0)
     else:
-        logger.warning("Timed out waiting for daemon to write solutions.txt")
+        logger.warning("Timed out waiting for the daemon to finish writing "
+                       "solutions.txt; results may be truncated")
 
     # --- 7. Terminate daemon ---
     _terminate_process(daemon_proc, "daemon")
