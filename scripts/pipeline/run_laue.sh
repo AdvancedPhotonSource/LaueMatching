@@ -43,7 +43,13 @@ launch() {   # launch PHASE CONFIG GPU PORT
   [ -z "$config" ] && return 0
   [ -f "$config" ] || { echo "ERROR: config not found: $config" >&2; exit 1; }
   local out="$WORK/results/${phase}_$TS"
-  CUDA_VISIBLE_DEVICES=$gpu setsid nohup "$PY" "$SCRIPTS/laue_orchestrator.py" \
+  # CUDA_DEVICE_ORDER=PCI_BUS_ID is required for $gpu to mean the same card that
+  # nvidia-smi calls $gpu. CUDA defaults to FASTEST_FIRST, so on a mixed-GPU host
+  # "GPU 0" can land on a completely different physical card -- observed on a shared
+  # machine where the daemon landed on another user's GPU while the intended cards
+  # sat idle.
+  CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=$gpu \
+      setsid nohup "$PY" "$SCRIPTS/laue_orchestrator.py" \
       --config "$config" --folder "$FOLDER" --h5-location "$H5LOC" \
       --ncpus "$NCPUS" --port "$port" $WATCH --output-dir "$out" \
       > "$WORK/results/${phase}_$TS.launch.log" 2>&1 < /dev/null &
