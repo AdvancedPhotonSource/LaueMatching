@@ -232,11 +232,18 @@ def serve_images(
     send_error: list = []  # shared error flag
 
     frame_mapping: dict = {}
+    # frame_mapping is written by BOTH the sender thread and the consumer thread, and
+    # serialised to JSON by the consumer every save_interval frames. Without a lock,
+    # json.dump() iterates the dict while the other thread inserts into it and raises
+    # "RuntimeError: dictionary changed size during iteration". That killed the consumer
+    # thread mid-run, after which the server reported a normal "Done: N sent, 0 skipped"
+    # having silently processed only part of the scan (observed: 15,955 of 40,401).
+    mapping_lock = threading.Lock()
     sent_count_lock = threading.Lock()
     counters = {"sent": 0, "skip": 0}
 
     def _sender_thread(sock, send_q, send_error, frame_mapping, counters,
-                        labels_h5f):
+                        labels_h5f, mapping_lock):
         """Drain the queue and send frames over TCP."""
         while True:
             item = send_q.get()
@@ -265,7 +272,8 @@ def serve_images(
                 with sent_count_lock:
                     counters["skip"] += 1
                 send_error.append(e)
-            frame_mapping[str(image_num)] = mapping_entry
+            with mapping_lock:
+                frame_mapping[str(image_num)] = mapping_entry
             send_q.task_done()
 
     # Open labels HDF5 for writing
@@ -278,7 +286,8 @@ def serve_images(
 
     sender = threading.Thread(
         target=_sender_thread,
-        args=(sock, send_q, send_error, frame_mapping, counters, labels_h5f),
+        args=(sock, send_q, send_error, frame_mapping, counters, labels_h5f,
+              mapping_lock),
         daemon=True,
     )
     sender.start()
@@ -368,10 +377,11 @@ def serve_images(
                         reason = result["error"]
                         if reason != "no_spots":
                             logger.error(f"  Frame {fr_idx} of {h5bn}: {reason}")
-                        frame_mapping[str(img_num)] = {
-                            "file": h5bn, "frame": fr_idx,
-                            "skipped": True, "reason": reason,
-                        }
+                        with mapping_lock:
+                            frame_mapping[str(img_num)] = {
+                                "file": h5bn, "frame": fr_idx,
+                                "skipped": True, "reason": reason,
+                            }
                         skip_count += 1
                     else:
                         mapping_entry = {
@@ -403,7 +413,15 @@ def serve_images(
                                 f"({rate:.1f} img/s, ETA {remaining:.0f}s)"
                             )
                     if processed > 0 and processed % save_interval == 0:
-                        lsu.save_frame_mapping(frame_mapping, mapping_file)
+                        with mapping_lock:
+                            snapshot = dict(frame_mapping)
+                        try:
+                            lsu.save_frame_mapping(snapshot, mapping_file)
+                        except Exception as e:
+                            # a periodic save is only for crash resilience; the final
+                            # save after the producer finishes is the authoritative one.
+                            # Never let it take down the consumer thread.
+                            logger.warning(f"  periodic mapping save failed: {e}")
 
                 # Signal sender thread: no more frames
                 send_q.put(None)
@@ -424,8 +442,10 @@ def serve_images(
         send_q.put(None)  # sentinel
         sender.join(timeout=60)
 
-        # Final mapping save
-        lsu.save_frame_mapping(frame_mapping, mapping_file)
+        # Final mapping save (authoritative)
+        with mapping_lock:
+            snapshot = dict(frame_mapping)
+        lsu.save_frame_mapping(snapshot, mapping_file)
         logger.info(f"Final mapping saved to {mapping_file}")
 
         # Close socket
