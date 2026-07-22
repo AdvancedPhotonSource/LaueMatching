@@ -117,3 +117,76 @@ against the whole image on the GPU, so overlap carries no penalty. Detection run
 thresholded image (only the brightest ~2% of pixels) to keep the search tractable, while all
 verification uses the full background-subtracted frame — so no signal is discarded from the evidence.
 The iterative peel then recovers fainter grains pass by pass.
+
+---
+
+## 4. Full analysis chain (one command per scan)
+
+`analysis/run_analysis_chain.sh` runs the whole validation and interpretation sequence for
+one indexed scan. Every path comes from the environment, so it runs on any host against any
+scan:
+
+```bash
+env LAUE_WORK=/path/to/work \
+    LAUE_SCAN_DATA=/path/to/raw/frames \
+    LAUE_SCAN_ALPHA=/path/to/results/alpha_<ts> \
+    LAUE_SCAN_BETA=/path/to/results/beta_<ts> \
+    LAUE_OUT_PREFIX=myscan  NW=16 \
+    bash analysis/run_analysis_chain.sh
+```
+
+Order matters — each step depends on the one before:
+
+| step | script | what it does |
+|---|---|---|
+| 1 | `parentbeta_validate.py {phase} {nw} env` | per-frame Poisson spot test, p<1e-4 |
+| 2 | `null_model.py` | **measures the random-orientation null on this scan** |
+| 3 | `empirical_gate.py` | re-scores the validated set against that measured null |
+| 4 | `beta_alpha_exclusion_census.py env {nw}` | β scored only on peaks α cannot explain |
+| 5 | `exclusion_null.py` | measured null for that exclusion test |
+| 6 | `parentbeta_reconstruct.py {minsize} {prefix}` | Burgers prior-β inference |
+| 7 | `anchor_null.py` | tests whether the retained-β anchor beats chance |
+| 8 | `variant_coherence.py` | spatial coherence of the variant map vs a shuffle null |
+| 9 | `validated_figures.py` | report plates |
+
+Supporting tools: `scan_map.py` (unvalidated catalog map), `regrain.py` (contiguity-aware
+grain counts), `tolerance_sensitivity.py`, `big_grain_diagnostic.py` /
+`big_grain_split_test.py` (is one large "grain" actually several?), `collect_scan_metrics.py`
+(cross-scan summary JSON), `catalog_figures.py`.
+
+### Three things this chain exists to enforce
+
+1. **Measure the null on the scan in hand.** The built-in `p<1e-4` gate assumes peaks are
+   scattered uniformly. Real Laue peak fields are clustered, so the true null has much
+   heavier tails and the analytic gate under-rejects. Across nine scans the measured α null
+   maximum ranged 14–17 and β 11–16 — a single inherited value misstates the others. On one
+   dataset this changed the defensible β count by two orders of magnitude.
+2. **A grain is a *contiguous* region of consistent orientation.** Clustering on orientation
+   alone merges regions that are spatially disjoint. `regrain.py` splits clusters into
+   connected components; on one scan that moved α from 325 to 614 and β from 40 to 27 — the
+   two phases moving in opposite directions, which is what tells you it is a definitional
+   fix and not a tuning knob.
+3. **Check that a "corroborating" statistic beats chance.** The retained-β anchor is
+   compelling with few β clusters and meaningless with many: with 2,537 candidates a *random*
+   orientation lands within 1.74° of one 9% of the time. `anchor_null.py` measures this.
+
+## Gotchas (each of these cost hours)
+
+- **tcsh `noclobber` silently refuses `>` on an existing file.** Remote writes over ssh must
+  go through `bash -s` (feed the script on stdin), not `ssh host "cmd > file"`. A refused
+  write looks exactly like a successful one.
+- **`ls dir/*.h5 | wc -l` returns 0 past ARG_MAX** (~40k files), and `ls -dt results/alpha_*`
+  will happily return `alpha_<ts>.launch.log` because the log's mtime is newer than the run
+  directory. Use `find`, and `-type d` when you mean a directory.
+- **`CUDA_VISIBLE_DEVICES` without `CUDA_DEVICE_ORDER=PCI_BUS_ID`** selects by CUDA's
+  FASTEST_FIRST ordering, which need not match nvidia-smi. On a mixed-GPU host this can put
+  your job on someone else's card while the intended ones idle.
+- **`pgrep -f <pattern>` matches its own command line.** Kill loops that name the target
+  script will kill the ssh session running them. Use a bracketed pattern (`worke[r]`) or a
+  script file.
+- **Output files appear in one late batch after post-processing**, which is largely
+  single-threaded — a 1.9 GB `solutions.txt` took ~45 min. "0 outputs after N frames" is not
+  a stall.
+- **Frames where the beam is off the specimen contain no diffraction and correctly produce no
+  output.** Verification tolerances must allow for this: one 40,401-frame scan had a genuine
+  1,947-frame blank band (peak counts 4–6 there against ~1,000 elsewhere).
