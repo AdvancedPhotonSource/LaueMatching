@@ -10,6 +10,7 @@ survivors with their (sampleX, sampleZ). Light greedy clustering afterwards.
 Writes peel_map/parentbeta_{alpha,beta}_validated.npz  (oms, frames, X, Z,
 nhit, labels).
 """
+import os
 import numpy as np, h5py, glob, json, sys
 from math import pi, cos, sin
 from scipy.spatial import cKDTree
@@ -17,8 +18,25 @@ from scipy import ndimage as ndi
 from scipy.stats import poisson
 from concurrent.futures import ProcessPoolExecutor
 
-WORK="/net/hpcs34/data34c/for_Hemant/lauematching_ti"
-DATA="/net/hpcs34/data34c/Run2026-2/Thompson_202607/Initial_Indexing_TestScans/ID6-100x100um_TestScan_About1parentbeta"
+WORK = os.environ.get("LAUE_WORK", "/net/hpcs34/data34c/for_Hemant/lauematching_ti")
+TESTSCANS = os.environ.get("LAUE_TESTSCANS", "/net/hpcs34/data34c/Run2026-2/Thompson_202607/Initial_Indexing_TestScans")
+# Scan registry: argv[3] selects. "parentbeta" reproduces the original hardcoded 100x100um run.
+# resdir/{phase} is where the indexer's output.h5 + frame_mapping.json live; out/{phase} names the npz.
+SCANS={
+ "parentbeta": dict(data=f"{TESTSCANS}/ID6-100x100um_TestScan_About1parentbeta",
+                    resdir=lambda ph: f"{WORK}/results/parentbeta_{ph}",
+                    out=lambda ph: f"parentbeta_{ph}"),
+ # ID6 10x10um 0.25um-step fine scan (6561 frames); raw data was renamed ID6 -> ID26
+ "env": dict(data=os.environ.get("LAUE_SCAN_DATA", ""),
+                    resdir=lambda ph: os.environ.get(f"LAUE_SCAN_{ph.upper()}", ""),
+                    out=lambda ph: f'{os.environ.get("LAUE_OUT_PREFIX", "env")}_{ph}'),
+ # NB legacy key: this is specimen ID26 and the scan is 20x20 um in the sample
+ # frame, not 10x10 -- the folder name is wrong. Kept so existing *_id6_10x10_*
+ # outputs stay resolvable; prefer the "env" entry for new work.
+ "id6_10x10":  dict(data=f"{TESTSCANS}/ID26-10x10um_0p25umStepSize_TestingIndexing",
+                    resdir=lambda ph: f"{TESTSCANS}/laue_Matching_Results/results/{ph}_20260717_161826",
+                    out=lambda ph: f"id6_10x10_{ph}"),
+}
 H5LOC="/entry1/data/data"; HC=1.2398419739; TOL=8.0; NPX=2048
 P=np.array([0.028834,0.002715,0.513399]); Rrod=np.array([-1.20334591,-1.2137853,-1.21669634])
 dx=dy=0.0002; Elo,Ehi=5.,30.
@@ -37,10 +55,15 @@ def hexB():
 
 PHASE=sys.argv[1] if len(sys.argv)>1 else "beta"
 NW=int(sys.argv[2]) if len(sys.argv)>2 else 36
+SCAN=sys.argv[3] if len(sys.argv)>3 else "parentbeta"
+if SCAN not in SCANS:
+    sys.exit(f"unknown scan {SCAN!r}; choose from {sorted(SCANS)}")
+CFG=SCANS[SCAN]; DATA=CFG["data"]; RESDIR=CFG["resdir"](PHASE); RES=CFG["out"](PHASE)
 if PHASE=="alpha":
-    B=hexB(); HKL=np.loadtxt(f"{WORK}/params/valid_hkls_Ti_alpha.csv")[:,:3]; RES="parentbeta_alpha"
+    B=hexB(); HKL=np.loadtxt(f"{WORK}/params/valid_hkls_Ti_alpha.csv")[:,:3]
 else:
-    B=np.eye(3)*2*pi/0.33065; HKL=np.loadtxt(f"{WORK}/params/valid_hkls_Ti_beta.csv")[:,:3]; RES="parentbeta_beta"
+    B=np.eye(3)*2*pi/0.33065; HKL=np.loadtxt(f"{WORK}/params/valid_hkls_Ti_beta.csv")[:,:3]
+print(f"[{PHASE}] scan={SCAN} resdir={RESDIR}",flush=True)
 
 def project(OM):
     q=(OM@B@HKL.T).T; ql=np.linalg.norm(q,axis=1); m=ql>1e-9
@@ -52,9 +75,9 @@ def project(OM):
     E=HC*ql[mk]/st[mk]/(4*pi); me=(E>Elo)&(E<Ehi)
     return np.c_[px[mk][me],py[mk][me]]
 
-mapping=json.load(open(f"{WORK}/results/{RES}/frame_mapping.json"))
+mapping=json.load(open(f"{RESDIR}/frame_mapping.json"))
 img2file={int(k):vv["file"] for k,vv in mapping.items() if isinstance(vv,dict) and "file" in vv}
-h5s=sorted(glob.glob(f"{WORK}/results/{RES}/results/image_*.output.h5"))
+h5s=sorted(glob.glob(f"{RESDIR}/results/image_*.output.h5"))
 print(f"[{PHASE}] {len(h5s)} output.h5 files",flush=True)
 
 def validate(h5):
