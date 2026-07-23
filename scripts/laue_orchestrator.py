@@ -84,6 +84,67 @@ def _find_daemon_binary() -> str:
     )
 
 
+def _wait_for_daemon_port(
+    proc: subprocess.Popen,
+    port: int,
+    timeout: float,
+    poll_interval: float = 2.0,
+    progress_every: float = 30.0,
+) -> bool:
+    """Wait for the daemon to open *port*, watching the process while we wait.
+
+    ``lsu.wait_for_port()`` is process-blind, which fails in both directions:
+
+    * A daemon that dies immediately (bad params, missing file, GPU error) still
+      holds the orchestrator for the whole timeout before it reports anything.
+    * A daemon that is merely *slow* gets killed. Startup reads a multi-GB
+      orientation database and then initialises a CUDA context; on a cold page
+      cache, a busy GPU, or a loaded machine that legitimately exceeds a short
+      fixed budget, and the run aborts with "Daemon did not open port in time"
+      even though nothing is wrong.
+
+    Polling ``proc`` as well as the port fixes both: we fail fast with the exit
+    code when the daemon is genuinely dead, and we keep waiting (logging
+    progress) as long as it is alive.
+
+    Returns True once the port is open, False if the daemon died or the timeout
+    elapsed while it was still running.
+    """
+    t0 = time.time()
+    last_note = t0
+    while True:
+        if lsu.is_port_open("127.0.0.1", port):
+            logger.info(f"Port {port} ready ({time.time() - t0:.1f}s)")
+            return True
+
+        rc = proc.poll()
+        if rc is not None:
+            logger.error(
+                f"Daemon exited (code {rc}) after {time.time() - t0:.1f}s "
+                f"without opening port {port}. Check daemon log."
+            )
+            return False
+
+        now = time.time()
+        if now - t0 >= timeout:
+            logger.error(
+                f"Daemon is still running but has not opened port {port} after "
+                f"{timeout:.0f}s; giving up. If startup is legitimately this slow "
+                f"(very large orientation database, contended GPU), raise "
+                f"--port-timeout."
+            )
+            return False
+
+        if now - last_note >= progress_every:
+            logger.info(
+                f"  still waiting for port {port} "
+                f"({now - t0:.0f}s elapsed, daemon alive)..."
+            )
+            last_note = now
+
+        time.sleep(poll_interval)
+
+
 def _terminate_process(proc: subprocess.Popen, name: str, timeout: float = 10.0) -> None:
     """Send SIGTERM, wait, then SIGKILL if necessary."""
     if proc.poll() is not None:
@@ -162,7 +223,7 @@ def run_pipeline(
     ncpus: int = 1,
     output_dir: str = "",
     port: int = lsu.LAUE_STREAM_PORT,
-    port_timeout: float = 180.0,
+    port_timeout: float = 900.0,
     flush_time: float = 5.0,
     min_unique: int = 2,
     write_indexfile: bool = True,
@@ -185,7 +246,8 @@ def run_pipeline(
         ncpus:        Number of CPUs (passed to daemon).
         output_dir:   Output directory (auto-generated if empty).
         port:         Daemon TCP port.
-        port_timeout: Max seconds to wait for daemon port.
+        port_timeout: Max seconds to wait for the daemon port while the
+                      daemon is still alive (a dead daemon aborts immediately).
         flush_time:   Seconds to wait after server finishes before killing daemon.
         min_unique:   Minimum unique spots for orientation filtering.
     """
@@ -308,8 +370,7 @@ def run_pipeline(
 
     # --- 3. Wait for daemon port ---
     logger.info(f"Waiting for port {port}...")
-    if not lsu.wait_for_port("127.0.0.1", port, timeout=port_timeout):
-        logger.error("Daemon did not open port in time. Check daemon log.")
+    if not _wait_for_daemon_port(daemon_proc, port, port_timeout):
         _terminate_process(daemon_proc, "daemon")
         daemon_logf.close()
         _print_log_tail(daemon_log)
@@ -369,19 +430,35 @@ def run_pipeline(
     logger.info(f"Image server exited (code {server_proc.returncode}). "
                 f"Waiting for daemon to write results...")
 
-    # Poll for solutions.txt (mirrors integrator_batch_process.py pattern)
-    flush_deadline = time.time() + flush_time + 60
+    # Wait for the daemon to finish WRITING, not merely to have started.
+    #
+    # solutions.txt is appended to as each frame is fitted, so "the file exists and
+    # is non-empty" means the *first* frame landed, not the last. Breaking there and
+    # SIGTERMing the daemon two seconds later silently discards everything still in
+    # its queue — and the daemon is routinely behind (it logs "receive queue was full
+    # N times (backpressure from processing)"). Observed: a 6561-frame batch run lost
+    # the last 31 frames, contiguously, with no error anywhere.
+    #
+    # Instead, wait until the file stops growing: that is the daemon actually draining.
+    quiet_needed = max(flush_time, 10.0)
+    flush_deadline = time.time() + flush_time + 3600
+    last_size, last_change = -1, time.time()
     while time.time() < flush_deadline:
-        if os.path.isfile(solutions_file) and os.path.getsize(solutions_file) > 0:
-            logger.info(f"solutions.txt detected ({os.path.getsize(solutions_file)} bytes)")
-            time.sleep(2.0)  # extra wait for file to be fully flushed
-            break
         if daemon_proc.poll() is not None:
             logger.info("Daemon exited on its own.")
             break
+        size = os.path.getsize(solutions_file) if os.path.isfile(solutions_file) else 0
+        now = time.time()
+        if size != last_size:
+            last_size, last_change = size, now
+        elif size > 0 and (now - last_change) >= quiet_needed:
+            logger.info(f"solutions.txt quiescent at {size} bytes after "
+                        f"{quiet_needed:.0f}s without growth — daemon has drained")
+            break
         time.sleep(1.0)
     else:
-        logger.warning("Timed out waiting for daemon to write solutions.txt")
+        logger.warning("Timed out waiting for the daemon to finish writing "
+                       "solutions.txt; results may be truncated")
 
     # --- 7. Terminate daemon ---
     _terminate_process(daemon_proc, "daemon")
@@ -570,7 +647,7 @@ def main() -> None:
         help=f"Daemon TCP port (default: {lsu.LAUE_STREAM_PORT})"
     )
     parser.add_argument(
-        "--port-timeout", type=float, default=180.0,
+        "--port-timeout", type=float, default=900.0,
         help="Max seconds to wait for daemon port (default: 180)"
     )
     parser.add_argument(
