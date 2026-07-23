@@ -15,11 +15,15 @@ Gates (all reported, with nulls):
     of the parent; variant-ID colonies should be contiguous; map figure.
  6. COMPLETENESS: full variant table, tolerances, every number with its null.
 """
+import os
 import numpy as np, sys
 import matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-WORK="$LAUE_WORK"
+WORK = os.environ.get("LAUE_WORK", "$LAUE_WORK")
 TOL=2.0   # deg, orientation match tolerance (Burgers OR scatter in Ti-64 ~1-2 deg)
+# argv[1]=min alpha cluster size, argv[2]=scan prefix ("parentbeta" | "id6_10x10").
+# The prefix selects which *_validated.npz pair to read and names the outputs.
+PREFIX=sys.argv[2] if len(sys.argv)>2 else "parentbeta"
 
 # ---------- symmetry + Burgers ----------------------------------------------
 def rmat(ax,deg):
@@ -81,7 +85,7 @@ print("GATE 1 PASSED\n")
 
 # ================= load validated =================
 def load(phase):
-    z=np.load(f"{WORK}/peel_map/parentbeta_{phase}_validated.npz",allow_pickle=True)
+    z=np.load(f"{WORK}/peel_map/{PREFIX}_{phase}_validated.npz",allow_pickle=True)
     return z["oms"],z["X"].astype(float),z["Z"].astype(float),z["labels"]
 aom,aX,aZ,alab=load("alpha"); bom,bX,bZ,blab=load("beta")
 print(f"validated alpha instances {len(aom)}, beta instances {len(bom)}")
@@ -196,16 +200,16 @@ ax[1].set_xlabel("Burgers α variant"); ax[1].set_ylabel("# validated α instanc
 ax[1].set_title("Parent #1 variant occupancy (selection)")
 fig.suptitle(f"Parent-β reconstruction: {len(parents)} prior-β grain(s); "
              f"parent #1 = {p1['nv']}/12 variants (null 99pct {p1['r99']:.0f}), anchor {anc1:.2f}°",fontsize=12)
-fig.tight_layout(rect=[0,0,1,0.94]); fig.savefig(f"{WORK}/figures/parentbeta_reconstruction.png",dpi=140)
-print("saved parentbeta_reconstruction.png")
+fig.tight_layout(rect=[0,0,1,0.94]); fig.savefig(f"{WORK}/figures/{PREFIX}_reconstruction.png",dpi=140)
+print(f"saved {PREFIX}_reconstruction.png")
 
-np.savez(f"{WORK}/peel_map/parentbeta_reconstruction.npz",
+np.savez(f"{WORK}/peel_map/{PREFIX}_reconstruction.npz",
          parents_B=np.array([p["B"] for p in parents]),
          parents_nv=np.array([p["nv"] for p in parents]),
          parents_anchor=np.array([p["anchor"] for p in parents]),
          parents_ninst=np.array([p["ninst"] for p in parents]),
          inst_var=inst_var, inst_par=inst_par, aX=aX, aZ=aZ, bX=bX, bZ=bZ)
-print("\nsaved parentbeta_reconstruction.npz")
+print(f"\nsaved {PREFIX}_reconstruction.npz")
 print("\n"+"="*66+"\nSUMMARY")
 for i,p in enumerate(parents):
     print(f"  parent #{i+1}: {p['nv']}/12 variants, {p['ninst']} α instances, "
