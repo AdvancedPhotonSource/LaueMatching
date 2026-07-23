@@ -216,7 +216,14 @@ def calculate_gaussian_sigma(
     tree = cKDTree(coords)
     # query k=2: first neighbor is the point itself (distance 0), second is nearest
     dists, _ = tree.query(coords, k=2)
-    min_px_dist = float(dists[:, 1].min())
+    # Robust spot spacing: the absolute minimum pair distance collapses on
+    # dense/streaky frames (fragments of ONE streak sit a few px apart), which
+    # shrank sigma to ~1 px and left the 0.4-deg orientation grid unable to
+    # reach spots up to ~18 px from a grid seed (recovery dropped to ~15% on a
+    # 150-grain synthetic frame). Fragments of the same streak SHOULD merge --
+    # they are one grain's reflection -- so size the blur from the 10th
+    # percentile of neighbour distances instead of the minimum.
+    min_px_dist = float(np.percentile(dists[:, 1], 10))
 
     if pixel_size > 0 and distance > 0:
         delta = (distance * np.tan(np.radians(orient_spacing))) / pixel_size
@@ -335,6 +342,12 @@ def preprocess_image(
         distance=cfg["distance"],
         orient_spacing=cfg["orientation_spacing"],
     )
+    # Optional cap (param GaussSigmaMax): on DENSE frames a large blur lights
+    # so much of the detector that chance matches flood the coarse gate and
+    # bury true grains; iterative-peel drivers start tight and widen per pass.
+    smax = float(cfg.get("gauss_sigma_max", 0.0) or 0.0)
+    if smax > 0:
+        sigma = min(sigma, smax)
     blurred = ndimg.gaussian_filter(filt_img.astype(np.float64), sigma)
 
     if return_intermediates:

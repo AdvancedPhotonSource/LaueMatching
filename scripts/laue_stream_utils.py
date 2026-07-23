@@ -123,6 +123,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "max_angle":        2.0,
     "max_laue_spots":   400,
     "orientation_spacing": 0.4,
+    "gauss_sigma_max":  0.0,   # 0 = no cap on the auto matching-blur sigma
     # Files
     "background_file":  "",
     "orientation_file": "orientations.bin",
@@ -194,6 +195,8 @@ def parse_config(config_file: str) -> Dict[str, Any]:
                     cfg["max_laue_spots"] = int(rest[0])
                 elif key == "OrientationSpacing":
                     cfg["orientation_spacing"] = float(rest[0])
+                elif key == "GaussSigmaMax":
+                    cfg["gauss_sigma_max"] = float(rest[0])
                 elif key == "ThresholdMethod":
                     cfg["threshold_method"] = rest[0].lower()
                 elif key == "Threshold":
@@ -344,7 +347,21 @@ def read_solutions(path: str) -> Tuple[np.ndarray, str]:
     try:
         data = np.loadtxt(path, skiprows=1)
     except ValueError:
-        data = np.genfromtxt(path, skip_header=1)
+        # Tolerate torn/truncated rows (e.g. daemon terminated mid-write on a
+        # dense frame): keep only rows with the modal column count.
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            data = np.genfromtxt(path, skip_header=1, invalid_raise=False)
+        if data.ndim == 2:
+            good = ~np.isnan(data).any(axis=1)
+            if (~good).sum():
+                logger = logging.getLogger(__name__)
+                logger.warning(
+                    f"read_solutions: dropped {(~good).sum()} malformed row(s) "
+                    f"from {path}"
+                )
+            data = data[good]
     if data.size == 0:
         data = np.empty((0, 31))
     elif data.ndim == 1:
