@@ -67,7 +67,11 @@ inline void gpuAssert(cudaError_t code, const char *file, int line,
 }
 
 // ── CUDA kernel (same as LaueMatchingGPU.cu) ───────────────────────────
-#define MAX_MATCHES 100000 // max matched orientations per image
+#define MAX_MATCHES 4000000 // max matched orientations per image.
+// Sized for DENSE (many-grain, streaky) frames: the kernel appends in
+// arrival order, so an overflow here discards candidates ARBITRARILY --
+// true grains included -- before the top-score merge can rank them.
+// 4M entries x 12 B x MAX_STREAMS is < 200 MB on device and pinned host.
 
 __global__ void compare(size_t nrPxX, size_t nOr, size_t nrMaxSpots,
                         float minInt, size_t minSps, uint16_t *oA, float *im,
