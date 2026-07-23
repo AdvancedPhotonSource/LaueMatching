@@ -157,6 +157,46 @@ class OrientationLoader:
             sys.exit(1)
 
 
+def calc_recip_array(lat, sg_num):
+    """Reciprocal-lattice basis B (3x3) from lattice parameters.
+
+    Port of calcRecipArray in src/LaueMatchingHeaders.h (and GenerateHKLs.py),
+    so q = OM @ B @ hkl matches the C matcher for ALL crystal systems. The
+    previous `OM * astar` shortcut is only valid for cubic lattices and put
+    simulated spots in the wrong places for e.g. hexagonal Ti-alpha.
+    For cubic, B == astar * I, so cubic output is unchanged.
+    """
+    from math import cos, sin, sqrt, pi as _pi
+    a, b, c, alpha, beta, gamma = [float(x) for x in lat]
+    d2r = _pi / 180.0
+    rhomb = 1 if sg_num in [146, 148, 155, 160, 161, 166, 167] else 0
+    ca, cb, cg, sg = cos(alpha*d2r), cos(beta*d2r), cos(gamma*d2r), sin(gamma*d2r)
+    phi = sqrt(1.0 - ca*ca - cb*cb - cg*cg + 2*ca*cb*cg)
+    pv = (2*_pi) / (a*b*c*phi)
+    zo = lambda v: 0.0 if abs(v) < 1e-11 else v
+    if rhomb == 0:
+        a0, a1, a2 = a, 0.0, 0.0
+        b0, b1, b2 = b*cg, b*sg, 0.0
+        c0, c1, c2 = c*cb, c*(ca-cb*cg)/sg, c*phi/sg
+    else:
+        p = sqrt(1.0 + 2*ca); q = sqrt(1.0 - ca)
+        pmq = (a/3.0)*(p-q); p2q = (a/3.0)*(p+2*q)
+        a0, a1, a2 = p2q, pmq, pmq
+        b0, b1, b2 = pmq, p2q, pmq
+        c0, c1, c2 = pmq, pmq, p2q
+    B = np.zeros((3, 3))
+    B[0][0] = zo((b1*c2-b2*c1)*pv); B[1][0] = zo((b2*c0-b0*c2)*pv); B[2][0] = zo((b0*c1-b1*c0)*pv)
+    B[0][1] = zo((c1*a2-c2*a1)*pv); B[1][1] = zo((c2*a0-c0*a2)*pv); B[2][1] = zo((c0*a1-c1*a0)*pv)
+    B[0][2] = zo((a1*b2-a2*b1)*pv); B[1][2] = zo((a2*b0-a0*b2)*pv); B[2][2] = zo((a0*b1-a1*b0)*pv)
+    return B
+
+
+def orientations_to_recips(orientations, params):
+    """Rows of flattened OMs -> rows of flattened OM @ B (crystal-correct)."""
+    B = calc_recip_array(params['latC'].split(), params['sgNum'])
+    return np.array([(om.reshape(3, 3) @ B).flatten() for om in orientations])
+
+
 class DiffractionSimulator:
     """Simulate diffraction patterns based on orientations and configuration."""
     
@@ -345,9 +385,10 @@ class DiffractionSimulator:
         Returns:
             tuple: (image, position array)
         """
-        # Scale orientations by astar
-        recips = orientations * self.params['astar']
-        
+        # Rotate the crystal-correct reciprocal basis (NOT the cubic-only
+        # OM*astar shortcut; see calc_recip_array).
+        recips = orientations_to_recips(orientations, self.params)
+
         # Process each orientation
         for grain_nr, recip in enumerate(recips):
             recip = recip.reshape((3, 3))
@@ -380,8 +421,8 @@ class DiffractionSimulator:
             with h5py.File(output_file, 'w') as hf:
                 hf.create_dataset('/entry1/data/data', data=self.img)
 
-                # Reshape recips to store in file
-                recips = orientations * self.params['astar']
+                # Reshape recips to store in file (crystal-correct basis)
+                recips = orientations_to_recips(orientations, self.params)
                 hf.create_dataset('/entry1/recips', data=recips)
 
                 # Store spot positions
