@@ -6,8 +6,15 @@ variants. This directory is self-contained: a run script, annotated parameter te
 analysis scripts.
 
 Everything is driven by **one parameter file per crystallographic phase** plus a **data folder**.
-Nothing here is specific to a single experiment — change only the geometry, lattice, and energy
-values in the parameter file to run on a different instrument or material.
+The **indexer** is not specific to any experiment — change only the geometry, lattice, and energy
+values in the parameter file to run on a different instrument or material. Several **analysis**
+scripts still carry hard-coded Ti-6Al-4V lattice constants and `valid_hkls_Ti_*.csv` filenames;
+they are listed by file and line in the new-experiment runbook below, and must be ported before
+the chain is run on another material.
+
+**Starting on a dataset this pipeline has never seen?** Read
+[`NEW_EXPERIMENT_RUNBOOK.md`](NEW_EXPERIMENT_RUNBOOK.md) — survey the experiment folder, decide
+which analyses the material system actually supports, index, analyse, report.
 
 ---
 
