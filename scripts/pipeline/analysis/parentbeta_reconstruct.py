@@ -172,6 +172,22 @@ tot_assigned=int(sum(a_sz[assigned])); tot_sig=int(a_sz.sum())
 print(f"\n=> {len(parents)} significant prior-beta grain(s); "
       f"{tot_assigned}/{tot_sig} significant-alpha instances ({100*tot_assigned/tot_sig:.0f}%) explained")
 
+# No parent cleared the random + decoy nulls at this min-cluster-size. Everything below
+# (GATE 5/6, the figure, the summary) assumes at least one parent, so write a well-formed
+# EMPTY reconstruction -- so downstream variant_coherence.py finds a file rather than
+# FileNotFoundError -- and exit cleanly instead of crashing on parents[0]. Sparse scans
+# (small area, coarse step) legitimately land here; retry with a lower min-cluster-size.
+if not parents:
+    print(f"\nNo prior-beta parent survived the nulls at min-cluster-size {ASZ}. "
+          f"Writing an empty reconstruction for {PREFIX}; retry with a smaller min size "
+          f"if a parent is expected.")
+    np.savez(f"{WORK}/peel_map/{PREFIX}_reconstruction.npz",
+             parents_B=np.empty((0, 3, 3)), parents_nv=np.empty(0, int),
+             parents_anchor=np.empty(0), parents_ninst=np.empty(0, int),
+             inst_var=inst_var, inst_par=inst_par, aX=aX, aZ=aZ, bX=bX, bZ=bZ)
+    print(f"saved {PREFIX}_reconstruction.npz (0 parents)")
+    sys.exit(0)
+
 # ================= GATE 5: spatial coherence + GATE 6 table =================
 print("\n"+"="*66); print("GATE 5  SPATIAL / GATE 6  VARIANT TABLE (parent #1)"); print("="*66)
 ncol=int((inst_var>=0).sum())
