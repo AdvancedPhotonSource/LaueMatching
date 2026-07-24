@@ -40,31 +40,27 @@ TOLS = [0.3, 0.5, 1.0]
 # scan's own peak and reflection counts. Passed in via env by batch_regrain.sh, which
 # parses them from the scan's own analysis log. The ID26 values are only a last-resort
 # fallback and are announced loudly when used.
-_NM_A = os.environ.get("LAUE_NULLMAX_ALPHA")
-_NM_B = os.environ.get("LAUE_NULLMAX_BETA")
-if _NM_A is None or _NM_B is None:
-    print("WARNING: null maxima not supplied; falling back to ID26 values (16/15). "
-          "The 'gold' column may be wrong for this scan.")
-NULLMAX = {"alpha": int(_NM_A) if _NM_A else 16, "beta": int(_NM_B) if _NM_B else 15}
+_NM = os.environ.get(f"LAUE_NULLMAX_{PHASE.upper()}")
+if _NM is None:
+    # No silent default. Inheriting one scan's null maximum for another is the
+    # single error this whole chain exists to avoid, and the measured alpha
+    # maximum alone ranged 14-17 across nine Ti scans -- a fallback here would
+    # be wrong by more than the effect being measured.
+    sys.exit(f"LAUE_NULLMAX_{PHASE.upper()} is not set. Run null_model.py on THIS scan "
+             f"and pass its measured maximum; do not inherit a value from another scan.")
+NULLMAX = {PHASE: int(_NM)}
 
 z = np.load(f"{W}/peel_map/{PREFIX}_{PHASE}_validated.npz", allow_pickle=True)
 oms, X, Z, lab = z["oms"], z["X"].astype(float), z["Z"].astype(float), z["labels"]
 nhit = z["nhit"].astype(int)
 
-def rmat(ax, deg):
-    u = np.asarray(ax, float); u /= np.linalg.norm(u); t = np.radians(deg)
-    K = np.array([[0, -u[2], u[1]], [u[2], 0, -u[0]], [-u[1], u[0], 0]])
-    return np.eye(3) + np.sin(t)*K + (1-np.cos(t))*(K@K)
-if PHASE == "alpha":
-    OPS = np.array([rmat([0, 0, 1], 60*k) for k in range(6)] +
-                   [rmat([np.cos(np.radians(a)), np.sin(np.radians(a)), 0], 180)
-                    for a in (0, 30, 60, 90, 120, 150)])
-else:
-    OPS = np.array([np.eye(3)] + [rmat(a, d) for a, d in
-        [([1,0,0],90),([1,0,0],180),([1,0,0],270),([0,1,0],90),([0,1,0],180),([0,1,0],270),
-         ([0,0,1],90),([0,0,1],180),([0,0,1],270),([1,1,0],180),([1,-1,0],180),([1,0,1],180),
-         ([-1,0,1],180),([0,1,1],180),([0,1,-1],180),([1,1,1],120),([1,1,1],240),([1,-1,1],120),
-         ([1,-1,1],240),([-1,1,1],120),([-1,1,1],240),([1,1,-1],120),([1,1,-1],240)]])
+# Symmetry follows the space group of the phase, not its name. The old
+# "alpha -> hex-12, anything else -> cubic-24" rule silently gave cubic
+# operators to any phase not called "alpha".
+from laue_material import Phase
+_ph = Phase.load(PHASE)
+OPS = _ph.sym_ops
+print(f"[{PHASE}] {len(OPS)} proper-rotation operators from space group {_ph.sgnum}", flush=True)
 
 def miso(A, Bs):
     best = np.full(len(Bs), 999.)

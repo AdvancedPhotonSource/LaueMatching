@@ -27,20 +27,9 @@ TOLS = [0.2, 0.3, 0.4, 0.5, 0.75, 1.0]
 z = np.load(f"{W}/peel_map/{PREFIX}_{PHASE}_validated.npz", allow_pickle=True)
 oms, X, Z, lab = z["oms"], z["X"].astype(float), z["Z"].astype(float), z["labels"]
 
-def rmat(ax, deg):
-    u = np.asarray(ax, float); u /= np.linalg.norm(u); t = np.radians(deg)
-    K = np.array([[0, -u[2], u[1]], [u[2], 0, -u[0]], [-u[1], u[0], 0]])
-    return np.eye(3) + np.sin(t)*K + (1-np.cos(t))*(K@K)
-if PHASE == "alpha":
-    OPS = np.array([rmat([0, 0, 1], 60*k) for k in range(6)] +
-                   [rmat([np.cos(np.radians(a)), np.sin(np.radians(a)), 0], 180)
-                    for a in (0, 30, 60, 90, 120, 150)])
-else:
-    OPS = np.array([np.eye(3)] + [rmat(a, d) for a, d in
-        [([1,0,0],90),([1,0,0],180),([1,0,0],270),([0,1,0],90),([0,1,0],180),([0,1,0],270),
-         ([0,0,1],90),([0,0,1],180),([0,0,1],270),([1,1,0],180),([1,-1,0],180),([1,0,1],180),
-         ([-1,0,1],180),([0,1,1],180),([0,1,-1],180),([1,1,1],120),([1,1,1],240),([1,-1,1],120),
-         ([1,-1,1],240),([-1,1,1],120),([-1,1,1],240),([1,1,-1],120),([1,1,-1],240)]])
+# Symmetry follows the space group of the phase, not its name.
+from laue_material import Phase
+OPS = Phase.load(PHASE).sym_ops
 
 def miso(A, Bs):
     best = np.full(len(Bs), 999.)

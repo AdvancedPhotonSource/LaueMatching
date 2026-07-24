@@ -37,21 +37,9 @@ SCANS={
                     resdir=lambda ph: f"{TESTSCANS}/laue_Matching_Results/results/{ph}_20260717_161826",
                     out=lambda ph: f"id6_10x10_{ph}"),
 }
-H5LOC="/entry1/data/data"; HC=1.2398419739; TOL=8.0; NPX=2048
-P=np.array([0.028834,0.002715,0.513399]); Rrod=np.array([-1.20334591,-1.2137853,-1.21669634])
-dx=dy=0.0002; Elo,Ehi=5.,30.
-angr=np.linalg.norm(Rrod); v=Rrod/angr; c_,s_=np.cos(angr),np.sin(angr)
-rot=np.array([[c_+(1-c_)*v[0]**2,(1-c_)*v[0]*v[1]-s_*v[2],(1-c_)*v[0]*v[2]+s_*v[1]],
-              [(1-c_)*v[1]*v[0]+s_*v[2],c_+(1-c_)*v[1]**2,(1-c_)*v[1]*v[2]-s_*v[0]],
-              [(1-c_)*v[2]*v[0]-s_*v[1],(1-c_)*v[2]*v[1]+s_*v[0],c_+(1-c_)*v[2]**2]])
-roti=np.linalg.inv(rot); ki=np.array([0,0,1.0])
-
-def hexB():
-    a,b,c=0.2921,0.2921,0.4665; cg,sg=cos(120*pi/180),sin(120*pi/180); pv=2*pi/(a*b*c*sg)
-    a0,a1,a2=a,0,0; b0,b1,b2=b*cg,b*sg,0; c0,c1,c2=0,0,c
-    return np.array([[(b1*c2-b2*c1),(c1*a2-c2*a1),(a1*b2-a2*b1)],
-                     [(b2*c0-b0*c2),(c2*a0-c0*a2),(a2*b0-a0*b2)],
-                     [(b0*c1-b1*c0),(c0*a1-c1*a0),(a0*b1-a1*b0)]])*pv
+H5LOC="/entry1/data/data"; HC=1.2398419739; TOL=8.0
+# Detector geometry, energy window and NPX now come from the phase's parameter
+# file (see laue_material), resolved below once PHASE is known.
 
 PHASE=sys.argv[1] if len(sys.argv)>1 else "beta"
 NW=int(sys.argv[2]) if len(sys.argv)>2 else 36
@@ -59,21 +47,14 @@ SCAN=sys.argv[3] if len(sys.argv)>3 else "parentbeta"
 if SCAN not in SCANS:
     sys.exit(f"unknown scan {SCAN!r}; choose from {sorted(SCANS)}")
 CFG=SCANS[SCAN]; DATA=CFG["data"]; RESDIR=CFG["resdir"](PHASE); RES=CFG["out"](PHASE)
-if PHASE=="alpha":
-    B=hexB(); HKL=np.loadtxt(f"{WORK}/params/valid_hkls_Ti_alpha.csv")[:,:3]
-else:
-    B=np.eye(3)*2*pi/0.33065; HKL=np.loadtxt(f"{WORK}/params/valid_hkls_Ti_beta.csv")[:,:3]
+# Lattice / reflection list / geometry from the params file the indexer used.
+from laue_material import Phase
+_ph=Phase.load(PHASE); B=_ph.B; HKL=_ph.hkls; NPX=_ph.npx_x
 print(f"[{PHASE}] scan={SCAN} resdir={RESDIR}",flush=True)
+print(f"[{PHASE}] {_ph}",flush=True)
 
 def project(OM):
-    q=(OM@B@HKL.T).T; ql=np.linalg.norm(q,axis=1); m=ql>1e-9
-    q,ql=q[m],ql[m]; qh=q/ql[:,None]
-    kf=ki-2*qh[:,2:3]*qh; xd=(roti@kf.T).T; m=xd[:,2]>0
-    xd,ql,qh=xd[m],ql[m],qh[m]; xs=xd*P[2]/xd[:,2:3]
-    px=(xs[:,0]-P[0])/dx+0.5*(NPX-1); py=(xs[:,1]-P[1])/dy+0.5*(NPX-1); st=-qh[:,2]
-    mk=(px>=0)&(px<NPX-1)&(py>=0)&(py<NPX-1)&(st>1e-9)
-    E=HC*ql[mk]/st[mk]/(4*pi); me=(E>Elo)&(E<Ehi)
-    return np.c_[px[mk][me],py[mk][me]]
+    return _ph.project(OM)
 
 mapping=json.load(open(f"{RESDIR}/frame_mapping.json"))
 img2file={int(k):vv["file"] for k,vv in mapping.items() if isinstance(vv,dict) and "file" in vv}
@@ -127,23 +108,25 @@ np.savez(f"{WORK}/peel_map/{RES}_validated.npz",
          nhit=np.array(nh_v), labels=np.full(len(oms_v),-1))
 print(f"[{PHASE}] saved validated (pre-cluster)",flush=True)
 
-# light greedy clustering (hex 12 / cubic 24 ops)
-def rmat(ax,deg):
-    u=np.asarray(ax,float); u/=np.linalg.norm(u); t=np.radians(deg)
-    K=np.array([[0,-u[2],u[1]],[u[2],0,-u[0]],[-u[1],u[0],0]])
-    return np.eye(3)+np.sin(t)*K+(1-np.cos(t))*(K@K)
-if PHASE=="alpha":
-    OPS=[rmat([0,0,1],60*k) for k in range(6)]+[rmat([np.cos(np.radians(x)),np.sin(np.radians(x)),0],180) for x in (0,30,60,90,120,150)]
-else:
-    OPS=[np.eye(3)]+[rmat(ax,d) for ax,d in [([1,0,0],90),([1,0,0],180),([1,0,0],270),([0,1,0],90),([0,1,0],180),([0,1,0],270),
-        ([0,0,1],90),([0,0,1],180),([0,0,1],270),([1,1,0],180),([1,-1,0],180),([1,0,1],180),([-1,0,1],180),([0,1,1],180),
-        ([0,1,-1],180),([1,1,1],120),([1,1,1],240),([1,-1,1],120),([1,-1,1],240),([-1,1,1],120),([-1,1,1],240),([1,1,-1],120),([1,1,-1],240)]]
-OPS=np.array(OPS)
+# Light greedy clustering; operators follow the space group, not the phase name.
+#
+# This loop is O(n_clusters x n_instances x n_sym_ops). That is fine for the
+# ~1e3-1e4 instances the test scans produced, but a full 201x201 raster yields
+# ~2e5 instances and tens of thousands of clusters, where it does not terminate
+# in useful time. Set LAUE_SKIP_CLUSTER=1 to stop after the (already saved)
+# pre-cluster file and cluster separately with cluster_orientations.py, which is
+# KD-tree based; the label column is then filled in there.
+if os.environ.get("LAUE_SKIP_CLUSTER") == "1":
+    print(f"[{PHASE}] LAUE_SKIP_CLUSTER=1 -> leaving labels unset; "
+          f"run cluster_orientations.py on {RES}_validated.npz",flush=True)
+    sys.exit(0)
+if len(oms_v) > 50000:
+    print(f"[{PHASE}] WARNING: {len(oms_v)} instances is beyond what this greedy "
+          f"clustering handles in reasonable time; consider LAUE_SKIP_CLUSTER=1 "
+          f"+ cluster_orientations.py",flush=True)
+OPS=_ph.sym_ops
 def miso_min(A,Bs):
-    best=np.full(len(Bs),999.)
-    for S in OPS:
-        tr=np.einsum('ij,kj,mki->m',S,A,Bs); best=np.minimum(best,np.degrees(np.arccos(np.clip((tr-1)/2,-1,1))))
-    return best
+    return _ph.misorientation(A,Bs)
 labels=np.full(len(oms_v),-1); cid=0
 for i in range(len(oms_v)):
     if labels[i]>=0: continue

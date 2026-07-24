@@ -22,7 +22,12 @@ WORK=${WORK:-"$HOME/laue_run"}                       # working dir: results land
 PY=${PY:-"python"}                                   # python with LaueMatching installed
 SCRIPTS=${SCRIPTS:-"$(cd "$(dirname "$0")/.." && pwd)"}   # LaueMatching/scripts (auto)
 ALPHA_CONFIG=${ALPHA_CONFIG:-"$WORK/params/params_alpha.txt"}
-BETA_CONFIG=${BETA_CONFIG:-"$WORK/params/params_beta.txt"}  # set BETA_CONFIG="" to skip beta
+# "-" not ":-", for the same reason as WATCH below: ${BETA_CONFIG:-...} substitutes
+# the default for an *empty* BETA_CONFIG too, so the documented BETA_CONFIG=""
+# (single-phase material, e.g. Zn) never took effect. It fell through to the
+# default path, failed the -f check, and exited 1 -- after alpha had already been
+# launched, so the run appeared to work while reporting an error.
+BETA_CONFIG=${BETA_CONFIG-"$WORK/params/params_beta.txt"}   # set BETA_CONFIG="" to skip beta
 ALPHA_GPU=${ALPHA_GPU:-0};  ALPHA_PORT=${ALPHA_PORT:-60517}
 BETA_GPU=${BETA_GPU:-1};    BETA_PORT=${BETA_PORT:-60518}
 NCPUS=${NCPUS:-32}                                   # CPU cores for the refinement stage

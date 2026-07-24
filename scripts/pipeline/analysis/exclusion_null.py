@@ -22,29 +22,22 @@ from concurrent.futures import ProcessPoolExecutor
 W = os.environ.get("LAUE_WORK", "$LAUE_WORK")
 TESTSCANS = os.environ.get("LAUE_TESTSCANS", "$LAUE_DATA-2/Thompson_202607/Initial_Indexing_TestScans")
 DATA = os.environ.get("LAUE_SCAN_DATA", f"{TESTSCANS}/ID26-10x10um_0p25umStepSize_TestingIndexing")
-H5LOC = "/entry1/data/data"; HC = 1.2398419739; TOL = 8.0; NPX = 2048
+H5LOC = "/entry1/data/data"; HC = 1.2398419739; TOL = 8.0; NPX = _PH_A.npx_x
 PREFIX = os.environ.get("LAUE_OUT_PREFIX", "scan")
-P = np.array([0.028834, 0.002715, 0.513399]); Rrod = np.array([-1.20334591, -1.2137853, -1.21669634])
-dx = dy = 0.0002; Elo, Ehi = 5., 30.
-angr = np.linalg.norm(Rrod); v = Rrod/angr; c_, s_ = np.cos(angr), np.sin(angr)
-rot = np.array([[c_+(1-c_)*v[0]**2, (1-c_)*v[0]*v[1]-s_*v[2], (1-c_)*v[0]*v[2]+s_*v[1]],
-                [(1-c_)*v[1]*v[0]+s_*v[2], c_+(1-c_)*v[1]**2, (1-c_)*v[1]*v[2]-s_*v[0]],
-                [(1-c_)*v[2]*v[0]-s_*v[1], (1-c_)*v[2]*v[1]+s_*v[0], c_+(1-c_)*v[2]**2]])
-roti = np.linalg.inv(rot); ki = np.array([0, 0, 1.0])
-
+from laue_material import Phase
+_PH_A = Phase.load("alpha")
+_PH_B = Phase.load("beta")
+# Detector geometry from the parameter file the indexer used (laue_material).
+P = _PH_A.P; Rrod = _PH_A.Rrod
+dx = _PH_A.dx; dy = _PH_A.dy; Elo, Ehi = _PH_A.Elo, _PH_A.Ehi
+rot = _PH_A.rot; roti = _PH_A.roti; ki = _PH_A.ki
 NFR = int(sys.argv[1]) if len(sys.argv) > 1 else 120
 NDR = int(sys.argv[2]) if len(sys.argv) > 2 else 150
 NW  = int(sys.argv[3]) if len(sys.argv) > 3 else 12
 
-def hexB():
-    a, b, c = 0.2921, 0.2921, 0.4665; cg, sg = cos(120*pi/180), sin(120*pi/180); pv = 2*pi/(a*b*c*sg)
-    a0, a1, a2 = a, 0, 0; b0, b1, b2 = b*cg, b*sg, 0; c0, c1, c2 = 0, 0, c
-    return np.array([[(b1*c2-b2*c1), (c1*a2-c2*a1), (a1*b2-a2*b1)],
-                     [(b2*c0-b0*c2), (c2*a0-c0*a2), (a2*b0-a0*b2)],
-                     [(b0*c1-b1*c0), (c0*a1-c1*a0), (a0*b1-a1*b0)]])*pv
 
-B_ALP = hexB(); HKL_A = np.loadtxt(f"{W}/params/valid_hkls_Ti_alpha.csv")[:, :3]
-B_BET = np.eye(3)*2*pi/0.33065; HKL_B = np.loadtxt(f"{W}/params/valid_hkls_Ti_beta.csv")[:, :3]
+B_ALP = _PH_A.B; HKL_A = _PH_A.hkls
+B_BET = _PH_B.B; HKL_B = _PH_B.hkls
 
 def project(OM, B, HKLS):
     q = (OM@B@HKLS.T).T; ql = np.linalg.norm(q, axis=1); m = ql > 1e-9

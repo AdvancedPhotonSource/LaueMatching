@@ -12,11 +12,20 @@ Everything else the agent works out or asks for. The order below is not optional
 produces the inputs the next one needs, and phase 1 (what science is even askable) decides which
 half of the analysis chain runs at all.
 
-> **This runbook is material-agnostic; the *code* is not yet.** The indexer and the statistical
-> core are general. Several analysis scripts still carry hard-coded a two-phase hcp/bcc alloy lattice constants
-> and `valid_hkls_Ti_*.csv` filenames. §6 lists every one of them, by file and line. Do that port
-> **before** running the chain on a non-Ti material, or the nulls will be computed against the
-> wrong reflection list and will look perfectly healthy while being meaningless.
+> **The material port is DONE (2026-07-24, on the Zn/Zn dataset).** `analysis/laue_material.py`
+> now reads lattice, reflection list, detector geometry, energy window and symmetry from *the
+> indexing parameter file itself*, so the analysis cannot disagree with the run it describes.
+> All 13 previously Ti-hard-coded scripts import it. Selecting a material is an environment
+> variable, not an edit:
+>
+> ```bash
+> export LAUE_PHASES=zn                                  # comma-separated; single-phase is fine
+> export LAUE_PARAMS_ZN=$WORK/params/params_Zn.txt       # LAUE_PARAMS_<PHASE>, upper-case
+> ```
+>
+> §6 is now a *verification* step, not a porting step. Symmetry follows the **space group**, not
+> the phase name -- the old rule silently handed cubic-24 operators to any phase not called
+> `"alpha"`.
 
 Companion docs: [`README.md`](README.md) (the pipeline itself), and — outside this repo — the
 34-ID-E operational runbook `laue_torch/report/RUN_PROCESS_REPORT_HANDOFF.md` (beamline access,
@@ -59,6 +68,9 @@ Record, per scan folder:
 | exposure | frame header / folder name, then confirm against counts | 0.25 s vs 1 s changes what is detectable |
 | still growing? | frame count twice, 120 s apart | never index a scan still being collected |
 | peaks on one frame | detect on a background-subtracted frame, SNR>8, **area ≥ 4 px** | density regime (below) |
+| hot pixels | pixels saturated in ≥90% of ~60 frames spread over the scan | Zn scan: **36 permanent** hot pixels; only ~8% of saturated pixels were real reflections. Every frame's `max` looked like signal and was not. |
+| background, decomposed | median of four detector **corners** (flat) vs a central box (halo) | the flat part is isotropic emission (fluorescence); it is the part that tracks path length |
+| spot shape | blob aspect ratio, median **and** p95 | Zn *looked* heavily streaked; measured median AR was 1.6 with only ~10% above 3. The eye reads the p95 tail. |
 
 **The 45° trap.** A folder called `10x10um_0p25umStepSize` measured 20.000 µm in X at 0.2500 µm and
 14.142 µm in Z at 0.1768 µm — exactly 1/√2, because the sample sits at 45° to the beam. It is a
@@ -109,6 +121,7 @@ Ask the user these, in this order. The first three block everything; the rest sh
 | steels, Fe–Ni | γ FCC + α′ BCC/BCT | parent-γ via **K-S (24)** or **N-W (12)** | swap `burgers_Cv()` (§6); re-derive the accept threshold |
 | single-phase FCC/BCC/HCP | one | twin relationships (Σ3 for FCC), texture | **no parent reconstruction** — skip steps 6–8 of the chain |
 | two unrelated phases (e.g. matrix + precipitate) | two | phase fraction, exclusion census | the parent machinery does not apply; do not run it "to see" |
+| **same phase either side** (Zn on Zn, weld/parent, epitaxial deposit) | one | orientation persistence, fluorescence pedestal, per-spot energy | **nothing crystallographic separates them** — see §6 |
 | unknown / mixed | — | phase identification first | index each candidate phase separately, compare validated-vs-null |
 
 **Always applies, regardless of material** (this is the core, and it is where the pipeline's
@@ -159,6 +172,44 @@ For many scans, use the batch runner: one run at a time, smallest first, `--sett
 folders still growing, `.laue_done` / `.laue_skip` markers for resume and for splitting work across
 machines. See §6 of the RUN_PROCESS_REPORT handoff for the multi-machine layout.
 
+### Sharding a single big scan across GPUs and hosts
+
+For one large raster (40k+ frames) there is only one phase to index, so GPUs split **frames**
+rather than phases. Two hard constraints, both learned the expensive way on the Zn scan:
+
+**1. Budget ~19 GB of HOST RAM per daemon, and do not stack them.** Each daemon holds the 7.2 GB
+orientation database *and* the 12.2 GB forward cache in host memory. Three daemons on a 128 GB box
+plus their image servers filled RAM, drove swap to 100%, and two of the three shards died with
+`Send/save error for image_num=N: timed out` (the 30 s socket send timeout) while appearing
+"running". Per-image time went 1 s -> 4.5 s before they stopped entirely.
+
+**2. `laue_image_server` has no backpressure.** It enumerates the whole folder and its preprocessing
+pool buffers results faster than the daemon consumes them (~1.5 s/image). Parent RSS reached
+**17 GB on a 13,467-frame shard**; at 201 frames this cannot manifest. Either give the host enough
+RAM or keep shards small.
+
+Machines that can see `$LAUE_ROOT` and have the epix34id LaueMatching install
+(`/home/beams/EPIX34ID/opt/LaueMatching`, shared home, has the `LAUE_STREAM_PORT` fix):
+
+| host | RAM | cores | GPUs | notes |
+|---|---|---|---|---|
+| copland | 2015 GB | 96 | 2x A6000 48 GB | **cannot write** to the-analysis-host -- point ResultDir elsewhere |
+| alleppey | 502 GB | 112 | 4x H100 80-96 GB | usually shared; check `nvidia-smi` first |
+| sentosa | 250 GB | 64 | 2x H200 144 GB + 2x Blackwell | Blackwell cards (2,3) are **sm_120**, often in use |
+| shannon | 125 GB | 40 | 3x A4500 20 GB | 34-ID-E box; smallest RAM, budget 2 daemons max |
+
+**Log in as `epix34id` on every host** (not s1iduser): the data, the DB and the caches are all
+owned by epix34id, and the s1iduser LaueMatching build is older -- it ignores `LAUE_STREAM_PORT`
+and silently binds 60517, so two daemons on one host collide. Reachability: epix34id keys live on
+shannon, so the route is `copland(s1iduser) -> epix34id@shannon -> epix34id@<host>`. Every remote
+shell is **tcsh**: pipe scripts to `bash -s`, and never use `$(...)` in the outer ssh command.
+
+`scripts/pipeline/launch_shard.sh SHARD GPU PORT NCPUS` runs one orchestrator on whatever host it
+is invoked on. Stagger launches by ~60 s: each daemon reads 19 GB before binding its port.
+
+Also: files written by one account are not automatically readable by another. `forward_*.bin` is
+created mode `600`; `chmod 644` it before another host's account can load it.
+
 Sanity while it runs:
 
 - **orientations/frame is scan-dependent** — 10–100 on a sparse scan, 275–1043 on a dense one, both
@@ -199,9 +250,33 @@ relationship applies; 9 is figures.
 | 8 | `variant_coherence.py` | only if step 6 ran |
 | 9 | `validated_figures.py` | any |
 
-Then, always: `regrain.py` (contiguity-aware counts — pass the scan's own measured null maxima via
-`LAUE_NULLMAX_ALPHA` / `LAUE_NULLMAX_BETA`, or it falls back to the Ti values and warns),
+Then, always: `regrain.py` (contiguity-aware counts — pass the scan's own measured null maximum via
+`LAUE_NULLMAX_<PHASE>`; it now **exits** rather than falling back to the Ti values),
 `tolerance_sensitivity.py`, and `collect_scan_metrics.py` for the cross-scan JSON.
+
+**Clustering does not scale past a test scan.** The greedy loop inside `parentbeta_validate.py` is
+O(n_clusters x n_instances x n_sym): fine for the ~1e3–1e4 instances a test scan produces, but a
+full 201x201 raster gives ~2e5 and it never finishes. For a full raster:
+
+```bash
+LAUE_SKIP_CLUSTER=1 python parentbeta_validate.py <phase> <nw> env    # stops after the npz
+python cluster_orientations.py <validated.npz> <clustered.npz> 1.0 <phase>
+```
+
+`cluster_orientations.py` is KD-tree based (quaternions; a misorientation cut theta becomes a radius
+`sqrt(2-2cos(theta/2))`), and clusters are **connected components**, which — unlike greedy
+assignment — do not depend on iteration order. 1,076 instances in 0.22 s.
+
+> **Trap, and it cost real time: the symmetry operator multiplies on the RIGHT.** The pipeline's
+> misorientation is `min_S angle(A^T B S)`. The left-handed form `A^T S B` is a *different*
+> quantity — verified numerically, they differ by up to **78.7 deg** — and using it silently split
+> 120 of 392 real grains while every synthetic test passed. Gate any new orientation code against
+> `laue_material.misorientation` / `midas_stress` directly, never against your own reimplementation:
+> a test written from the same misunderstanding as the code agrees with it perfectly.
+
+Merging shards: each shard's orchestrator numbers its images `1..N` **independently**, so image
+numbers collide across shards. Merge on the stored `frames` field (the source `.h5` filename),
+which is unique map-wide.
 
 **Three lessons that cost real time, and generalize to any material:**
 
@@ -216,6 +291,17 @@ Then, always: `regrain.py` (contiguity-aware counts — pass the scan's own meas
 3. **"Corroboration" must beat chance.** With 2,537 candidate clusters, a random orientation lands
    within 1.74° of one 9% of the time. The same statistic was genuinely strong at 767 clusters.
    Measure it before quoting it.
+4. **Tune the threshold on VALIDATED orientations, not raw ones.** A looser threshold always yields
+   more raw "unique orientations" and they are overwhelmingly noise. On Zn: 99.5 gave 3,023 raw
+   orientations/frame at 0.4 img/s (the flood), 99.8 gave 7 and 99.9 gave 4 — but after the
+   per-frame Poisson test, 99.8 gave **2.07x more validated** orientations than 99.9 *and* lost no
+   frames, while 99.9 dropped 9 of 201 frames below `MinNrSpots` entirely.
+5. **A texture null must be indexability-matched.** Detector coverage, the energy window and the
+   reflection list all make some orientations easier to index than others, so a peaked pole figure
+   can be an artefact of what is *indexable*. Compare against random orientations passed through the
+   same "at least MinNrSpots reflections on the detector" filter, not a flat sphere — and use one
+   representative per grain, since one grain contributes many positions and instances are not
+   independent samples.
 
 ---
 
@@ -256,44 +342,71 @@ independent copy when tarred) — but only within one filesystem; check `stat -c
 
 ---
 
-## Phase 6 — Porting to a non-Ti material (do this first, or the nulls lie)
+## Phase 6 — Material configuration (the port is done; verify it)
 
-Each of these reads a Ti lattice or a `valid_hkls_Ti_*.csv` by name. Nothing errors if you leave
-them — the reflection list simply belongs to another material, and every downstream null is
-computed against it.
+`analysis/laue_material.py` is the single source of truth. It parses the **indexing parameter
+file** — the same file the indexer consumed — for lattice, space group, symmetry, detector
+geometry, energy window and the reflection-list path, so the analysis physically cannot be run
+against a different material's reflections than the indexing was.
 
-| file (in `analysis/`) | lines | hard-coded |
-|---|---|---|
-| `null_model.py` | 38–46 | HCP a/c, BCC a, `valid_hkls_Ti_{alpha,beta}.csv` |
-| `parentbeta_validate.py` | 49–65 | same |
-| `exclusion_null.py` | 39–47 | same |
-| `beta_alpha_exclusion_census.py` | 57–65 | same |
-| `map_validate_cluster.py` | 28–34 | HCP + α hkls |
-| `beta_map_validate.py` | 17–18 | BCC + β hkls |
-| `grain_extent_backfill.py` | 33–38 | HCP + α hkls |
-| `parentbeta_backfill.py` | 33–40 | both |
-| `batch_peel_driver.py` | 30–70 | HCP + α hkls + `params_Ti_alpha.txt` |
-| `exposure_signal_check.py` | 24–25 | BCC + β hkls |
+```python
+from laue_material import Phase
+ph = Phase.load("zn")            # -> $LAUE_PARAMS_ZN, else $LAUE_PARAMS
+ph.B, ph.hkls, ph.sym_ops        # reciprocal matrix, reflections, proper rotations
+ph.project(OM, with_energy=True) # (n,3): px, py, E_keV
+ph.misorientation(A, Bs)         # DEGREES, symmetry-reduced
+```
 
-Also:
+There is **no built-in default material**: failing to resolve `LAUE_PARAMS_<PHASE>` raises rather
+than falling back, because silently analysing one material with another's reflection list is the
+exact failure this module exists to prevent.
 
-- **Symmetry operators** are selected by the *phase name* `"alpha"`/`"beta"` → hex-12 / cubic-24
-  (`regrain.py`, `collect_scan_metrics.py`, `parentbeta_validate.py`). For a material whose phases
-  are not one hexagonal and one cubic, that mapping must change too.
-- **The orientation relationship** lives in one function: `burgers_Cv()` in
-  `parentbeta_reconstruct.py:49`, returning a `(12,3,3)` variant set. Everything downstream
-  (`pred_alpha`, `cand_parents`, `variants_matched`, the parent search) is generic in that array.
-  Swapping in K-S gives `(24,3,3)`; the **accept threshold must be re-derived** — "11 of 12" is an
-  empirical cut for Burgers, not a law, and the synthetic gate at the top of the script is how you
-  re-derive it.
-- The 100M-orientation database is **material-independent** (it is an SO(3) grid). Only the hkl
-  list and forward cache are per-phase.
+**Orientation maths comes from `midas_stress`**, the canonical MIDAS implementation (a
+byte-for-byte port of the C `GetMisorientation.h`): `misorientation_om_batch` for misorientation
+(it returns **radians** — `laue_material` converts to degrees) and `make_symmetries(sg)` for the
+operator set. `laue_material` keeps a local fallback only for environments where midas_stress will
+not import — it hard-imports `torch` at package level, which the beamline `laue_rt` env lacks.
+Cross-checked on 30,000 real Zn pairs: fallback vs midas_stress agree to **0.032 deg** worst case,
+with **0 pairs** changing side of the 1.0 deg clustering cut.
 
-A clean port is: parameterize lattice + hkl path + symmetry per phase in one small module, import
-it in the ten files above. That is a contained change and worth doing on the first non-Ti dataset
-rather than the second.
+Setting up a new material:
 
----
+```bash
+python ../GenerateHKLs.py -resultFileName $WORK/params/valid_hkls_<M>.csv \
+   -sym <F|I|C|A|R|P|B> -sgnum <SG> -latticeParameter a b c al be ga \
+   -RArray ... -PArray ... -NumPxX 2048 -NumPxY 2048 -dx 200e-6 -dy 200e-6 -Ehi <keV>
+# then let the daemon build the forward cache once (~10 min), and
+export LAUE_PHASES=<m>  LAUE_PARAMS_<M>=$WORK/params/params_<M>.txt
+```
+
+Still per-material and *not* automatic:
+
+- **The orientation relationship**, if one applies: `burgers_Cv()` in
+  `parentbeta_reconstruct.py:49`, returning a `(12,3,3)` variant set. Everything downstream is
+  generic in that array. K-S gives `(24,3,3)`; the **accept threshold must be re-derived** —
+  "11 of 12" is an empirical cut for Burgers, not a law.
+- The 100M-orientation database is **material-independent** (an SO(3) grid) — symlink it, never
+  copy 7.2 GB. Only the hkl list and forward cache are per-phase.
+
+### Same-phase problems (substrate/deposit, weld/parent, deposit on like substrate)
+
+If the two things you want to separate are the *same phase* — e.g. Zn electroplated on Zn — then
+no phase fraction, no exclusion census and no parent reconstruction applies (chain steps 4–8 are
+out). What is left:
+
+- **orientation persistence** — a substrate grain is large and continuous, so its orientation
+  recurs over a wide *contiguous* area; deposit grains do not;
+- **fluorescence pedestal** — more material in the beam path means more of its own K-alpha, which
+  lands as a *flat, detector-wide* offset. Separate it from the forward-peaked halo (air scatter +
+  thermal diffuse) by measuring detector corners against the centre; only the flat part should
+  track path length;
+- **per-spot energy** — `Phase.project(OM, with_energy=True)`, or exactly, from the stored per-spot
+  `hkl` (spots-table cols 3,4,5) and its grain's orientation matrix. The 1/e sampled depth is a
+  strong function of energy (for Zn at 45 deg: 3.4 um at 12 keV, 41 um at 30 keV, from
+  `midas_hkls.absorption`), so a thick overlayer preferentially removes *low*-energy reflections.
+
+Use them together: two independent observables that must move in the predicted directions is a far
+stronger claim than either alone, and each needs its own null (§ below).
 
 ## Invariants (violate these and the result is wrong but looks fine)
 
@@ -305,14 +418,33 @@ rather than the second.
    signal is discarded from the evidence.
 6. **Suspect success.** Most of the bugs in this pipeline reported success: a daemon killed while
    healthy, a batch flag silently ignored, a drain that stopped before the file finished writing, a
-   dict mutated during serialization, `>` refused by tcsh `noclobber`. `scripts/tests/test_streaming_regressions.py`
+   dict mutated during serialization, `>` refused by tcsh `noclobber`, an image server "running" for
+   ten minutes after its socket had timed out, `BETA_CONFIG=""` falling through to the default and
+   exiting 1 *after* alpha had already launched. `scripts/tests/test_streaming_regressions.py`
    pins the fixes; run it after touching the streaming path.
+7. **Verify a new implementation against the incumbent, on real data, at the level of the decision
+   that matters.** Agreement "to 1e-12" is not the claim; "no pair changes side of the 1.0 deg cut"
+   and "0/2000 draws change their Poisson verdict" are. Synthetic tests share your assumptions;
+   real data does not.
+8. **Empty is not zero.** `ls */*.h5 | wc -l` past ~40k files hits ARG_MAX and reports 0. A count of
+   zero output files mid-run is normal (post-processing writes them in one late batch). Neither is
+   evidence of anything.
+
+## Worked example
+
+The Zn/Zn electroplated dataset (`bt_34ide_jul26/sampleG/scan1_Laue2D`, 40,401 frames) is the first
+non-Ti material through this chain and exercised every phase; its `SURVEY.md` in
+`$LAUE_WORK/` is a filled-in template for Phase 0. Headline
+numbers, all measured: 201x201 at 1.000 um (the 45-deg trap did **not** bite — stage coordinates
+agreed with the folder name for once), wire parked so no depth resolution, 96–167 peaks/frame at
+99.8, measured random-orientation null **max 9 hits in 30,000 draws** (the analytic Poisson gate
+would have accepted down to 5), and re-gating at nhit>9 kept **78.9%** of "validated" instances.
 
 ## Done means
 
 - [ ] `SURVEY.md` exists, with measured raster + frame counts + peak density per scan
 - [ ] Phase 1 answered in writing, including which chain steps do **not** apply and why
-- [ ] Material port (§6) done, or explicitly not needed because the material is a two-phase hcp/bcc alloy
+- [ ] `LAUE_PHASES` + `LAUE_PARAMS_<PHASE>` set; §6 verified (`python laue_material.py` selftest passes)
 - [ ] Indexing complete: `output.h5` count ≈ frame count (allow ~10% for genuine blank bands)
 - [ ] Null measured on **each** scan; counts re-gated against it
 - [ ] Grain counts from `regrain.py`, with tolerance sensitivity

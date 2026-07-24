@@ -22,20 +22,15 @@ import matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt
 
 WORK="$LAUE_WORK"
 DATA="$LAUE_DATA-2/Thompson_202607/ID6_950C_HIP/SmallAreaTest1"
-H5LOC="/entry1/data/data"; HC=1.2398419739; TOL=8.0; NPX=2048; PGATE=1e-5
-P=np.array([0.028834,0.002715,0.513399]); Rrod=np.array([-1.20334591,-1.2137853,-1.21669634])
-dx=dy=0.0002; Elo,Ehi=5.,30.
-angr=np.linalg.norm(Rrod); v=Rrod/angr; c_,s_=np.cos(angr),np.sin(angr)
-rot=np.array([[c_+(1-c_)*v[0]**2,(1-c_)*v[0]*v[1]-s_*v[2],(1-c_)*v[0]*v[2]+s_*v[1]],
-              [(1-c_)*v[1]*v[0]+s_*v[2],c_+(1-c_)*v[1]**2,(1-c_)*v[1]*v[2]-s_*v[0]],
-              [(1-c_)*v[2]*v[0]-s_*v[1],(1-c_)*v[2]*v[1]+s_*v[0],c_+(1-c_)*v[2]**2]])
-roti=np.linalg.inv(rot); ki=np.array([0,0,1.0])
-a,b,c=0.2921,0.2921,0.4665; cg,sg=cos(120*pi/180),sin(120*pi/180); pv=2*pi/(a*b*c*sg)
-a0,a1,a2=a,0,0; b0,b1,b2=b*cg,b*sg,0; c0,c1,c2=0,0,c
-B=np.array([[(b1*c2-b2*c1),(c1*a2-c2*a1),(a1*b2-a2*b1)],
-            [(b2*c0-b0*c2),(c2*a0-c0*a2),(a2*b0-a0*b2)],
-            [(b0*c1-b1*c0),(c0*a1-c1*a0),(a0*b1-a1*b0)]])*pv
-HKL=np.loadtxt(f"{WORK}/params/valid_hkls_Ti_alpha.csv")[:,:3]
+H5LOC="/entry1/data/data"; HC=1.2398419739; TOL=8.0; NPX = _PH.npx_x; PGATE=1e-5
+from laue_material import Phase
+_PH = Phase.load("alpha")
+# Detector geometry from the parameter file the indexer used (laue_material).
+P = _PH.P; Rrod = _PH.Rrod
+dx = _PH.dx; dy = _PH.dy; Elo, Ehi = _PH.Elo, _PH.Ehi
+rot = _PH.rot; roti = _PH.roti; ki = _PH.ki
+
+HKL=_PH.hkls
 
 def project(OM):
     q=(OM@B@HKL.T).T; ql=np.linalg.norm(q,axis=1); m=ql>1e-9

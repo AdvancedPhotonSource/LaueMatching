@@ -8,11 +8,22 @@ Outputs per-frame accepted orientation stacks + a status log.
 import numpy as np, h5py, subprocess, os, sys, shutil, glob, json, time
 from math import cos, sin, pi
 
-WORK = "$LAUE_WORK"
-LM = "/home/beams/EPIX34ID/opt/LaueMatching"
+WORK = os.environ.get("LAUE_WORK", "$LAUE_WORK")
+LM = os.environ.get("LAUE_LM", "/home/beams/EPIX34ID/opt/LaueMatching")
 PY = sys.executable
-DATA = "$LAUE_DATA-2/Thompson_202607/ID6_950C_HIP/SmallAreaTest1"
-H5LOC = "/entry1/data/data"
+DATA = os.environ.get("LAUE_SCAN_DATA",
+                      "$LAUE_DATA-2/Thompson_202607/ID6_950C_HIP/SmallAreaTest1")
+H5LOC = os.environ.get("LAUE_H5LOC", "/entry1/data/data")
+PHASE = os.environ.get("LAUE_PHASE", "alpha")
+# Base parameter file to derive each pass's config from. Also the source of the
+# lattice, reflection list and geometry -- so the peel cannot be run against one
+# material's reflections while masking another's predicted spots.
+BASE_PARAMS = os.environ.get(f"LAUE_PARAMS_{PHASE.upper()}") or os.environ.get("LAUE_PARAMS")
+if not BASE_PARAMS:
+    # Deliberately no default. A default of params_Ti_alpha.txt would resolve
+    # successfully on the machine where that file happens to exist, and peel one
+    # material's frames against another material's reflections without complaint.
+    sys.exit(f"set LAUE_PARAMS_{PHASE.upper()} (or LAUE_PARAMS) to the params_*.txt used for indexing")
 MAX_PASS = 6
 MASK_R = 10
 SIGCAPS = [2.5, 3.0, 4.0, 5.0, 6.0, 8.0]
@@ -20,43 +31,17 @@ HC = 1.2398419739
 ST = open(f"{WORK}/batch_peel_status.txt", "w", buffering=1)
 def log(m): ST.write(m + "\n"); print(m, flush=True)
 
-P = np.array([0.028834, 0.002715, 0.513399]); Rrod = np.array([-1.20334591, -1.2137853, -1.21669634])
-dx = dy = 0.0002; nPx = 2048; Elo, Ehi = 5., 30.
-angr = np.linalg.norm(Rrod); v = Rrod/angr; c_, s_ = np.cos(angr), np.sin(angr)
-rot = np.array([[c_+(1-c_)*v[0]**2,(1-c_)*v[0]*v[1]-s_*v[2],(1-c_)*v[0]*v[2]+s_*v[1]],
-                [(1-c_)*v[1]*v[0]+s_*v[2],c_+(1-c_)*v[1]**2,(1-c_)*v[1]*v[2]-s_*v[0]],
-                [(1-c_)*v[2]*v[0]-s_*v[1],(1-c_)*v[2]*v[1]+s_*v[0],c_+(1-c_)*v[2]**2]])
-roti = np.linalg.inv(rot); ki = np.array([0, 0, 1.0])
-a, b, c = 0.2921, 0.2921, 0.4665; cg, sg = cos(120*pi/180), sin(120*pi/180)
-pv = 2*pi/(a*b*c*sg)
-a0,a1,a2=a,0,0; b0,b1,b2=b*cg,b*sg,0; c0,c1,c2=0,0,c
-B = np.array([[(b1*c2-b2*c1),(c1*a2-c2*a1),(a1*b2-a2*b1)],
-              [(b2*c0-b0*c2),(c2*a0-c0*a2),(a2*b0-a0*b2)],
-              [(b0*c1-b1*c0),(c0*a1-c1*a0),(a0*b1-a1*b0)]])*pv
-HKLS = np.loadtxt(f"{WORK}/params/valid_hkls_Ti_alpha.csv")[:, :3]
+from laue_material import Phase
+_ph = Phase.load(PHASE, BASE_PARAMS)
+nPx = _ph.npx_x
+log(f"[peel] {_ph}")
 
 def project(OM):
-    q = (OM@B@HKLS.T).T; ql = np.linalg.norm(q, axis=1); m = ql > 1e-9
-    q, ql = q[m], ql[m]; qh = q/ql[:, None]
-    kf = ki - 2*qh[:, 2:3]*qh; xd = (roti@kf.T).T; m = xd[:, 2] > 0
-    xd, ql, qh = xd[m], ql[m], qh[m]; xs = xd*P[2]/xd[:, 2:3]
-    px = (xs[:, 0]-P[0])/dx + 0.5*(nPx-1); py = (xs[:, 1]-P[1])/dy + 0.5*(nPx-1); st = -qh[:, 2]
-    mk = (px >= 0) & (px < nPx-1) & (py >= 0) & (py < nPx-1) & (st > 1e-9)
-    E = HC*ql[mk]/st[mk]/(4*pi); me = (E > Elo) & (E < Ehi)
-    return np.c_[px[mk][me], py[mk][me]]
+    return _ph.project(OM)
 
-def rmat(ax, deg):
-    u = np.asarray(ax, float); u /= np.linalg.norm(u); t = np.radians(deg)
-    K = np.array([[0,-u[2],u[1]],[u[2],0,-u[0]],[-u[1],u[0],0]])
-    return np.eye(3)+np.sin(t)*K+(1-np.cos(t))*(K@K)
-OPS = [rmat([0,0,1],60*k) for k in range(6)] + \
-      [rmat([np.cos(np.radians(x)),np.sin(np.radians(x)),0],180) for x in (0,30,60,90,120,150)]
+OPS = _ph.sym_ops
 def miso_min(A, Bs):
-    best = np.full(len(Bs), 999.)
-    for S in OPS:
-        tr = np.einsum('ij,kj,mki->m', S, A, Bs)
-        best = np.minimum(best, np.degrees(np.arccos(np.clip((tr-1)/2, -1, 1))))
-    return best
+    return _ph.misorientation(A, Bs)
 
 frames = sorted(os.path.basename(f) for f in glob.glob(f"{DATA}/*.h5"))
 log(f"BATCH PEEL: {len(frames)} frames, {MAX_PASS} passes max")
@@ -67,7 +52,7 @@ cur_folder = DATA
 for p_i in range(1, MAX_PASS+1):
     t0 = time.time()
     cfg = f"{WORK}/params/params_batchpeel_p{p_i}.txt"
-    base = open(f"{WORK}/params/params_Ti_alpha.txt").read()
+    base = open(BASE_PARAMS).read()
     lines = []
     for ln in base.splitlines():
         k = ln.split()[0] if ln.split() else ""

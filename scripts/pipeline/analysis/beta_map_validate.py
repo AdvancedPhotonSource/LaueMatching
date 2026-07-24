@@ -6,16 +6,15 @@ from scipy import ndimage as ndi
 from scipy.stats import poisson
 WORK="$LAUE_WORK"
 DATA="$LAUE_DATA-2/Thompson_202607/ID6_950C_HIP/SmallAreaTest1"
-H5LOC="/entry1/data/data"; HC=1.2398419739; TOL=8.0; NPX=2048
-P=np.array([0.028834,0.002715,0.513399]); Rrod=np.array([-1.20334591,-1.2137853,-1.21669634])
-dx=dy=0.0002; Elo,Ehi=5.,30.
-angr=np.linalg.norm(Rrod); v=Rrod/angr; c_,s_=np.cos(angr),np.sin(angr)
-rot=np.array([[c_+(1-c_)*v[0]**2,(1-c_)*v[0]*v[1]-s_*v[2],(1-c_)*v[0]*v[2]+s_*v[1]],
-              [(1-c_)*v[1]*v[0]+s_*v[2],c_+(1-c_)*v[1]**2,(1-c_)*v[1]*v[2]-s_*v[0]],
-              [(1-c_)*v[2]*v[0]-s_*v[1],(1-c_)*v[2]*v[1]+s_*v[0],c_+(1-c_)*v[2]**2]])
-roti=np.linalg.inv(rot); ki=np.array([0,0,1.0])
-B=np.eye(3)*2*pi/0.33065
-HKLS=np.loadtxt(f"{WORK}/params/valid_hkls_Ti_beta.csv")[:,:3]
+H5LOC="/entry1/data/data"; HC=1.2398419739; TOL=8.0; NPX = _PH_B.npx_x
+from laue_material import Phase
+_PH_B = Phase.load("beta")
+# Detector geometry from the parameter file the indexer used (laue_material).
+P = _PH_B.P; Rrod = _PH_B.Rrod
+dx = _PH_B.dx; dy = _PH_B.dy; Elo, Ehi = _PH_B.Elo, _PH_B.Ehi
+rot = _PH_B.rot; roti = _PH_B.roti; ki = _PH_B.ki
+B=_PH_B.B
+HKLS=_PH_B.hkls
 def project(OM):
     q=(OM@B@HKLS.T).T; ql=np.linalg.norm(q,axis=1); m=ql>1e-9
     q,ql=q[m],ql[m]; qh=q/ql[:,None]

@@ -21,39 +21,23 @@ W = os.environ.get("LAUE_WORK", "$LAUE_WORK")
 TESTSCANS = os.environ.get("LAUE_TESTSCANS", "$LAUE_DATA-2/Thompson_202607/Initial_Indexing_TestScans")
 DATA = os.environ.get("LAUE_SCAN_DATA", f"{TESTSCANS}/ID26-10x10um_0p25umStepSize_TestingIndexing")
 RESDIR = lambda ph: os.environ.get(f"LAUE_SCAN_{ph.upper()}", f"{TESTSCANS}/laue_Matching_Results/results/{ph}_20260717_161826")
-H5LOC = "/entry1/data/data"; HC = 1.2398419739; TOL = 8.0; NPX = 2048
+H5LOC = "/entry1/data/data"; HC = 1.2398419739; TOL = 8.0
 PREFIX = os.environ.get("LAUE_OUT_PREFIX", "scan")
-P = np.array([0.028834, 0.002715, 0.513399]); Rrod = np.array([-1.20334591, -1.2137853, -1.21669634])
-dx = dy = 0.0002; Elo, Ehi = 5., 30.
-angr = np.linalg.norm(Rrod); v = Rrod/angr; c_, s_ = np.cos(angr), np.sin(angr)
-rot = np.array([[c_+(1-c_)*v[0]**2, (1-c_)*v[0]*v[1]-s_*v[2], (1-c_)*v[0]*v[2]+s_*v[1]],
-                [(1-c_)*v[1]*v[0]+s_*v[2], c_+(1-c_)*v[1]**2, (1-c_)*v[1]*v[2]-s_*v[0]],
-                [(1-c_)*v[2]*v[0]-s_*v[1], (1-c_)*v[2]*v[1]+s_*v[0], c_+(1-c_)*v[2]**2]])
-roti = np.linalg.inv(rot); ki = np.array([0, 0, 1.0])
 
 NFR = int(sys.argv[1]) if len(sys.argv) > 1 else 150
 NDR = int(sys.argv[2]) if len(sys.argv) > 2 else 200
 NW  = int(sys.argv[3]) if len(sys.argv) > 3 else 4
 
-def hexB():
-    a, b, c = 0.2921, 0.2921, 0.4665; cg, sg = cos(120*pi/180), sin(120*pi/180); pv = 2*pi/(a*b*c*sg)
-    a0, a1, a2 = a, 0, 0; b0, b1, b2 = b*cg, b*sg, 0; c0, c1, c2 = 0, 0, c
-    return np.array([[(b1*c2-b2*c1), (c1*a2-c2*a1), (a1*b2-a2*b1)],
-                     [(b2*c0-b0*c2), (c2*a0-c0*a2), (a2*b0-a0*b2)],
-                     [(b0*c1-b1*c0), (c0*a1-c1*a0), (a0*b1-a1*b0)]])*pv
-
-BS = {"alpha": (hexB(), np.loadtxt(f"{W}/params/valid_hkls_Ti_alpha.csv")[:, :3]),
-      "beta":  (np.eye(3)*2*pi/0.33065, np.loadtxt(f"{W}/params/valid_hkls_Ti_beta.csv")[:, :3])}
-
-def project(OM, B, HKLS):
-    q = (OM@B@HKLS.T).T; ql = np.linalg.norm(q, axis=1); m = ql > 1e-9
-    q, ql = q[m], ql[m]; qh = q/ql[:, None]
-    kf = ki - 2*qh[:, 2:3]*qh; xd = (roti@kf.T).T; m = xd[:, 2] > 0
-    xd, ql, qh = xd[m], ql[m], qh[m]; xs = xd*P[2]/xd[:, 2:3]
-    px = (xs[:, 0]-P[0])/dx + 0.5*(NPX-1); py = (xs[:, 1]-P[1])/dy + 0.5*(NPX-1); st = -qh[:, 2]
-    mk = (px >= 0) & (px < NPX-1) & (py >= 0) & (py < NPX-1) & (st > 1e-9)
-    E = HC*ql[mk]/st[mk]/(4*pi); me = (E > Elo) & (E < Ehi)
-    return np.c_[px[mk][me], py[mk][me]]
+# Lattice, reflection list, detector geometry and energy window all come from the
+# parameter file the indexer itself used -- see laue_material. Set LAUE_PHASES to
+# the phases present (single-phase materials: LAUE_PHASES=zn) and
+# LAUE_PARAMS_<PHASE> to each params_*.txt.
+from laue_material import Phase
+PHASES = [p.strip() for p in os.environ.get("LAUE_PHASES", "alpha,beta").split(",") if p.strip()]
+BS = {ph: Phase.load(ph) for ph in PHASES}
+NPX = next(iter(BS.values())).npx_x
+for ph, obj in BS.items():
+    print(f"  {ph}: {obj}", flush=True)
 
 def rand_om(rng):
     q = rng.normal(size=4); q /= np.linalg.norm(q); w, x, y, z = q
@@ -61,7 +45,7 @@ def rand_om(rng):
                      [2*(x*y+w*z), 1-2*(x*x+z*z), 2*(y*z-w*x)],
                      [2*(x*z-w*y), 2*(y*z+w*x), 1-2*(x*x+y*y)]])
 
-mapping = json.load(open(f"{RESDIR('alpha')}/frame_mapping.json"))
+mapping = json.load(open(f"{RESDIR(PHASES[0])}/frame_mapping.json"))
 img2file = {int(k): vv["file"] for k, vv in mapping.items() if isinstance(vv, dict) and "file" in vv}
 allimg = sorted(img2file)
 sel = allimg[::max(1, len(allimg)//NFR)][:NFR]
@@ -82,10 +66,10 @@ def job(inum):
     tree = cKDTree(np.c_[xs, ys]); npeaks = len(xs)
     rng = np.random.default_rng(inum)
     out = {}
-    for ph, (B, HKL) in BS.items():
+    for ph, phase in BS.items():
         hits = []; npred = []
         for _ in range(NDR):
-            pr = project(rand_om(rng), B, HKL)
+            pr = phase.project(rand_om(rng))
             if not len(pr):
                 hits.append(0); npred.append(0); continue
             d, _ = tree.query(pr); hits.append(int((d < TOL).sum())); npred.append(len(pr))
