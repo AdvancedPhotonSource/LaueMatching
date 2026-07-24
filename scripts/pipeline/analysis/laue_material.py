@@ -373,6 +373,26 @@ def selftest() -> None:
     assert len(sym_ops_for_spacegroup(229)) == 24     # BCC  (Ti beta)
     assert len(sym_ops_for_spacegroup(225)) == 24     # FCC
 
+    # When midas_stress is present the operators come from make_symmetries, so
+    # pin that they are the SAME SET as the fallback tables -- otherwise grain
+    # counts would change silently depending on whether midas_stress imported.
+    #
+    # Tolerance is 1e-4, not machine epsilon, and deliberately so: midas_stress
+    # stores its symmetry quaternions rounded to 5 decimals (0.86603 for sqrt(3)/2,
+    # 0.70711 for sqrt(2)/2), so its operators are not exactly orthogonal --
+    # |det - 1| ~ 3e-5, and the group closes only to ~3e-5. That is ~0.002 deg of
+    # angular error against a 1.0 deg clustering cut, i.e. 500x smaller than the
+    # decision it feeds, but comparing at 1e-9 reports a false mismatch.
+    if _midas_stress() is not None:
+        for sg, local in ((194, _hex12()), (229, _cub24()), (225, _cub24())):
+            ms = sym_ops_for_spacegroup(sg)
+            assert len(ms) == len(local), f"SG{sg}: {len(ms)} vs {len(local)} operators"
+            worst = max(np.abs(local - A).reshape(len(local), -1).max(axis=1).min()
+                        for A in ms)
+            assert worst < 1e-4, f"SG{sg}: operator sets differ by {worst:.2e}"
+        print("  midas_stress operator sets match the fallback tables "
+              f"(worst {worst:.1e}; midas_stress constants are 5-decimal rounded)")
+
     for nm, ops in (("hex12", _hex12()), ("cub24", _cub24()), ("tet8", _tet8()),
                     ("trig6", _trig6()), ("trig3", _trig3()), ("orth4", _orth4()),
                     ("mono2", _mono2()), ("tri1", _tri1())):
