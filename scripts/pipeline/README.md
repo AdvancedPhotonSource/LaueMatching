@@ -20,28 +20,32 @@ which analyses the material system actually supports, index, analyse, report.
 
 ## Quick start — this beamline (34-ID-E)
 
-Everything is already installed and configured; the command is one line:
+Everything is installed; the launch is one line, but **it must carry the site paths** — the
+CONFIG block ships with portable defaults (`WORK=$HOME/laue_run`, `PY=python`), *not* with
+34-ID-E's values baked in:
 
 ```bash
-cd $LAUE_WORK     # working dir (params, database, launcher)
-./run_laue.sh  /path/to/DATA_FOLDER                   # index alpha+beta live as frames land
-touch /path/to/DATA_FOLDER/STOP_LAUE                  # stop
+WORK=$LAUE_WORK \
+PY=/home/beams/EPIX34ID/conda-envs/laue_rt/bin/python \
+ALPHA_CONFIG=$LAUE_WORK/params/params_Ti_alpha.txt \
+BETA_CONFIG=$LAUE_WORK/params/params_Ti_beta.txt \
+/home/beams/EPIX34ID/opt/LaueMatching/scripts/pipeline/run_laue.sh /path/to/DATA_FOLDER
+touch /path/to/DATA_FOLDER/STOP_LAUE                  # stop a watch-mode run
 ```
 
-There is **one** launcher — `scripts/pipeline/run_laue.sh` — and the `run_laue.sh` in the working
-directory is a symlink to it. Its **CONFIG block at the top** holds the values you would otherwise
-set by hand; on this beamline they are already filled in:
+There is **one** launcher — `scripts/pipeline/run_laue.sh`. Its **CONFIG block at the top** is where
+these live; every entry is `${VAR:-default}`, so each can be set per run in the environment (as
+above) or made permanent by editing the block:
 
-| CONFIG value | Set to (34-ID-E) |
+| CONFIG value | 34-ID-E value |
 |---|---|
-| `SCRIPTS` — LaueMatching install | `/home/beams/EPIX34ID/opt/LaueMatching/scripts` |
+| `SCRIPTS` — LaueMatching install | `/home/beams/EPIX34ID/opt/LaueMatching/scripts` (auto-derived from the launcher's own path) |
 | `PY` — Python environment | `/home/beams/EPIX34ID/conda-envs/laue_rt/bin/python` (the `laue_rt` conda env) |
 | `WORK` — working dir | `$LAUE_WORK` (parameter files, database, results) |
 | `ALPHA_CONFIG` / `BETA_CONFIG` | `$WORK/params/params_Ti_alpha.txt` / `..._beta.txt` |
 
-**To change `WORK`, `PY`, or the config paths, edit that CONFIG block** — that is the one place they
-live. (You can also override any of them for a single run as an environment variable, e.g.
-`WORK=/somewhere ./run_laue.sh DATA_FOLDER`.)
+If `WORK` is left unset the run lands in `$HOME/laue_run` and the parameter-file lookup fails
+there — a wrong path, not a missing one, so check the launcher's echoed paths before walking away.
 
 The analysis scripts in `analysis/` are run with the same Python, e.g.
 `/home/beams/EPIX34ID/conda-envs/laue_rt/bin/python analysis/parentbeta_reconstruct.py 30`.
