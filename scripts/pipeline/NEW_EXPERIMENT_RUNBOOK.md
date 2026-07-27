@@ -412,6 +412,24 @@ out). What is left:
 Use them together: two independent observables that must move in the predicted directions is a far
 stronger claim than either alone, and each needs its own null (§ below).
 
+**Do not let a threshold define the groups you then test.** It is tempting to *label* each
+orientation substrate/deposit by a footprint-or-energy cutoff and then compare the two labels'
+energies or footprints — but that contrast is **circular**: the label was built from the very
+quantity being contrasted (on Zn/Zn the circular split reads a spectacular −0.64 keV / −0.73, an
+artefact of the cutoff, not a measurement). The honest test asks whether two *independently
+measured* signatures **agree**: `corr(log footprint, median energy)`, footprint from the clustering
+geometry and energy from the spot wavelengths, nothing shared. On Zn/Zn that is −0.10 (wrong sign,
+r²~1%): the layers are real on the *map* but not separable *per position*. Keep any threshold-defined
+split only as map colouring, and store the independent-test statistic (and a warning) next to it —
+see `separate_layers.py`.
+
+**State the aggregation of every map correlation, and keep it fixed.** "footprint vs pedestal" is
+two different numbers: *per grain* (one point per cluster, −0.12 on Zn/Zn) and *per scan position*
+(one point per occupied pixel, −0.33). Both are legitimate and point the same way, but they are not
+interchangeable — the per-position measure is the one comparable to the optical/ground-truth map
+(Zn/Zn: per-position footprint vs optical deposit = −0.39). Pick one aggregation for the narrative
+claim and use it everywhere, labelled.
+
 ## Invariants (violate these and the result is wrong but looks fine)
 
 1. Measure the null **on the scan in hand**. Never inherit one.
@@ -433,6 +451,10 @@ stronger claim than either alone, and each needs its own null (§ below).
 8. **Empty is not zero.** `ls */*.h5 | wc -l` past ~40k files hits ARG_MAX and reports 0. A count of
    zero output files mid-run is normal (post-processing writes them in one late batch). Neither is
    evidence of anything.
+9. **A threshold that defines a group makes every contrast on that group circular.** If you split
+   into A/B by a cutoff on X, "A differs from B in X" is guaranteed and meaningless. Test with an
+   *independently measured* signature instead, and store its statistic beside any threshold-defined
+   split so no reader mistakes the split for a result.
 
 ## Worked example
 
@@ -442,7 +464,8 @@ non-Ti material through this chain and exercised every phase; its `SURVEY.md` in
 numbers, all measured: 201x201 at 1.000 um (the 45-deg trap did **not** bite — stage coordinates
 agreed with the folder name for once), wire parked so no depth resolution, 96–167 peaks/frame at
 99.8, measured random-orientation null **max 9 hits in 30,000 draws** (the analytic Poisson gate
-would have accepted down to 5), and re-gating at nhit>9 kept **78.9%** of "validated" instances.
+would have accepted down to 5), and re-gating at nhit>9 kept **83.2%** (171,644 / 206,343) of
+"validated" instances.
 
 ## Done means
 
