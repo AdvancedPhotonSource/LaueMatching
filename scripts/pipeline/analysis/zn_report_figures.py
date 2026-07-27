@@ -27,7 +27,8 @@ EXT = [-100, 100, -100, 100]          # um, both axes in the sample frame
 
 def _save(fig, path):
     fig.tight_layout()
-    fig.savefig(path, dpi=130)
+    # bbox_inches='tight' + padding so suptitles at y=1.02 are never clipped
+    fig.savefig(path, dpi=130, bbox_inches="tight", pad_inches=0.35)
     plt.close(fig)
     print(f"  wrote {path}", flush=True)
 
@@ -103,34 +104,56 @@ def plate_hardening(A, out):
 
 
 def plate_grainmap(A, out):
-    """Contiguity-aware grain map and the cluster-footprint distribution."""
-    f = os.path.join(A, "substrate_deposit.npz")
+    """IPF-coloured orientation map + per-position grain footprint.
+
+    Colours each point by the crystal orientation (Zn c-axis in the sample frame
+    -> RGB), NOT by cluster id: connected-components labelling numbers clusters in
+    raster order, so a label-coloured map shows a smooth gradient that is an
+    artefact of numbering, not grain structure. Here a contiguous grain is a
+    uniform colour and fine deposit is speckle.
+    """
+    f = os.path.join(A, "..", "peel_map", "full_zn_clustered.npz")
+    f = os.path.normpath(f)
     if not os.path.exists(f):
-        print("  (skip grain plate: no substrate_deposit.npz)")
+        print("  (skip grain plate: no full_zn_clustered.npz)")
         return
-    z = np.load(f)
-    lab, row, col, sizes = z["labels"], z["row"], z["col"], z["cluster_sizes"]
+    z = np.load(f, allow_pickle=True)
+    oms, lab, fr, nh = z["oms"], z["labels"], z["frames"], z["nhit"].astype(int)
+    n = np.array([int(str(x).split("_")[-1].split(".")[0]) for x in fr])
+    row, col = (n - 1) // NR, (n - 1) % NR
+    cnt = np.bincount(lab)
 
-    grid = np.full((NR, NR), np.nan)
-    # colour by cluster id, but only for clusters seen at more than one position
-    big = set(np.where(sizes >= 2)[0].tolist())
-    for l, r_, c_ in zip(lab, row, col):
-        grid[r_, c_] = l if l in big else np.nan
+    best = {}
+    for i in range(len(oms)):
+        k = (row[i], col[i])
+        if k not in best or nh[i] > best[k][1]:
+            best[k] = (i, nh[i])
 
-    fig, ax = plt.subplots(1, 2, figsize=(13, 5.2))
-    im = ax[0].imshow(grid, origin="lower", extent=EXT, cmap="nipy_spectral", interpolation="nearest")
-    ax[0].set_title("orientation clusters recurring at ≥2 positions")
-    ax[0].set_xlabel("X (µm)"); ax[0].set_ylabel("45° axis (µm)")
+    rgb = np.zeros((NR, NR, 4)); size = np.zeros((NR, NR))
+    for (r, c), (i, _) in best.items():
+        v = np.abs(oms[i][:, 2]); v /= np.linalg.norm(v)
+        rgb[r, c, :3] = v; rgb[r, c, 3] = 1.0
+        size[r, c] = cnt[lab[i]]
 
-    s = np.sort(sizes)[::-1]
-    ax[1].loglog(np.arange(1, len(s) + 1), s, ".", ms=3)
-    ax[1].set_xlabel("cluster rank"); ax[1].set_ylabel("instances in cluster")
-    ax[1].set_title(f"{len(s)} clusters; {(s==1).sum()} single-position "
-                    f"({(s==1).mean()*100:.0f}%)")
-    ax[1].grid(alpha=.3, which="both")
-    fig.suptitle("Grain map — single-position clusters are pipeline intermediates, not grains",
-                 y=1.02, fontsize=11)
+    fig, ax = plt.subplots(1, 2, figsize=(14, 6))
+    ax[0].imshow(rgb, origin="lower", extent=EXT, interpolation="nearest")
+    ax[0].set_title("orientation map — RGB = c-axis in sample frame\n"
+                    "(uniform colour = one grain; speckle = fine deposit)")
+    lm = np.ma.masked_where(size == 0, size)
+    im = ax[1].imshow(lm, origin="lower", extent=EXT, cmap="viridis",
+                      norm=matplotlib.colors.LogNorm(vmin=1, vmax=max(cnt.max(), 2)),
+                      interpolation="nearest")
+    ax[1].set_title("grain footprint at each position (log)\n"
+                    "bright = large contiguous grain; dark = fine deposit")
+    for a in ax:
+        a.set_xlabel("X (µm)"); a.set_ylabel("45° axis (µm)")
+    plt.colorbar(im, ax=ax[1], label="instances in grain")
+    fig.suptitle("Zn grain map — coarse (substrate) vs fine (deposit)", y=1.02)
     _save(fig, os.path.join(out, "plate_grainmap.png"))
+    occ = size[size > 0]
+    print(f"    {(size>0).sum()} indexed positions; "
+          f"{(size>=100).mean()*100:.0f}% of grid in grains >=100 pos, "
+          f"{((size>0)&(size<10)).sum()} positions in grains <10")
 
 
 def plate_texture(A, out):
