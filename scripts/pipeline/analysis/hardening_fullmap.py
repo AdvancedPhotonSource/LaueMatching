@@ -2,10 +2,15 @@
 
 The hypothesis (Dina's, for Zn electroplated on Zn): a higher background marks
 positions where the beam passes through more Zn. If so the DIFFRACTION must be
-hardened there too, because the 1/e sampled depth in Zn is a strong function of
-photon energy (3.4 um at 12 keV, 41 um at 30 keV at 45 deg incidence, from
-midas_hkls.absorption) -- a thick overlayer removes low-energy reflections
-preferentially. Two independent observables, one cause.
+hardened there too. This is REFLECTION geometry, so a reflection from a substrate
+grain UNDER the deposit round-trips through it (in + out, each leg ~45 deg to the
+surface -> ~2*sqrt(2)*t of deposit). Absorption in Zn rises steeply as energy
+falls (1/e sampled depth 3.4 um at 12 keV vs 41 um at 30 keV, midas_hkls), so
+that round trip removes low-energy reflections preferentially and hardens the
+survivors. (The deposit's own surface grains are barely absorbed and stay soft,
+so the NET sign is the balance: thin deposit -> net hardening, thick -> softening
+as the substrate reflections are absorbed away.) Two independent observables, one
+cause. The transmission table below uses the 2*sqrt(2)*t round-trip path.
 
 This is the full-map version. The pilot-row version was a weak test and returned
 null: one row spans only part of the pedestal range, and within a row the scan
@@ -143,7 +148,8 @@ def main():
         from midas_hkls.absorption import linear_absorption_coefficient as mu_of
         HC = 12.398419739
         for t_um in (1, 2, 5, 10, 20):
-            # extra attenuation of a reflection at E through t um of Zn at 45 deg
+            # deposit round-trip absorption (reflection geometry): in + out,
+            # each leg at 45 deg to the surface -> path = 2*sqrt(2)*t
             w = []
             for E in (12.0, 25.0):
                 mu = mu_of("Zn", HC / E)          # 1/cm
