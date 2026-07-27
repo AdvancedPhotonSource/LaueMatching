@@ -8,3 +8,11 @@ matplotlib
 opencv-python-headless
 pyyaml
 ipywidgets
+
+# Differentiable forward model (laue_torch). Optional: only needed for
+# laue_torch.* modules and the python -m laue_torch.cli entry point.
+torch>=2.1
+midas-hkls>=0.5.0
+# Orientation/misorientation math (canonical MIDAS GetMisorientation port).
+# torch-free as of 0.8.1; used by scripts/pipeline/analysis/laue_material.py.
+midas-stress>=0.8.1

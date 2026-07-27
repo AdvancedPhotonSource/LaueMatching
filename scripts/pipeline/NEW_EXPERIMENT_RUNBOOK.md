@@ -364,10 +364,14 @@ exact failure this module exists to prevent.
 **Orientation maths comes from `midas_stress`**, the canonical MIDAS implementation (a
 byte-for-byte port of the C `GetMisorientation.h`): `misorientation_om_batch` for misorientation
 (it returns **radians** — `laue_material` converts to degrees) and `make_symmetries(sg)` for the
-operator set. `laue_material` keeps a local fallback only for environments where midas_stress will
-not import — it hard-imports `torch` at package level, which the beamline `laue_rt` env lacks.
-Cross-checked on 30,000 real Zn pairs: fallback vs midas_stress agree to **0.032 deg** worst case,
-with **0 pairs** changing side of the 1.0 deg clustering cut.
+operator set. Install it with the rest of the deps: `pip install midas-stress midas-hkls`
+(both are **torch-free** — `pip install midas-stress` needs no torch as of **0.8.1**; torch is an
+opt-in `midas-stress[torch]` extra). `laue_material` keeps a local operator fallback only for
+environments where midas_stress is not installed at all. On midas_stress **>= 0.8.1** the operators
+are exact and agree with the fallback to machine precision; older (<= 0.8.0) installs stored 5-decimal
+symmetry quaternions and agreed to **0.032 deg** worst case (still **0 pairs** across the 1.0 deg
+clustering cut, measured on 30,000 real Zn pairs), which is why the selftest tolerance is 1e-4 not
+machine epsilon.
 
 Setting up a new material:
 

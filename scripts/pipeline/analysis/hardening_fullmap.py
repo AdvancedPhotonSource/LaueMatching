@@ -134,10 +134,12 @@ def main():
     print(f"  difference: {dE:+.3f} keV")
     print("  PREDICTED if the pedestal is Zn thickness: HIGHER median E, LOWER frac<15")
 
-    # how big an effect *should* a given overlayer produce? gives the null teeth
+    # how big an effect *should* a given overlayer produce? gives the null teeth.
+    # midas_hkls is a pip dependency (pip install midas-hkls); absorption comes
+    # from its NIST MAC tables -- do not hard-code a source path, which would
+    # shadow the installed package.
     print("\n=== what thickness would this rule out? ===")
     try:
-        sys.path.insert(0, "/home/beams/S1IDUSER/opt/MIDAS/packages/midas_hkls")
         from midas_hkls.absorption import linear_absorption_coefficient as mu_of
         HC = 12.398419739
         for t_um in (1, 2, 5, 10, 20):
