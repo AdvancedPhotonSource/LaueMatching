@@ -153,7 +153,25 @@ def main():
                   f"frac<15keV = {(medE[m] < 15).mean():.3f}")
 
     # ---- split into substrate vs deposit layers ----------------------------
-    # substrate: large footprint AND/OR hard; deposit: small AND soft.
+    # ======================================================================
+    # WARNING -- DEFINITIONAL PARTITION, NOT A VALIDATED SEPARATION.
+    # `substrate` is defined immediately below as (large footprint) OR
+    # (mid footprint AND hard). Therefore ANY contrast computed on the
+    # resulting substrate/deposit flags is CIRCULAR: corr(footprint, flag)
+    # is tautological, and the energy contrast is baked in for the mid
+    # footprint band. Do NOT report those flag contrasts as evidence of
+    # layer separation (on the full map they look like -0.64 keV / -0.73,
+    # which is an artefact of THIS definition, not a measurement).
+    #
+    # The ONLY honest test of whether the two layer signatures (persistence
+    # = footprint, spectral hardness = energy) AGREE is `r` computed above
+    # on the raw, independently-measured footprint and energy. It is -0.10
+    # (WRONG SIGN vs the substrate-through-deposit prediction, r^2 ~ 1%):
+    # the layers are NOT separable per position. The flags below are kept
+    # only as a convenience map-colouring -- treat them as a threshold, not
+    # a result. The npz carries r/p and this warning so downstream readers
+    # cannot mistake the flags for a separation.
+    # ======================================================================
     med_all = np.nanmedian(medE)
     big = foot >= 50
     hard = medE >= med_all
@@ -172,11 +190,19 @@ def main():
           f"({len(both) / max(len(sub_pos | dep_pos), 1) * 100:.1f}% of occupied) "
           f"-- these are where we see substrate THROUGH the deposit")
 
+    warn = ("substrate/deposit are a DEFINITIONAL PARTITION (footprint/energy "
+            "threshold), NOT a validated separation -- contrasts on these flags "
+            "are CIRCULAR. The honest layer-agreement test is "
+            f"corr_footprint_energy = {r:+.3f} (perm p={p:.3g}): wrong sign, "
+            "~1% variance -> layers are NOT separable per position.")
     np.savez(f"{W}/analysis_out/layer_separation.npz",
              oms=oms, labels=lab, row=row, col=col, footprint=foot,
              medE=medE, nassigned=nasg, nhit=nh,
-             substrate=substrate, deposit=deposit)
+             substrate=substrate, deposit=deposit,
+             corr_footprint_energy=np.float64(r), perm_p=np.float64(p),
+             warning=warn)
     print(f"\nwrote layer_separation.npz")
+    print(f"  [guard] corr_footprint_energy={r:+.3f} p={p:.3g} stored with warning")
     print("SEPARATION_DONE", flush=True)
 
 
