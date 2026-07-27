@@ -378,11 +378,12 @@ def selftest() -> None:
     # counts would change silently depending on whether midas_stress imported.
     #
     # Tolerance is 1e-4, not machine epsilon, and deliberately so: midas_stress
-    # stores its symmetry quaternions rounded to 5 decimals (0.86603 for sqrt(3)/2,
-    # 0.70711 for sqrt(2)/2), so its operators are not exactly orthogonal --
-    # |det - 1| ~ 3e-5, and the group closes only to ~3e-5. That is ~0.002 deg of
-    # angular error against a 1.0 deg clustering cut, i.e. 500x smaller than the
-    # decision it feeds, but comparing at 1e-9 reports a false mismatch.
+    # >= 0.8.1 returns exact operators, but older installs stored their symmetry
+    # quaternions rounded to 5 decimals (0.86603 for sqrt(3)/2, 0.70711 for
+    # sqrt(2)/2), so their operators were orthogonal only to ~3e-5 (~0.002 deg,
+    # 500x smaller than the 1.0 deg clustering cut it feeds). Keep the loose
+    # tolerance so this passes against either -- comparing at 1e-9 would report a
+    # false mismatch on an older midas_stress.
     if _midas_stress() is not None:
         for sg, local in ((194, _hex12()), (229, _cub24()), (225, _cub24())):
             ms = sym_ops_for_spacegroup(sg)
