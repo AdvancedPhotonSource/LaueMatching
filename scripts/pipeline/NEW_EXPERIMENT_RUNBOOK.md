@@ -69,7 +69,7 @@ Record, per scan folder:
 | still growing? | frame count twice, 120 s apart | never index a scan still being collected |
 | peaks on one frame | detect on a background-subtracted frame, SNR>8, **area ≥ 4 px** | density regime (below) |
 | hot pixels | pixels saturated in ≥90% of ~60 frames spread over the scan | Zn scan: **36 permanent** hot pixels; only ~8% of saturated pixels were real reflections. Every frame's `max` looked like signal and was not. |
-| background, decomposed | median of four detector **corners** (flat) vs a central box (halo) | the flat part is isotropic emission (fluorescence); it is the part that tracks path length |
+| background, decomposed | median of four detector **corners** (flat) vs a central box (halo) | the flat part is isotropic — but TEST whether it is fluorescence (tracks amount) or diffuse scattering (tracks grain-size/disorder); on Zn/Zn it was scattering, see §Same-phase and invariant on the background |
 | spot shape | blob aspect ratio, median **and** p95 | Zn *looked* heavily streaked; measured median AR was 1.6 with only ~10% above 3. The eye reads the p95 tail. |
 
 **The 45° trap.** A folder called `10x10um_0p25umStepSize` measured 20.000 µm in X at 0.2500 µm and
@@ -121,7 +121,7 @@ Ask the user these, in this order. The first three block everything; the rest sh
 | steels, Fe–Ni | γ FCC + α′ BCC/BCT | parent-γ via **K-S (24)** or **N-W (12)** | swap `burgers_Cv()` (§6); re-derive the accept threshold |
 | single-phase FCC/BCC/HCP | one | twin relationships (Σ3 for FCC), texture | **no parent reconstruction** — skip steps 6–8 of the chain |
 | two unrelated phases (e.g. matrix + precipitate) | two | phase fraction, exclusion census | the parent machinery does not apply; do not run it "to see" |
-| **same phase either side** (Zn on Zn, weld/parent, epitaxial deposit) | one | orientation persistence, fluorescence pedestal, per-spot energy | **nothing crystallographic separates them** — see §6 |
+| **same phase either side** (Zn on Zn, weld/parent, epitaxial deposit) | one | Laue-footprint fragmentation, flat-background scattering, per-spot energy | **nothing crystallographic separates them** — see §Same-phase problems |
 | unknown / mixed | — | phase identification first | index each candidate phase separately, compare validated-vs-null |
 
 **Always applies, regardless of material** (this is the core, and it is where the pipeline's
@@ -398,16 +398,22 @@ If the two things you want to separate are the *same phase* — e.g. Zn electrop
 no phase fraction, no exclusion census and no parent reconstruction applies (chain steps 4–8 are
 out). What is left:
 
-- **orientation persistence** — a substrate grain is large and continuous, so its orientation
-  recurs over a wide *contiguous* area; deposit grains do not;
-- **fluorescence pedestal** — more material in the beam path means more of its own K-alpha, which
-  lands as a *flat, detector-wide* offset. Separate it from the forward-peaked halo (air scatter +
-  thermal diffuse) by measuring detector corners against the centre; only the flat part should
-  track path length;
-- **per-spot energy** — `Phase.project(OM, with_energy=True)`, or exactly, from the stored per-spot
-  `hkl` (spots-table cols 3,4,5) and its grain's orientation matrix. The 1/e sampled depth is a
-  strong function of energy (for Zn at 45 deg: 3.4 um at 12 keV, 41 um at 30 keV, from
-  `midas_hkls.absorption`), so a thick overlayer preferentially removes *low*-energy reflections.
+- **Laue footprint (orientation coherence)** — the size of an orientation cluster. But footprint is
+  NOT physical grain size: a large but terraced/twinned crystal (e.g. an electroplated deposit plate)
+  **over-segments** into many small clusters, so a small-footprint region can be *large* physical
+  crystals that are crystallographically fragmented. Cross-check against an SEM before calling it "fine
+  grained". (On Zn/Zn the deposit = large SEM plates = small Laue footprint.)
+- **the flat detector background** — do NOT assume it is fluorescence tracking "how much material".
+  Split it from the forward-peaked halo by corners-vs-centre, then TEST what it tracks: if it scales
+  with grain size / Laue footprint it is **diffuse scattering** from disordered material (fluorescence
+  from a thick sample is escape-depth *saturated* and therefore blind to grain size). On Zn/Zn the flat
+  floor tracked footprint (corr −0.33, spatial p=0) and is scattering — HIGHER over the rough,
+  fragmented deposit — not a path-length/fluorescence gauge. Decide which mechanism by the grain-size
+  dependence, not by assumption.
+- **per-spot energy** — `Phase.project(OM, with_energy=True)`, or from the stored per-spot `hkl`
+  (spots-table cols 3,4,5) and its grain's orientation. In reflection geometry a reflection from under
+  an overlayer round-trips through it and hardens; but this is a SEPARATE effect from the background
+  and was too small to detect on Zn/Zn (thin deposit, wire parked).
 
 Use them together: two independent observables that must move in the predicted directions is a far
 stronger claim than either alone, and each needs its own null (§ below).
@@ -426,9 +432,10 @@ see `separate_layers.py`.
 **State the aggregation of every map correlation, and keep it fixed.** "footprint vs pedestal" is
 two different numbers: *per grain* (one point per cluster, −0.12 on Zn/Zn) and *per scan position*
 (one point per occupied pixel, −0.33). Both are legitimate and point the same way, but they are not
-interchangeable — the per-position measure is the one comparable to the optical/ground-truth map
-(Zn/Zn: per-position footprint vs optical deposit = −0.39). Pick one aggregation for the narrative
-claim and use it everywhere, labelled.
+interchangeable — the per-position measure is the one comparable to the optical/ground-truth map. Pick
+one aggregation for the narrative claim and use it everywhere, labelled. (The *sign* of the
+optical-comparison also depends on the registration flip — see invariant #11; anchor direction on
+ground truth, not on which flip maximises |corr|.)
 
 ## Invariants (violate these and the result is wrong but looks fine)
 
@@ -459,12 +466,22 @@ claim and use it everywhere, labelled.
     positions are strongly autocorrelated, so the naive SE (and its p) is optimistic by orders of
     magnitude — on the Zn/Zn map the effective n was ~70, not 40,357 (naive p ~600x too small). Use a
     toroidal-shift or block null: shift one map relative to the other and rebuild the correlation
-    distribution. Only a correlation that clears that spread is real. Under it, Zn/Zn grain-size vs
-    optical-deposit (+0.37) SURVIVED (p=0.005) but pedestal vs optical-deposit (-0.12) did NOT (p=0.23,
-    pure coincidence). Registration got flipped once (a 180-deg motor convention) — when checking a
-    flip, compare ALL EIGHT dihedral transforms and require a decisive winner, not just "positive under
-    my guess": transpose and the 90-deg rotations are impostors on a square raster.
-11. **A null result is only as good as its power — state the effect size it can exclude.** "No texture"
+    distribution. Only a correlation that clears that spread is real (Zn/Zn footprint↔background −0.33
+    cleared it, p=0).
+11. **You CANNOT pin a registration flip / direction from the correlation magnitude.** The sign of a
+    map↔image correlation is set by the flip you chose, and BOTH signs are reachable with a strong
+    |corr| (Zn/Zn: identity flip gave footprint↔deposit −0.5, the both-flip gave +0.45 — equally
+    "strong", opposite meaning). Choosing "the flip with the biggest |corr|" is circular and flip-flops.
+    Anchor the direction on something INDEPENDENT of the correlation: the experimenter's direct
+    observation, the SEM/optical morphology, or two *different* maps that must agree (Zn/Zn: background
+    AND footprint both mark the same deposit). This cost three re-flips before it was learned — the
+    correlation refines the *fit*, it does not decide the *direction*.
+12. **Don't trust the printed optical scale bar; fit the scan→image transform from the alignment.**
+    On Zn/Zn the bar was ~2x off. Solve for scale (allow anisotropy), offset, AND rotation. And know the
+    ceiling: correlating a continuous map against a binary optical mask tops out around ~0.5 even at
+    perfect registration — a strong *visual* overlay (blobs on blobs) is not the same as a high pixel
+    correlation, so report ~0.5 as the real relationship and do not chase it higher (that fits noise).
+13. **A null result is only as good as its power — state the effect size it can exclude.** "No texture"
     / "no hardening" from p>0.05 means nothing without the detectable-effect-size. The Zn/Zn texture
     test could exclude only peak-MRD excess >~1 (moderate fibre texture would have passed unseen); the
     under-deposit within-grain test had 11% power at the 0.1 keV effect it was used to dismiss, and its
