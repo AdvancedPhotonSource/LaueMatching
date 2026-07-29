@@ -398,11 +398,13 @@ If the two things you want to separate are the *same phase* — e.g. Zn electrop
 no phase fraction, no exclusion census and no parent reconstruction applies (chain steps 4–8 are
 out). What is left:
 
-- **Laue footprint (orientation coherence)** — the size of an orientation cluster. But footprint is
-  NOT physical grain size: a large but terraced/twinned crystal (e.g. an electroplated deposit plate)
-  **over-segments** into many small clusters, so a small-footprint region can be *large* physical
-  crystals that are crystallographically fragmented. Cross-check against an SEM before calling it "fine
-  grained". (On Zn/Zn the deposit = large SEM plates = small Laue footprint.)
+- **Laue footprint (orientation coherence)** — the size of a contiguous single-orientation cluster;
+  the cleanest same-phase discriminator (Zn/Zn: substrate = large coherent grains ~213 positions,
+  deposit = fine ~36). Footprint measures crystallographic coherence, not necessarily physical grain
+  size — a terraced/twinned crystal can over-segment — so if you have an SEM, check whether "fine
+  footprint" means genuinely fine grains or a fragmented large crystal. (On Zn/Zn the deposit read as
+  fine, and the off-region SEM could not settle which morphology it was; the assignment came from the
+  co-registered maps + IPF, not the SEM.)
 - **the flat detector background** — do NOT assume it is fluorescence tracking "how much material".
   Split it from the forward-peaked halo by corners-vs-centre, then TEST what it tracks: if it scales
   with grain size / Laue footprint it is **diffuse scattering** from disordered material (fluorescence
