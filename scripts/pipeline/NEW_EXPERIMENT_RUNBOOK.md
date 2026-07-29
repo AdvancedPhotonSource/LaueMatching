@@ -455,6 +455,21 @@ claim and use it everywhere, labelled.
    into A/B by a cutoff on X, "A differs from B in X" is guaranteed and meaningless. Test with an
    *independently measured* signature instead, and store its statistic beside any threshold-defined
    split so no reader mistakes the split for a result.
+10. **A map-to-map correlation needs a SPATIAL null, never a plain permutation.** Adjacent scan
+    positions are strongly autocorrelated, so the naive SE (and its p) is optimistic by orders of
+    magnitude — on the Zn/Zn map the effective n was ~70, not 40,357 (naive p ~600x too small). Use a
+    toroidal-shift or block null: shift one map relative to the other and rebuild the correlation
+    distribution. Only a correlation that clears that spread is real. Under it, Zn/Zn grain-size vs
+    optical-deposit (+0.37) SURVIVED (p=0.005) but pedestal vs optical-deposit (-0.12) did NOT (p=0.23,
+    pure coincidence). Registration got flipped once (a 180-deg motor convention) — when checking a
+    flip, compare ALL EIGHT dihedral transforms and require a decisive winner, not just "positive under
+    my guess": transpose and the 90-deg rotations are impostors on a square raster.
+11. **A null result is only as good as its power — state the effect size it can exclude.** "No texture"
+    / "no hardening" from p>0.05 means nothing without the detectable-effect-size. The Zn/Zn texture
+    test could exclude only peak-MRD excess >~1 (moderate fibre texture would have passed unseen); the
+    under-deposit within-grain test had 11% power at the 0.1 keV effect it was used to dismiss, and its
+    95% CI *contained* the population signal. Report "excludes effects larger than E", not "no effect".
+    A Wilcoxon p=0.90 from an underpowered test is not evidence of absence.
 
 ## Worked example
 
