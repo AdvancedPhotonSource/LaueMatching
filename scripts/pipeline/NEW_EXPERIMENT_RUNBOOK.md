@@ -302,6 +302,19 @@ which is unique map-wide.
    same "at least MinNrSpots reflections on the detector" filter, not a flat sphere — and use one
    representative per grain, since one grain contributes many positions and instances are not
    independent samples.
+6. **Max MRD is binning-dependent — never quote it raw.** The peak of a pole/IPF density grows with
+   the number of cells (fewer grains per cell → higher peak from sampling): on Zn/Zn the substrate
+   c-axis "max MRD" ran 1.9→10.7 as cells went 128→4608. Only the peak measured against a null binned
+   *identically* is meaningful, and a real texture must clear that null at *every* binning — if the
+   p-value flickers around chance as you rebin, there is no texture (just sampling noise).
+7. **Texture needs enough INDEPENDENT grains — and a 1-µm map of coarse grains has very few.** A dense
+   step oversamples each grain many times; the independent-orientation count is set by *area / grain
+   area*, not by the number of points. Zn/Zn: a 200×200 µm map at 1 µm held only ~350 independent
+   substrate grains (8-µm grains oversampled ~8×) — far short of the ~5,000–10,000 for an ODF, so a
+   flat texture result there is undersampling, not absence. For a texture survey, set the **step ≈ the
+   grain size** (each point a fresh grain) and spend the points on *area*: the same grid at 10 µm
+   instead of 1 µm covers 100× the area and ~20,000 grains at the same beamtime. Max step ≈ 2–3× the
+   grain size before you skip the fine tail and bias toward the coarsest grains.
 
 ---
 
