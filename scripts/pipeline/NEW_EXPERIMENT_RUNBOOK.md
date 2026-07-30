@@ -65,12 +65,34 @@ Record, per scan folder:
 | image dataset path + shape | `visititems` above | goes in the params / `run_laue.sh` arg |
 | **stage coordinates** | `entry1/sample/sampleX`, `sampleZ` (or the local equivalent) | **the real raster** |
 | step size and span | `np.unique(np.diff(sorted(X)))` | see the 45° trap below |
+| **position-label integrity** | `np.unique(np.diff(X))` in **acquisition order** — look for `0` and `2*step` | a readback race, see below. Present on **both** Zn scans, so assume it until checked |
 | exposure | frame header / folder name, then confirm against counts | 0.25 s vs 1 s changes what is detectable |
 | still growing? | frame count twice, 120 s apart | never index a scan still being collected |
 | peaks on one frame | detect on a background-subtracted frame, SNR>8, **area ≥ 4 px** | density regime (below) |
 | hot pixels | pixels saturated in ≥90% of ~60 frames spread over the scan | Zn scan: **36 permanent** hot pixels; only ~8% of saturated pixels were real reflections. Every frame's `max` looked like signal and was not. |
 | background, decomposed | median of four detector **corners** (flat) vs a central box (halo) | the flat part is isotropic — but TEST whether it is fluorescence (tracks amount) or diffuse scattering (tracks grain-size/disorder); on Zn/Zn it was scattering, see §Same-phase and invariant on the background |
 | spot shape | blob aspect ratio, median **and** p95 | Zn *looked* heavily streaked; measured median AR was 1.6 with only ~10% above 3. The eye reads the p95 tail. |
+
+**The stage-readback race — mislabels, NOT gaps.** If the acquisition-order diffs of the fast axis
+contain `0` and `2*step` as adjacent pairs, the readback is being sampled *after* the move begins and
+one frame takes the next position's label. On sampleH this hit 180 of 20,301 frames (0.89%); the same
+signature is in sampleG, so it is beamline/macro behaviour, not a one-off.
+
+Decide the mechanism from the **images**, because the two readings have opposite fixes. Labels read
+`X, X+2, X+2, X+3`. If the motor genuinely skipped, the two frames sharing a label are *co-located*;
+if the readback merely led, they are one step apart. Compare their residual-pattern similarity
+against a 1-step and a 2-step control taken **from the same four frames**, so row, time and
+brightness are shared and both controls hold under either hypothesis. On sampleH: suspect pair
+**+0.8742** against a 1 µm control of **+0.8738** — identical to four decimals — with the 2 µm
+control at **+0.7488**, which proves the measure resolves one step from two. 0 of 20 pairs were
+bit-identical, so not a duplicated readout either.
+
+**Conclusion: the stage visited every position exactly once. No gaps, no duplicates — only wrong
+labels.** True position is therefore index-derived, `X = X0 + ((N-1) mod NR)`. Validate that it
+reproduces the recorded value on every unaffected frame and differs by exactly one step on precisely
+the flagged ones (sampleH: 20,121 exact, 180 off by exactly +1, nothing unexplained). Apply it with
+`analysis/fix_positions.py` **before `regrain.py`** — raw labels inject one false hole and one
+doubled pixel per affected frame directly into the contiguity test the grain count rests on.
 
 **The 45° trap.** A folder called `10x10um_0p25umStepSize` measured 20.000 µm in X at 0.2500 µm and
 14.142 µm in Z at 0.1768 µm — exactly 1/√2, because the sample sits at 45° to the beam. It is a
@@ -105,6 +127,21 @@ Ask the user these, in this order. The first three block everything; the rest sh
    `P_Array` / `R_Array` / pixel size / detector size come from it. Geometry from another run is
    the single fastest way to get a confident, wrong answer.
 3. **Energy window** of the incident spectrum (keV).
+3b. **What frame are the orientations in, and where is the specimen surface?** The indexer's
+   orientation matrices live in the **LAB** frame, and **lab Z is the incident beam** —
+   `Phase.project` computes `kf = ki - 2*qh[:,2]*qh`, which is only valid for `ki = (0,0,1)`
+   (confirm with `ph.ki`). At 34-ID-E the detector normal is lab **+Y** at 513 mm, so beam and
+   detector sit at **90°** and the panel is edge-on to the beam. Consequence: *any* "declination
+   from Z" is declination from the **beam**, an instrument direction with no sample meaning —
+   c-axis-along-Z does **not** mean c-axis-along-growth. Get the specimen surface from the
+   **measured stage motion**, never a convention: both raster axes lie in the surface, so their
+   cross product is the normal (45° mount → `(0,-0.7071,0.7071)`, exactly 45.00° to the beam).
+   Convert every declination to the surface normal before interpreting it. On sampleH that turned a
+   meaningless "69.7° from Z" into "**c-axis avoids the growth direction by 8×**".
+   *Do not* try to confirm the beam axis by rotating a crystal about it and checking the pattern
+   rotates rigidly on the detector — that identity needs a detector *perpendicular* to the beam,
+   and here it is edge-on, so all three axes fail and prove nothing. The real validation is that
+   the forward model predicts observed peaks far above a random-orientation null.
 4. **Is there depth resolution?** With a wire/coded aperture, each frame is one depth. Without one
    (the plain pink-beam case), the whole illuminated column superimposes — hundreds of grains per
    frame, and no per-grain depth. This changes what can be claimed, not just how hard it is.
@@ -193,7 +230,7 @@ Machines that can see `$LAUE_ROOT` and have the epix34id LaueMatching install
 
 | host | RAM | cores | GPUs | notes |
 |---|---|---|---|---|
-| copland | 2015 GB | 96 | 2x A6000 48 GB | **cannot write** to the-analysis-host -- point ResultDir elsewhere |
+| copland | 2015 GB | 96 | 2x A6000 48 GB | **cannot even READ** the-analysis-host (not merely write) -- unusable for indexing this data, despite the RAM |
 | alleppey | 502 GB | 112 | 4x H100 80-96 GB | usually shared; check `nvidia-smi` first |
 | sentosa | 250 GB | 64 | 2x H200 144 GB + 2x Blackwell | Blackwell cards (2,3) are **sm_120**, often in use |
 | shannon | 125 GB | 40 | 3x A4500 20 GB | 34-ID-E box; smallest RAM, budget 2 daemons max |
@@ -267,6 +304,22 @@ python cluster_orientations.py <validated.npz> <clustered.npz> 1.0 <phase>
 `sqrt(2-2cos(theta/2))`), and clusters are **connected components**, which — unlike greedy
 assignment — do not depend on iteration order. 1,076 instances in 0.22 s.
 
+**But connected components CHAIN, and the price is real.** "Within tol of *some* neighbour" links
+A–B and B–C at 0.9° each even when A–C are 1.8° apart, so a "1.0° cluster" can span several degrees.
+On sampleH a 924-position cluster had **2.65° median internal spread (6.17° max)** and failed the
+raw-image test at chance (peak at the predicted position in 3 of 12 cells, 1.1 expected) while each
+of its positions indexed perfectly on *its own* orientation (17–73% vs a 0–7% random null). Per-instance
+indexing succeeding while one shared orientation fails is exactly what over-merging looks like.
+
+Use `--diameter` for a **diameter criterion** — complete linkage, so every member is within tol of
+every *other* member, not merely of some neighbour. It removes chaining by construction, is
+deterministic, and on sampleH **halved the tolerance sensitivity of the grain count, 4.28× → 2.02×**,
+while cutting the largest "grain" from 1,833 positions to 1,298 (the 1,833 was the chain). Two
+warnings: `regrain.py`'s tolerance sweep silently *changes algorithm* at the 1.0° boundary (supplied
+labels at ≥1.0, a greedy **leader** loop below it), so its sweep varies definition as well as cut;
+and any residual spread after de-chaining is physics — sampleH's grain population spans 0.08°–2.7°
+internal spread, so no single cut is "correct" and every count must carry its tolerance.
+
 > **Trap, and it cost real time: the symmetry operator multiplies on the RIGHT.** The pipeline's
 > misorientation is `min_S angle(A^T B S)`. The left-handed form `A^T S B` is a *different*
 > quantity — verified numerically, they differ by up to **78.7 deg** — and using it silently split
@@ -296,6 +349,13 @@ which is unique map-wide.
    orientations/frame at 0.4 img/s (the flood), 99.8 gave 7 and 99.9 gave 4 — but after the
    per-frame Poisson test, 99.8 gave **2.07x more validated** orientations than 99.9 *and* lost no
    frames, while 99.9 dropped 9 of 201 frames below `MinNrSpots` entirely.
+   **And re-gate against the MEASURED null before you compare — the analytic gate is not enough.**
+   On sampleH the analytic-Poisson counts made 99.5 look 1.34× better than 99.8 (794 vs 592), but after
+   re-gating at the measured null max the two were **equal** (495 vs 486) for 2.3× the compute, and
+   99.5's purity was far worse (62% of its "validated" instances survived, against 82%). The gate
+   admits instances down to nhit 5 while the measured null reaches 10–11, so the analytic-validated
+   comparison is dominated by exactly the marginal instances the null rejects. Compare after
+   `empirical_gate.py`, never before.
 5. **A texture null must be indexability-matched.** Detector coverage, the energy window and the
    reflection list all make some orientations easier to index than others, so a peaked pole figure
    can be an artefact of what is *indexable*. Compare against random orientations passed through the
@@ -307,6 +367,14 @@ which is unique map-wide.
    c-axis "max MRD" ran 1.9→10.7 as cells went 128→4608. Only the peak measured against a null binned
    *identically* is meaningful, and a real texture must clear that null at *every* binning — if the
    p-value flickers around chance as you rebin, there is no texture (just sampling noise).
+   **Identical binning is not sufficient — the null must also be SUBSAMPLED to the measured n.**
+   Max MRD rises as sample size falls, so 1,132 measured orientations against a 20,000-orientation
+   null on the same grid is meaningless even at matched cells: it produced a spurious "126.9 MRD vs
+   4.3" on sampleH, where almost every cell held 0.12 poles and one cell catching a handful read >100.
+   Coarsen the bins to suit n, smooth, subsample the null to the same count (median over draws), and
+   quote the **ratio**: sampleH's basal texture is 8.34/1.98 = 4.2, which independently matches
+   `texture_null.py`'s 29.51/6.11 = 4.8. Agreeing ratios from two implementations is the check;
+   the absolute MRD is not comparable across methods.
 7. **Texture needs enough INDEPENDENT grains — and a 1-µm map of coarse grains has very few.** A dense
    step oversamples each grain many times; the independent-orientation count is set by *area / grain
    area*, not by the number of points. Zn/Zn: a 200×200 µm map at 1 µm held only ~350 independent
@@ -464,7 +532,10 @@ ground truth, not on which flip maximises |corr|.)
    healthy, a batch flag silently ignored, a drain that stopped before the file finished writing, a
    dict mutated during serialization, `>` refused by tcsh `noclobber`, an image server "running" for
    ten minutes after its socket had timed out, `BETA_CONFIG=""` falling through to the default and
-   exiting 1 *after* alpha had already launched. `scripts/tests/test_streaming_regressions.py`
+   exiting 1 *after* alpha had already launched, and a shard driver logging "all 7 launched" with
+   **three** running because `ssh` inside a `while read` loop eats the loop's stdin and swallows the
+   remaining plan lines. (Use `ssh -n` and a `for` loop over an array — and verify **per shard**,
+   never from the launcher's own log.) `scripts/tests/test_streaming_regressions.py`
    pins the fixes; run it after touching the streaming path.
 7. **Verify a new implementation against the incumbent, on real data, at the level of the decision
    that matters.** Agreement "to 1e-12" is not the claim; "no pair changes side of the 1.0 deg cut"

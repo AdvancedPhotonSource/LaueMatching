@@ -128,6 +128,81 @@ def cluster(oms: np.ndarray, sym_ops: np.ndarray, tol_deg: float,
     return labels
 
 
+def miso_matrix(oms: np.ndarray, sym_ops: np.ndarray) -> np.ndarray:
+    """Full n x n symmetry-reduced misorientation in degrees, vectorised.
+
+    Generalises the pipeline's own one-vs-many form
+
+        np.einsum('ij,kj,mki->m', S, A, Bs)
+
+    to all pairs, one contraction per symmetry operator:
+
+        np.einsum('ij,pkj,qki->pq', S, A, A)
+
+    Generalising the existing formula (rather than deriving a new one) preserves the
+    right-multiply convention -- the left-handed form differs by up to 78 deg and
+    silently splits real grains.
+
+    NOTE ON PRECISION. This uses ``sym_ops`` directly, whereas
+    ``laue_material.misorientation`` routes through midas_stress, whose symmetry
+    quaternions are 5-decimal rounded. Measured over 59,700 real Zn pairs the two differ
+    by 0.0247 deg worst case (median 0.00025), which flips **0** pairs across a 1.0 deg
+    cut, 9 across 0.5 deg and 14 across 0.3 deg (0.02%). Negligible against a typical
+    tolerance sweep, but a real floor on tight-cut counts -- do not quote 0.3 deg results
+    as exact.
+
+    Speed matters here: n separate misorientation calls per component did not finish a
+    60k-instance sweep in 84 minutes; this form completes it in 26 s.
+    """
+    best = None
+    for S in np.asarray(sym_ops):
+        tr = np.einsum('ij,pkj,qki->pq', S, oms, oms, optimize=True)
+        d = np.degrees(np.arccos(np.clip((tr - 1.0) * 0.5, -1.0, 1.0)))
+        best = d if best is None else np.minimum(best, d)
+    np.fill_diagonal(best, 0.0)
+    return 0.5 * (best + best.T)
+
+
+def cluster_diameter(oms: np.ndarray, sym_ops: np.ndarray, tol_deg: float,
+                     verbose: bool = True) -> np.ndarray:
+    """Diameter-constrained clustering: every member within tol of every OTHER member.
+
+    Connected components link A-B and B-C at 0.9 deg each even when A-C are 1.8 deg
+    apart, so a "1.0 deg cluster" can span several degrees. On sampleH a 924-position cluster
+    had 2.65 deg median internal spread and failed a raw-image test at chance, while each
+    of its positions indexed correctly on its own orientation -- the signature of
+    over-merging. Complete linkage removes chaining by construction and is deterministic.
+    On sampleH it halved the tolerance sensitivity of the grain count (4.28x -> 2.02x).
+
+    Diameter clusters are subsets of the connected components at the same tolerance, so
+    the components bound the work and only their internal matrices are built.
+    """
+    from scipy.cluster.hierarchy import fcluster, linkage
+    from scipy.spatial.distance import squareform
+
+    base = cluster(oms, sym_ops, tol_deg, verbose=False)
+    labels = np.full(len(oms), -1, np.int64)
+    nxt = 0
+    viol = 0
+    for c in range(base.max() + 1):
+        idx = np.where(base == c)[0]
+        if len(idx) == 1:
+            labels[idx] = nxt; nxt += 1
+            continue
+        M = miso_matrix(oms[idx], sym_ops)
+        fl = fcluster(linkage(squareform(M, checks=False), method="complete"),
+                      t=tol_deg, criterion="distance")
+        for v in np.unique(fl):
+            sel = fl == v
+            if sel.sum() > 1 and M[np.ix_(sel, sel)].max() > tol_deg + 1e-6:
+                viol += 1
+            labels[idx[sel]] = nxt; nxt += 1
+    if verbose:
+        print(f"  -> {nxt} diameter clusters from {base.max()+1} connected components "
+              f"({viol} diameter violations)", flush=True)
+    return labels
+
+
 def _greedy(oms, ph, tol):
     """The original greedy assignment, for the equivalence gate only."""
     labels = np.full(len(oms), -1)
@@ -229,16 +304,20 @@ if __name__ == "__main__":
         selftest(ph)
         sys.exit(0)
 
-    src, dst = sys.argv[1], sys.argv[2]
-    tol = float(sys.argv[3]) if len(sys.argv) > 3 else 1.0
-    phase = sys.argv[4] if len(sys.argv) > 4 else os.environ.get("LAUE_PHASE", "zn")
+    argv = [a for a in sys.argv[1:] if a != "--diameter"]
+    diameter = "--diameter" in sys.argv
+    src, dst = argv[0], argv[1]
+    tol = float(argv[2]) if len(argv) > 2 else 1.0
+    phase = argv[3] if len(argv) > 3 else os.environ.get("LAUE_PHASE", "zn")
     ph = Phase.load(phase)
 
     z = np.load(src, allow_pickle=True)
     oms = z["oms"]
-    print(f"clustering {len(oms)} instances from {src}", flush=True)
+    mode = "diameter (complete linkage)" if diameter else "connected components"
+    print(f"clustering {len(oms)} instances from {src}  [{mode}, tol {tol} deg]", flush=True)
     t0 = time.time()
-    labels = cluster(oms, ph.sym_ops, tol)
+    labels = (cluster_diameter(oms, ph.sym_ops, tol) if diameter
+              else cluster(oms, ph.sym_ops, tol))
     print(f"  {time.time()-t0:.1f}s", flush=True)
 
     out = {k: z[k] for k in z.files if k != "labels"}

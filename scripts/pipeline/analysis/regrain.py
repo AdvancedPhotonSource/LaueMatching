@@ -22,6 +22,19 @@ Reported for each tolerance:
   grains        after splitting into connected components
   grains >=5    the doubly-supported tier
   largest       biggest single grain, in beam positions
+  gold          >=5 positions AND an instance above the measured null -- the reportable
+                number. Note the null gates only THIS tier, not the raw counts.
+
+WARNING -- THE TOLERANCE SWEEP CHANGES ALGORITHM AT 1.0 deg. At tol >= 1.0 the supplied
+``labels`` are used verbatim (whatever produced them -- connected components by default,
+which CHAIN); below 1.0 each cluster is sub-split by the greedy *leader* loop further
+down, which is order-dependent and is a radius about an arbitrary seed, not a diameter.
+So the sweep varies the DEFINITION as well as the cut, and a large apparent tolerance
+sensitivity is partly that switch. On sampleH the connected-components-plus-greedy sweep gave
+a 4.28x spread in the gold count; re-running with one consistent diameter definition
+(``cluster_orientations.py --diameter``) at every tolerance gave 2.02x, and cut the
+largest "grain" from 1,833 positions to 1,298 -- the 1,833 was a chain. Feed this script
+diameter labels and read the 1.0 deg row, or treat the sweep as indicative only.
 
 usage: regrain.py [phase] [gap]
   gap: allowed gap in positions when deciding connectivity (default 1 = strict 4-conn)
