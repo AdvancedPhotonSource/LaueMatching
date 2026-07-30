@@ -106,34 +106,47 @@ of which 47 were extended reflections. Requiring a connected area of ≥4 px abo
 the count mean something. `pattern_complexity_figure.py` in the report scripts does exactly this
 for both frames it compares.
 
-**The area filter is necessary but NOT sufficient — the panel blooms.** The Perkin Elmer detector
-bleeds vertically out of a saturated reflection, hundreds of rows from the spot that caused it. A
-bloom passes the area filter easily (it is one connected component of thousands of pixels with max
-SNR far above 8), so the local-maximum test stacks a detection every ~9 px all the way down it. On
-the 34-ID-E bare-Cu reference frame this **doubled** the frame's peak count, 23 real → 49 reported.
-`analysis/frame_peaks.py` is the shared detector (`null_model.py` and `parentbeta_validate.py` both
-import it, so the count and the null it is gated against cannot drift apart) and it suppresses
-blooms. Two ways of writing that filter are wrong, both found by testing on real frames:
+**The area filter is necessary but NOT sufficient — a very bright spot breaks detection three
+different ways.** All three were found on the 34-ID-E Perkin Elmer panel and all three are handled
+in `analysis/frame_peaks.py`, the shared detector that `null_model.py` and `parentbeta_validate.py`
+both import (so a count and the null it is gated against cannot drift apart).
 
-- **Tall-and-narrow columns alone, with no saturation test, deletes real data.** It fires on any
-  column that happens to cross several reflections down the panel: 4 spurious bands on one sampleA
-  frame (one 48 columns wide) and 5 on an sampleB frame, none containing a saturated pixel. Keeping one
-  peak per band there would have thrown away ~40 real reflections per frame. Blooming is charge
-  overflow, so **confirm every candidate band against a saturated source**, and require a *count*
-  of saturated pixels — these panels carry ~34 permanently hot pixels at full scale, so one proves
-  nothing.
-- **Testing saturation inside the blob, with an aspect-ratio cut, misses real blooms.** On the same
-  frame the streak at x≈1169 is a *separate* connected component from its saturated source (blob
-  `nsat` = 0), while at x≈1066 source and tail merge into a blob 55 px wide with aspect only 3.1.
-  Blob geometry is the wrong frame of reference; work on the **column band**.
+1. **FLAT-TOP PLATEAUS — the big one, and the least obvious.** A clipped reflection has a *flat*
+   top, so every pixel on it equals the local maximum and `sub == maximum_filter(sub)` flags all of
+   them: one reflection is reported as dozens of peaks. One 117 px saturated Cu spot produced **58
+   detections at identical intensity**; collapsing plateaus cut whole-frame counts by **35–45%**
+   (197→111 on sampleD, 189→62 on the bare-Cu reference, 228→145 on a sampleA scan). This inflates the peak
+   list, inflates any null built from it, and buries weak neighbours. One connected saturated region
+   is ONE reflection — and position it from the **unsaturated shoulders** (the 20–90%-of-clip band),
+   which is also *less* biased than the plateau centroid whenever the spot is asymmetric.
+2. **ISOTROPIC HALO.** The wing of an intense reflection, measured in ADU above background at
+   15/25/40/60/100 px: 1480/508/74/34/14 along the column and 2142/363/79/20/4 along the row, with
+   frame noise σ = 50. Vertical and horizontal decay *together*, so it is a halo, not a streak. The
+   standing background (a 25 px median on a 4× downsample, ~100 px scale) cannot follow something
+   decaying over 40 px, so it leaks into the residual, raises the local bar and manufactures maxima.
+   Subtract an azimuthal radial profile per bright spot. This is what lets a weak neighbour survive:
+   on that frame the nearer neighbour (I = 579) sat on ~500 ADU of halo.
+3. **VERTICAL BLOOMING.** Charge overflow running a bright column hundreds of rows from its source.
+   Real but **rarer than expected** — present on the bare-Cu reference frame, absent from every sampleD
+   frame sampled. Remove it by **shape**: a morphological opening that erases structures thin in one
+   axis and long in the other cannot touch a compact reflection wherever it sits.
 
-Keep the strongest maximum in a confirmed band rather than dropping the band: it is the saturated
-reflection itself, usually one of the brightest and best-indexed spots on the frame (both bloom
-sources on the bare-Cu frame were genuine indexed reflections at I ≈ 59,000–60,000).
+**Never delete a detection; flag it.** Position stays valid for a clipped peak even when intensity
+does not, so indexing can use it and intensity analysis can skip it. Two filters that *did* delete
+were both wrong, and only measurement revealed it: one keyed on tall-and-narrow columns with no
+saturation test and removed ~40 real reflections per frame from ordinary crowded columns; another
+fabricated ~34 reflections per frame by treating the panel's permanently hot pixels as clipped
+reflections. **A clipped reflection has unsaturated shoulders; a hot pixel jumps straight from full
+scale to background** — that, plus a minimum area, is what separates them.
 
-The indexer is *not* affected — it runs its own percentile + `MinArea` + watershed detection, which
-finds the compact blob and does not walk the tail. Two separate code paths; only the analysis-side
-one had the defect. Check which detector produced any peak count before believing it.
+This matters beyond bookkeeping. On deposit-on-substrate(111) the substrate reflection saturates and the
+reflections sitting a few tens of pixels from it are exactly the ones carrying the orientation
+relationship, so a filter that clears the neighbourhood of a bright spot destroys the measurement it
+was meant to protect. Verify explicitly that near-neighbours survive: on sampleD they sit at r = 22.0,
+29.8 and 53.3 px and must come through unchanged.
+
+The indexer is *not* affected by any of this — it runs its own percentile + `MinArea` + watershed
+detection. Two separate code paths; check which detector produced a peak count before comparing.
 
 **Density regime** — sets expectations and the peel depth:
 
@@ -253,6 +266,19 @@ plus their image servers filled RAM, drove swap to 100%, and two of the three sh
 pool buffers results faster than the daemon consumes them (~1.5 s/image). Parent RSS reached
 **17 GB on a 13,467-frame shard**; at 201 frames this cannot manifest. Either give the host enough
 RAM or keep shards small.
+
+**3. EVERY concurrent shard needs its OWN `ResultDir`, i.e. its own params file.** The daemon writes
+its raw `solutions.txt` and `spots.txt` into the **params** `ResultDir`. `--output-dir` overrides
+only the *orchestrator's* per-frame `output.h5` tree, **not** this — so the widely-repeated note
+that "ResultDir in params is ignored" is true only of the per-frame outputs and is a trap if you
+generalise it. Point two shards at one params file and both daemons append to the same
+`solutions.txt`/`spots.txt` and interleave. It then fails **late and silently**: indexing runs to
+completion and reports `Pipeline complete`, and only post-processing dies, on torn lines
+(`got 19 columns instead of 12` from two collided records, `got 2 columns` from a truncated one).
+Nothing is recoverable, because each orchestrator numbers its images `1..N` independently, so the
+interleaved rows cannot be attributed back to a shard. This cost three 3,400-frame shards on the
+bt_34ide_jul26 campaign. Generate params per shard (the sampleH campaign's `params_*_run_s1..s7.txt` exist for
+exactly this reason) and **assert the `ResultDir` set is unique before dispatching**.
 
 Machines that can see `$LAUE_ROOT` and have the epix34id LaueMatching install
 (`/home/beams/EPIX34ID/opt/LaueMatching`, shared home, has the `LAUE_STREAM_PORT` fix):
@@ -557,6 +583,12 @@ ground truth, not on which flip maximises |corr|.)
 4. Every reported number carries its null; anything else is an intermediate.
 5. Detect on the aggressive threshold, **verify on the full background-subtracted frame** — no
    signal is discarded from the evidence.
+6a. **A status check that only greps for the success marker cannot see a dead run.** A daemon that
+    died six seconds in looks *identical* to one still working, so a monitor watching only for
+    "complete" stays quiet through the whole failure — on the bt_34ide_jul26 campaign a shard sat reported
+    as `RUNNING` for 25 minutes after `GPUassert: initialization error` killed it. Check every
+    terminal state (daemon exit, CUDA error, post-processing traceback, `Pipeline complete` with
+    **zero** result files) and treat an unchanged log older than ~15 min as stale, not running.
 6. **Suspect success.** Most of the bugs in this pipeline reported success: a daemon killed while
    healthy, a batch flag silently ignored, a drain that stopped before the file finished writing, a
    dict mutated during serialization, `>` refused by tcsh `noclobber`, an image server "running" for
