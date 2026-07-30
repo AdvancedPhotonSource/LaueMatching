@@ -48,6 +48,7 @@ if SCAN not in SCANS:
     sys.exit(f"unknown scan {SCAN!r}; choose from {sorted(SCANS)}")
 CFG=SCANS[SCAN]; DATA=CFG["data"]; RESDIR=CFG["resdir"](PHASE); RES=CFG["out"](PHASE)
 # Lattice / reflection list / geometry from the params file the indexer used.
+from frame_peaks import detect_peaks
 from laue_material import Phase
 _ph=Phase.load(PHASE); B=_ph.B; HKL=_ph.hkls; NPX=_ph.npx_x
 print(f"[{PHASE}] scan={SCAN} resdir={RESDIR}",flush=True)
@@ -75,11 +76,10 @@ def validate(h5):
             raw=f[H5LOC][()].astype(float)
             X=float(f["entry1/sample/sampleX"][()].ravel()[0]); Z=float(f["entry1/sample/sampleZ"][()].ravel()[0])
     except Exception: return None
-    med=np.median(raw); mad=1.4826*np.median(np.abs(raw-med))
-    # downsampled-median background: ~16x faster than full median_filter(25), same peaks
-    bg4=ndi.median_filter(raw[::4,::4],25); bg=np.kron(bg4,np.ones((4,4)))[:NPX,:NPX]
-    sub=raw-bg
-    pk=(sub==ndi.maximum_filter(sub,9))&(sub>8*mad); ys,xs=np.where(pk)
+    # Shared with null_model so the count and the null it is gated against are
+    # measured by identical code. Uses a downsampled-median background (~16x
+    # faster than full median_filter(25), same peaks) and drops blooming streaks.
+    xs, ys, _ = detect_peaks(raw, NPX)
     out=[]
     if len(xs)>=5:
         tree=cKDTree(np.c_[xs,ys]); npeaks=len(xs)

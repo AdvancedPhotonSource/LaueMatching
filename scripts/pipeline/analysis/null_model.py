@@ -32,6 +32,7 @@ NW  = int(sys.argv[3]) if len(sys.argv) > 3 else 4
 # parameter file the indexer itself used -- see laue_material. Set LAUE_PHASES to
 # the phases present (single-phase materials: LAUE_PHASES=zn) and
 # LAUE_PARAMS_<PHASE> to each params_*.txt.
+from frame_peaks import detect_peaks
 from laue_material import Phase
 PHASES = [p.strip() for p in os.environ.get("LAUE_PHASES", "alpha,beta").split(",") if p.strip()]
 BS = {ph: Phase.load(ph) for ph in PHASES}
@@ -57,10 +58,11 @@ def job(inum):
             raw = f[H5LOC][()].astype(float)
     except Exception:
         return None
-    med = np.median(raw); mad = 1.4826*np.median(np.abs(raw-med))
-    bg4 = ndi.median_filter(raw[::4, ::4], 25); bg = np.kron(bg4, np.ones((4, 4)))[:NPX, :NPX]
-    sub = raw - bg
-    pk = (sub == ndi.maximum_filter(sub, 9)) & (sub > 8*mad); ys, xs = np.where(pk)
+    # Shared with parentbeta_validate: the null gates the validator's output, so
+    # the two must detect peaks with identical code. Includes the blooming-streak
+    # filter -- an unfiltered detector stacks dozens of false peaks down the bloom
+    # of a saturated reflection, which inflates the null.
+    xs, ys, _ = detect_peaks(raw, NPX)
     if len(xs) < 5:
         return None
     tree = cKDTree(np.c_[xs, ys]); npeaks = len(xs)

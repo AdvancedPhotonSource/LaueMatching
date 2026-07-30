@@ -106,6 +106,35 @@ of which 47 were extended reflections. Requiring a connected area of ≥4 px abo
 the count mean something. `pattern_complexity_figure.py` in the report scripts does exactly this
 for both frames it compares.
 
+**The area filter is necessary but NOT sufficient — the panel blooms.** The Perkin Elmer detector
+bleeds vertically out of a saturated reflection, hundreds of rows from the spot that caused it. A
+bloom passes the area filter easily (it is one connected component of thousands of pixels with max
+SNR far above 8), so the local-maximum test stacks a detection every ~9 px all the way down it. On
+the 34-ID-E bare-Cu reference frame this **doubled** the frame's peak count, 23 real → 49 reported.
+`analysis/frame_peaks.py` is the shared detector (`null_model.py` and `parentbeta_validate.py` both
+import it, so the count and the null it is gated against cannot drift apart) and it suppresses
+blooms. Two ways of writing that filter are wrong, both found by testing on real frames:
+
+- **Tall-and-narrow columns alone, with no saturation test, deletes real data.** It fires on any
+  column that happens to cross several reflections down the panel: 4 spurious bands on one sampleA
+  frame (one 48 columns wide) and 5 on an sampleB frame, none containing a saturated pixel. Keeping one
+  peak per band there would have thrown away ~40 real reflections per frame. Blooming is charge
+  overflow, so **confirm every candidate band against a saturated source**, and require a *count*
+  of saturated pixels — these panels carry ~34 permanently hot pixels at full scale, so one proves
+  nothing.
+- **Testing saturation inside the blob, with an aspect-ratio cut, misses real blooms.** On the same
+  frame the streak at x≈1169 is a *separate* connected component from its saturated source (blob
+  `nsat` = 0), while at x≈1066 source and tail merge into a blob 55 px wide with aspect only 3.1.
+  Blob geometry is the wrong frame of reference; work on the **column band**.
+
+Keep the strongest maximum in a confirmed band rather than dropping the band: it is the saturated
+reflection itself, usually one of the brightest and best-indexed spots on the frame (both bloom
+sources on the bare-Cu frame were genuine indexed reflections at I ≈ 59,000–60,000).
+
+The indexer is *not* affected — it runs its own percentile + `MinArea` + watershed detection, which
+finds the compact blob and does not walk the tail. Two separate code paths; only the analysis-side
+one had the defect. Check which detector produced any peak count before believing it.
+
 **Density regime** — sets expectations and the peel depth:
 
 | peaks/frame | regime | consequence |
@@ -567,7 +596,19 @@ ground truth, not on which flip maximises |corr|.)
     ceiling: correlating a continuous map against a binary optical mask tops out around ~0.5 even at
     perfect registration — a strong *visual* overlay (blobs on blobs) is not the same as a high pixel
     correlation, so report ~0.5 as the real relationship and do not chase it higher (that fits noise).
-13. **A null result is only as good as its power — state the effect size it can exclude.** "No texture"
+13. **A detector artefact can pass every statistical test you have.** The panel blooms out of
+    saturated reflections; an unfiltered local-maximum detector stacks detections down the bloom,
+    and because the bloom sits at a FIXED position for a fixed reflection it reproduces perfectly
+    frame to frame. That is indistinguishable from a persistent single-crystal signal by
+    persistence alone, and identical spurious spots on every frame can hand an indexer the same
+    wrong orientation every time — a fake result with a beautiful null. Look at the raw overlay
+    before trusting any "recurs in every frame" claim, and separate the two detectors: on the
+    34-ID-E bare-Cu frame the analysis-side peak count was inflated 2x while the indexer's own
+    solution was clean (16 of its 18 assigned spots off-streak, orientation moving 0.011° when the
+    other 2 were discarded). Filter blooms in analysis code (`frame_peaks.py`), and confirm any
+    fixed-position claim against something the artefact cannot fake, such as agreement in
+    ORIENTATION space across many frames.
+14. **A null result is only as good as its power — state the effect size it can exclude.** "No texture"
     / "no hardening" from p>0.05 means nothing without the detectable-effect-size. The Zn/Zn texture
     test could exclude only peak-MRD excess >~1 (moderate fibre texture would have passed unseen); the
     under-deposit within-grain test had 11% power at the 0.1 keV effect it was used to dismiss, and its
