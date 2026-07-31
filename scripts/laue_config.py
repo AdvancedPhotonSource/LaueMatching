@@ -113,6 +113,14 @@ class ImageProcessingConfig:
     threshold_value: float = 0.0       # Used only if threshold_method is 'fixed'
     threshold_percentile: float = 90.0 # Used only if threshold_method is 'percentile'
     min_area: int = 10
+    # Detector positions whose spots must not count as evidence (a known substrate,
+    # or the spots an accepted orientation already explains between iterative
+    # passes). Consumed in laue_index.preprocess.  NOTE: this dataclass is
+    # hand-maintained and is NOT generated from config_schema.SCHEMA -- a key
+    # present in the schema but missing here is parsed and then silently dropped,
+    # so the run proceeds with the exclusion quietly not applied.  Keep the two
+    # in step.
+    exclude_spots_file: str = ""
     filter_radius: int = 101
     median_passes: int = 5
     watershed_enabled: bool = True

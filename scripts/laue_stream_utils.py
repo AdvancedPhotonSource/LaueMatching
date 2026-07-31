@@ -108,6 +108,12 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "threshold_percentile": 90.0,
     # Image processing
     "min_area":         10,
+    # Detector positions whose spots must not count as evidence. Empty = off.
+    # NOTE: adding a parameter needs THREE edits kept in step -- this dict, the
+    # parser chain below, AND laue_config.ImageProcessingConfig. A key present in
+    # only some of them is parsed and then silently dropped, so the run proceeds
+    # with the setting quietly not applied.
+    "exclude_spots_file": "",
     "filter_radius":    101,
     "median_passes":    1,
     "watershed_enabled":True,
@@ -205,6 +211,8 @@ def parse_config(config_file: str) -> Dict[str, Any]:
                     cfg["threshold_percentile"] = float(rest[0])
                 elif key == "MinArea":
                     cfg["min_area"] = int(rest[0])
+                elif key == "ExcludeSpotsFile":
+                    cfg["exclude_spots_file"] = rest[0]
                 elif key == "FilterRadius":
                     cfg["filter_radius"] = int(rest[0])
                 elif key == "NMeadianPasses":
