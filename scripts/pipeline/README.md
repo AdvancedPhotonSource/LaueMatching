@@ -9,12 +9,17 @@ Everything is driven by **one parameter file per crystallographic phase** plus a
 The **indexer** is not specific to any experiment — change only the geometry, lattice, and energy
 values in the parameter file to run on a different instrument or material. Several **analysis**
 scripts still carry hard-coded a two-phase hcp/bcc alloy lattice constants and `valid_hkls_Ti_*.csv` filenames;
-they are listed by file and line in the new-experiment runbook below, and must be ported before
+they are listed by file and line in the handbook below, and must be ported before
 the chain is run on another material.
 
 **Starting on a dataset this pipeline has never seen?** Read
-[`NEW_EXPERIMENT_RUNBOOK.md`](NEW_EXPERIMENT_RUNBOOK.md) — survey the experiment folder, decide
-which analyses the material system actually supports, index, analyse, report.
+[`Laue_Handbook.md`](Laue_Handbook.md) — survey the experiment folder, decide which analyses the
+material system actually supports, index, analyse, report.
+
+The handbook says *what to do*; the per-campaign **lab notebooks** say *what was found*, including
+what turned out to be wrong. Current:
+[`Laue_Lab_Notebook_bt_34ide_jul26.md`](Laue_Lab_Notebook_bt_34ide_jul26.md) (an hcp deposit on an fcc single crystal,
+Al on Al).
 
 ---
 

@@ -1,4 +1,4 @@
-# New experiment — survey → index → analyse → report (chat handoff)
+# Laue Handbook — survey → index → analyse → report
 
 **Use this doc to start a fresh chat on a Laue dataset this pipeline has never seen.**
 Paste it in, then give one line:
@@ -26,6 +26,22 @@ half of the analysis chain runs at all.
 > §6 is now a *verification* step, not a porting step. Symmetry follows the **space group**, not
 > the phase name -- the old rule silently handed cubic-24 operators to any phase not called
 > `"alpha"`.
+
+### Handbook vs lab notebook
+
+**This file says what to do. The lab notebooks say what was found.** They are kept apart on
+purpose: a handbook has to stay short enough to follow, and a campaign record has to stay
+honest enough to stop a refuted idea coming back. When a rule below cites a measurement, the
+full account — including the controls that killed the competing explanation — is in a notebook.
+
+- [`Laue_Lab_Notebook_bt_34ide_jul26.md`](Laue_Lab_Notebook_bt_34ide_jul26.md) — Zn on
+  the fcc substrate and Al on Al. Three retracted claims, the image-peel autopsy, the α-brass
+  identifiability limit, and the measurement ledger.
+
+**Write a new lab notebook per campaign, not per dataset**, and start it on day one — the
+retractions are the part that decays fastest. Structure that works: what the campaign
+established (a table with a status column) → defects fixed → method findings → scientific
+findings → **retracted claims and open questions** → measurement ledger.
 
 Companion docs: [`README.md`](README.md) (the pipeline itself), and — outside this repo — the
 34-ID-E operational runbook `laue_torch/report/RUN_PROCESS_REPORT_HANDOFF.md` (beamline access,
@@ -452,6 +468,56 @@ Two deliverables, from the same numbers:
   data-URI JPEGs (a strict CSP blocks every external request). To update an existing artifact, pass
   its URL back — do not mint a new one for the same deliverable.
 
+### Artifact structure: ONE overview, linking OUT to one page per sample
+
+A single artifact that grows with the campaign becomes a *chronology of the analysis* rather than a
+description of the samples, and the experimenter cannot find their own sample in it. On
+bt_34ide_jul26 the single page reached 2.3 MB and had to be split under protest from the reader.
+**Split it at the second dataset, not when it hurts.**
+
+```
+OVERVIEW  (the URL you share first; keep this one stable and re-publish in place)
+  ├── what the campaign is, one table of samples with links
+  ├── findings that SPAN samples (method problems, cross-sample comparisons)
+  └── what is still open
+        ├──> per-sample page: sampleA scan 1        ├──> per-sample page: sampleB (deposit + bare)
+        ├──> per-sample page: sampleA scan 2        └──> per-sample page: sampleD
+```
+
+Rules that make it work:
+
+- **One page per SCAN, not per specimen**, when scans differ in raster or condition. Two scans of
+  one specimen get two pages and are compared *in the overview*, never silently averaged.
+- **Combine only what the reader treats as one question** — deposit and its bare substrate belong
+  on one page because they are read against each other.
+- **Each page is self-contained**: it repeats the method section and the caveats. Readers arrive
+  from a link, not from the overview, and a page that assumes the overview was read will be
+  misread.
+- **Keep the per-sample pages descriptive**: what orientations are there and where. Cross-cutting
+  interpretation (relationships between phases, comparisons between samples) lives in the overview.
+  When the experimenter says "just the orientations, we don't need the relationship" — that is
+  exactly this split, and it is the right instinct.
+- **Every per-sample page carries the same three diagnostics**, because they travel: the tolerance
+  sweep, the effective (Kish) n beside the nominal grain count, and the count of objects spanning
+  more than half the map. A reader comparing two samples needs to know that one has effective n=51
+  and the other n=7.5.
+- **Link back** from each page to the overview; put the sample links in a grid near the top of the
+  overview, not buried at the bottom.
+- **Export the numbers next to the pictures** — a `<key>_grains.csv` per sample with grain id,
+  position, size and the full orientation matrix. "Orientations extracted" usually means the reader
+  wants the table, not only the map.
+- Generate all pages from ONE builder with a shared stylesheet (`build_reports.py` pattern:
+  `dataset_page(key, ...)` reading a per-dataset `_stats.json`), so a fix to the method text or the
+  palette lands everywhere at once.
+- Publish the per-sample pages FIRST, collect their URLs, then build the overview with the links in
+  it. The overview is re-published in place afterwards whenever a sample page changes.
+- **Every spatial map is drawn to TRUE SCALE — `aspect="equal"`, never `aspect="auto"`.** A
+  stretched map misrepresents grain shape and elongation, which is exactly what the reader is
+  looking at. On bt_34ide_jul26 a 100 × 150 µm scan was rendered nearly square and a beamline scientist
+  caught it before we did. Size the figure from the map's own aspect ratio so equal-scale panels
+  do not leave a band of whitespace; where two panels share coordinates, give them the same
+  extent and the same aspect.
+
 Reusable figure generators live in the report scripts: `validated_figures.py` (report plates),
 `catalog_figures.py`, `scan_map.py` (quick-look map), and the survey figure that puts a
 single-crystal frame beside a many-grain frame **under identical detection and scaling** — the
@@ -575,6 +641,59 @@ one aggregation for the narrative claim and use it everywhere, labelled. (The *s
 optical-comparison also depends on the registration flip — see invariant #11; anchor direction on
 ground truth, not on which flip maximises |corr|.)
 
+### Deposit on a SINGLE-CRYSTAL substrate — peel before you ask about epitaxy
+
+The most natural question about a deposit on a single-crystal substrate ("is there an orientation
+relationship?") is the one this pipeline answers *wrongly by construction*, and it answers it with
+a large, clean-looking effect. **Validation scores PREDICTED reflections**, not distinct observed
+peaks. So when a candidate orientation of the deposit can be rotated to overlay the substrate, it
+collects the substrate's peaks as evidence for itself.
+
+Two mechanisms, both measured on bt_34ide_jul26 sampleD (Zn electrodeposited on the fcc substrate):
+
+- **Harmonic stacking.** A Laue spot's position depends only on the *direction* of **g**. Putting
+  Zn's c\* on Cu[111] — i.e. exactly the epitaxial relationship under test — sends all seven Zn
+  (000ℓ) harmonics inside the 5–30 keV window onto the **single** the fcc substrate pixel (separation
+  0.00 px). One observed substrate peak then scores ~7 for the Zn candidate.
+- **Generic vector coincidence.** 52.8% of Zn *hki*0 vectors sit within 0.1° of some Cu vector, so
+  the overlay is rewarded far beyond the harmonics.
+
+The result: the deposit orientation that best *overlays* the substrate wins on score with no
+deposit diffraction present at all. On sampleD this produced "26.4% of 53 grains within 5° of Cu⟨111⟩
+at 18.3× the null", which met a pre-registered bar and was **retracted**: removing Cu-explained
+peaks dropped the epitaxial grain's pass rate 72%→20%, and the largest apparent Zn grain (56% of
+all validated Zn) went 94%→0%. Honest ratio 2.3×.
+
+**Also**: a (111)-polished substrate is parallel to (111) *by construction*, so out-of-plane
+alignment of the deposit with the surface normal carries **no lattice information**. Only the
+in-plane relationship (e.g. Zn⟨11-20⟩‖Cu⟨110⟩) tests epitaxy.
+
+**Procedure — peel the substrate, then re-index:**
+
+1. Measure the substrate orientation from its own gated instances (dominant cluster).
+2. **Measure how far its predicted spots wander across the raster** — do not assume a mask radius.
+   Project the cluster's orientations, nearest-neighbour match to a reference projection, and take
+   the p99 of the displacement. It differs wildly between scans that look alike: sampleD 6.2 px median
+   (p99 12.4), sampleA scan 1 **19.0 px median (p99 89.1)**. A fixed 15 px disc is right for the first
+   and leaks the substrate straight back in for the second — recreating the artefact while looking
+   like it removed it. (Ignore the *max*: when a reflection leaves the energy window the
+   nearest-neighbour match jumps to a different spot.)
+3. Build the mask as the **union** of the discs predicted by the cluster's own orientations, after
+   dropping the most deviant ~5% so a few bad fits cannot inflate it. Spots that wander get an
+   elongated mask, stable spots stay tight, and the geometry sets the shape. sampleA scan 2: 1.14% of
+   the detector.
+4. **Fill masked pixels with the local background, never zero** — a field of zeros skews the
+   indexer's percentile threshold and manufactures false edges.
+5. **Rebuild the background from the peeled frames.** Reusing the unpeeled background leaves the
+   substrate in the background model and partly undoes the peel.
+6. Re-index the deposit, and report the mask fraction next to the result.
+
+The peel also removes any genuine deposit reflection that coincides with a substrate one. That is
+unavoidable and it is the point: the test becomes **stricter**, which is the direction it must err.
+A relationship that survives is real; one that vanishes is consistent with either artefact or
+over-masking, and the mask fraction is what separates those. The real fix is to score distinct
+**observed** peaks.
+
 ## Invariants (violate these and the result is wrong but looks fine)
 
 1. Measure the null **on the scan in hand**. Never inherit one.
@@ -589,6 +708,19 @@ ground truth, not on which flip maximises |corr|.)
     as `RUNNING` for 25 minutes after `GPUassert: initialization error` killed it. Check every
     terminal state (daemon exit, CUDA error, post-processing traceback, `Pipeline complete` with
     **zero** result files) and treat an unchanged log older than ~15 min as stale, not running.
+6b. **A liveness probe that greps the remote process table self-matches through a tcsh login
+    shell.** `ssh -n host "pgrep -f params_foo.txt"` runs `tcsh -c pgrep -f params_foo.txt` on the
+    far side, and that wrapper's own command line *contains the pattern*, so pgrep matches itself
+    and reports every finished run as still alive — the exact inverse of 6a, and it hangs an
+    unattended watcher forever. Require something in the matched line that the wrapper cannot
+    contain (the binary name: `ps -eo args= | grep -F params_foo.txt | grep -q LaueMatchingGPUStream`).
+    Better still, take completion from the orchestrator's own `Streaming: 100%` line rather than
+    from process presence.
+6c. **Output-file count is NOT a completion test.** A frame that yields no solution writes no
+    `.output.h5`, so a healthy finished run legitimately shows fewer outputs than frames (2766/3400
+    peeled, 3189/3232 unpeeled). Waiting for `n == N` hangs forever on a perfect run; waiting for a
+    *static* count mistakes a slow run for a dead one. Use the orchestrator's completion line, and
+    use the count only to spot a run that ended **short**.
 6. **Suspect success.** Most of the bugs in this pipeline reported success: a daemon killed while
    healthy, a batch flag silently ignored, a drain that stopped before the file finished writing, a
    dict mutated during serialization, `>` refused by tcsh `noclobber`, an image server "running" for
@@ -646,6 +778,48 @@ ground truth, not on which flip maximises |corr|.)
     under-deposit within-grain test had 11% power at the 0.1 keV effect it was used to dismiss, and its
     95% CI *contained* the population signal. Report "excludes effects larger than E", not "no effect".
     A Wilcoxon p=0.90 from an underpowered test is not evidence of absence.
+15. **Scoring PREDICTED reflections makes the pipeline reward a phase for peaks it did not
+    produce.** Any candidate orientation whose pattern can be rotated to overlay a strong
+    single-crystal substrate is systematically favoured, and harmonics along a shared axis stack
+    many predicted reflections onto one observed pixel. This fabricated a complete, pre-registered
+    epitaxy result on sampleD (see §Deposit on a single-crystal substrate). It is **not** specific to
+    Zn/Cu: it applies to any two-phase sample with a dominant single crystal, and it also drives
+    plain phase misindexing — on sampleD the largest apparent "Zn grain", 56% of all validated Zn
+    instances, was Cu misindexed as Zn. Before any two-phase orientation claim, peel the dominant
+    phase and re-index. Until scoring counts distinct **observed** peaks, no
+    deposit-on-single-crystal orientation result from this pipeline is trustworthy.
+15b. **GATE ON DISTINCT OBSERVED PEAKS, NOT ON MATCHED PREDICTED REFLECTIONS — the pipeline
+    already writes both.** `entry/results/unique_spots_per_orientation` is the distinct-observed
+    count; `filtered_orientations[:,6]` is the matched-predicted count. **Join them on
+    `filtered_orientations[:,1]` ↔ `unique_spots_per_orientation[:,0]`** (the orientation id
+    within the frame). `filtered_orientations[:,0]` is the IMAGE number — joining on it silently
+    returns zeros, which showed up as a known single crystal having "0 distinct spots" and is how
+    the mistake was caught. Sanity-anchor every such analysis on a phase you know is there.
+    Measured stacking (matched ÷ distinct) on bt_34ide_jul26: **Cu 1.1×, sampleB Al 1.2×, sampleA Zn 1.2×,
+    sampleD Zn 1.5×** — modest in general, so do NOT generalise the extreme harmonic stacking of a
+    substrate-overlaying orientation to all solutions. Re-gating on distinct spots against a
+    null measured the same way roughly **doubled** the accepted Zn (sampleD 5,665 → 10,493;
+    sampleA s1 1,775 → 4,405) while leaving the known Cu single crystal **unchanged at 1.0×, 100% of
+    frames** — the correct signature of a better gate. Much of an "unindexed" fraction is a
+    gating choice before it is a missing capability: check the gate before building iterative
+    indexing.
+16. **A missing background file does not fail — the image server silently computes one FROM THE
+    FIRST FRAME.** `mkbg_gen.py` builds frame paths as `{prefix}{i}.h5` with *plain* integers,
+    which is how raw beamline frames are named; derived frames (substrate-peeled, denoised,
+    re-binned) written zero-padded (`g31p_000001.h5`) make it raise `FileNotFoundError`. If that
+    traceback scrolls past, the daemon starts, finds no `BackgroundFile`, logs
+    `Computing background from first frame...` at INFO, writes it to the expected path, and every
+    later shard then loads that file and reports "used supplied background". One frame's own Laue
+    spots and diffuse scattering become the background for the whole raster — the exact opposite
+    of the position-neutral median the pipeline requires, and nothing anywhere says the word
+    "error". Caught on the bt_34ide_jul26 peeled re-index: the bad background read min 121 / med 263 /
+    max 567 against the correct 93 / 214.5 / 441.5. **Check `background_*.bin` exists with a
+    plausible median BEFORE dispatching, and grep every `server.log` for
+    `Computing background from first frame`.** `mkbg_gen.py` now accepts both naming conventions.
+17. **A subset is not a raster.** "~45% of sampleA positions have the substrate extinguished" came from
+    a 510-frame sweep subset; the full 2,601-position scan shows Cu at 98.1%. Sweep subsets are
+    chosen for threshold tuning, not sampled uniformly — never quote an occupancy, fraction or rate
+    from one.
 
 ## Worked example
 
