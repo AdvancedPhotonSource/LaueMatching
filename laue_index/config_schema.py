@@ -91,6 +91,15 @@ SCHEMA = [
     Param("ThresholdPercentile", "threshold_percentile", float, 90.0, "image_processing", _IMG,
           doc="Used only if ThresholdMethod is 'percentile'"),
     Param("MinArea", "min_area", int, 10, "image_processing", _IMG),
+    Param("ExcludeSpotsFile", "exclude_spots_file", str, "", "image_processing", _IMG,
+          doc="Detector positions whose spots must NOT count as evidence. .npy bool "
+              "mask (NrPxY,NrPxX), or a text file of 'x y [radius]' rows. Whole "
+              "connected components centred inside are dropped AFTER component "
+              "filtering, so they never reach the matcher. Use for a known substrate, "
+              "or between passes of iterative indexing. Do NOT try to do this by "
+              "editing the images: removing a reflection promotes its neighbourhood "
+              "to local maxima and manufactures a ring of false peaks (measured "
+              "2.7-3.4x for weak spots, 21x for a saturated one)."),
     Param("FilterRadius", "filter_radius", int, 101, "image_processing", _IMG),
     Param("NMeadianPasses", "median_passes", int, 1, "image_processing", _IMG),
     Param("WatershedImage", "watershed_enabled", bool, True, "image_processing", _IMG),

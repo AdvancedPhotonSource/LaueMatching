@@ -151,6 +151,81 @@ def find_connected_components(
     return labels, bboxes, areas, nlabels
 
 
+def load_exclusion_mask(spec, nr_px_y: int, nr_px_x: int):
+    """Detector positions whose spots must not count as evidence.
+
+    Accepts either a .npy boolean mask of shape (nr_px_y, nr_px_x), or a text /
+    CSV file of ``x y [radius]`` rows (radius defaults to 8 px). Returns a bool
+    array, or None if *spec* is empty or unreadable.
+
+    This exists so a known substrate -- or the spots already explained by an
+    accepted orientation, between passes of iterative indexing -- can be removed
+    from the EVIDENCE without touching the images. Editing the images is not an
+    equivalent shortcut: removing a reflection deletes the local maximum that was
+    suppressing its own neighbourhood, so the surrounding ridge promotes and a
+    ring of false peaks appears where there was none (measured on 34-ID-E:
+    2.7-3.4x the background rate for weak spots, 21x for a saturated one, with the
+    pixels themselves bit-identical to raw).
+    """
+    if not spec:
+        return None
+    try:
+        if str(spec).endswith(".npy"):
+            m = np.load(spec)
+            if m.shape != (nr_px_y, nr_px_x):
+                raise ValueError(
+                    f"exclusion mask {m.shape} != image ({nr_px_y}, {nr_px_x})")
+            return m.astype(bool)
+        pts = np.atleast_2d(np.loadtxt(spec, delimiter=None, ndmin=2))
+        if pts.size == 0:
+            return None
+        m = np.zeros((nr_px_y, nr_px_x), dtype=bool)
+        yy, xx = np.ogrid[0:nr_px_y, 0:nr_px_x]
+        for row in pts:
+            cx, cy = float(row[0]), float(row[1])
+            r = float(row[2]) if len(row) > 2 else 8.0
+            m |= ((xx - cx) ** 2 + (yy - cy) ** 2) <= r * r
+        return m
+    except Exception as exc:                                   # noqa: BLE001
+        # A silently-ignored exclusion list would quietly restore the very
+        # evidence it was meant to remove, so make the failure visible.
+        print(f"WARNING: could not read ExcludeSpotsFile {spec!r}: {exc}")
+        return None
+
+
+def apply_exclusion(filt_img, filt_lbl, centers, exclude_mask):
+    """Drop whole components whose centre of mass lies in *exclude_mask*.
+
+    Removing a component -- not a disc of pixels -- is what makes this safe: the
+    filtered image contains only accepted components, so deleting one leaves no
+    gradient behind for a local-maximum finder to latch onto.
+
+    Returns (filt_img, filt_lbl, centers, n_dropped).
+    """
+    if exclude_mask is None or not centers:
+        return filt_img, filt_lbl, centers, 0
+    ny, nx = exclude_mask.shape
+    drop = []
+    kept = []
+    for c in centers:
+        cx, cy = c[1]
+        ix, iy = int(round(cx)), int(round(cy))
+        if 0 <= iy < ny and 0 <= ix < nx and exclude_mask[iy, ix]:
+            drop.append(int(c[0]))
+        else:
+            kept.append(c)
+    if not drop:
+        return filt_img, filt_lbl, centers, 0
+    lut = np.zeros(int(filt_lbl.max()) + 1, dtype=bool)
+    lut[np.asarray(drop, dtype=int)] = True
+    m = lut[filt_lbl]
+    filt_img = filt_img.copy()
+    filt_lbl = filt_lbl.copy()
+    filt_img[m] = 0
+    filt_lbl[m] = 0
+    return filt_img, filt_lbl, kept, len(drop)
+
+
 def filter_small_components(
     image: np.ndarray,
     labels: np.ndarray,
@@ -325,6 +400,19 @@ def preprocess_image(
         thresholded_u16, labels, bboxes, areas, nlabels,
         min_area=cfg["min_area"],
     )
+
+    # --- Step 5b: drop spots at excluded detector positions -------------------
+    # A known substrate, or the spots an accepted orientation already explains.
+    # Done here, on whole components, so the matcher never sees them and no
+    # pixel-level hole is carved into continuous data.
+    _excl = cfg.get("_exclude_mask", None)
+    if _excl is None and cfg.get("exclude_spots_file", ""):
+        _excl = load_exclusion_mask(cfg["exclude_spots_file"], nr_px_y, nr_px_x)
+        cfg["_exclude_mask"] = _excl        # cache: this runs per frame
+    if _excl is not None:
+        filt_img, filt_labels, centers, _nd = apply_exclusion(
+            filt_img, filt_labels, centers, _excl)
+
     if not centers:
         blurred = np.zeros_like(raw_image, dtype=np.float64)
         if return_intermediates:
