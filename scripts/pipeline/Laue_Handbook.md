@@ -37,6 +37,10 @@ full account — including the controls that killed the competing explanation �
 - [`Laue_Lab_Notebook_bt_34ide_jul26.md`](Laue_Lab_Notebook_bt_34ide_jul26.md) — Zn on
   the fcc substrate and Al on Al. Three retracted claims, the image-peel autopsy, the α-brass
   identifiability limit, and the measurement ledger.
+- [`Laue_Lab_Notebook_bt_34ide_jul26b.md`](Laue_Lab_Notebook_bt_34ide_jul26b.md) — Zn on Zn. The
+  substrate/deposit direction saga (it flipped several times; **read §5 before re-arguing it**),
+  scattering-vs-fluorescence, the readback race, and why the layers separate on the map but not
+  per position.
 
 **Write a new lab notebook per campaign, not per dataset**, and start it on day one — the
 retractions are the part that decays fastest. Structure that works: what the campaign

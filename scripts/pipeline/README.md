@@ -19,7 +19,7 @@ material system actually supports, index, analyse, report.
 The handbook says *what to do*; the per-campaign **lab notebooks** say *what was found*, including
 what turned out to be wrong. Current:
 [`Laue_Lab_Notebook_bt_34ide_jul26.md`](Laue_Lab_Notebook_bt_34ide_jul26.md) (an hcp deposit on an fcc single crystal,
-Al on Al).
+Al on Al) and [`Laue_Lab_Notebook_bt_34ide_jul26b.md`](Laue_Lab_Notebook_bt_34ide_jul26b.md) (Zn on Zn).
 
 ---
 
