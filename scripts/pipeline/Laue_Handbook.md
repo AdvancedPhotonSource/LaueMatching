@@ -824,6 +824,50 @@ over-masking, and the mask fraction is what separates those. The real fix is to 
     a 510-frame sweep subset; the full 2,601-position scan shows Cu at 98.1%. Sweep subsets are
     chosen for threshold tuning, not sampled uniformly — never quote an occupancy, fraction or rate
     from one.
+18. **Gate the PORT as well as the ResultDir, and gate it on the host.** Two independently-written
+    plan files gave the same port to different work directories; the second daemon logged
+    `bind: Address already in use` *in the middle of a normal-looking startup*, then sat there
+    fully initialised, holding 12 GB of GPU, having received **zero** images. It looks exactly like
+    a slow run. `grep -h '' plan_*.txt | awk '{print $3}' | sort | uniq -c` finds the collision
+    before dispatch; `ssh -n host "bash -lc 'ss -ltn | grep -q \":$PORT \"'"` finds it on the host.
+    Same class as 6a/6c: the failure is silent and mimics progress.
+19. **Two different samples can share one raw folder — select frames by PREFIX, never by
+    directory.** In `bt_34ide_jul26`, `sampleA/scan2_Laue2D` holds 12,802 files:
+    2,601 named `G30_scan2_*` and **10,201 named `F98_scan1_*`** — an entirely different sample.
+    A directory glob silently merges two experiments. (The same folder-vs-content trap in the
+    other direction: `sampleK_scanpair` holds two scans at different step sizes under one
+    prefix.) Build shards from the file prefix and print the frame count per prefix before
+    dispatch.
+20. **A scan can lose beam partway through and nothing in the file structure says so.** sampleH's
+    second scan wrote all 15,251 frames; frames 1–4,053 have a median of ~213 counts and frames
+    4,054–15,251 have **2–7 counts** with only the permanently hot pixels left. The background
+    built across that raster came out at median 3.0 and the background gate (16) refused it —
+    which is how it was found. **Sample the per-frame median across the raster before building a
+    background**, index only the live block, and report the recovered area rather than the
+    requested one. A stride-25 sample plus a bisect at the edge locates the cut in about a minute.
+21. **`h5["/entry1/data/data"][0]` is the first ROW, not the first frame.** One 2048 × 2048 image
+    per file is stored as a **2-D** dataset, so `[0]` returns 2,048 pixels of detector edge — all
+    zeros. A quick diagnostic written that way printed `min 0 med 0 max 0` for every frame of a
+    healthy scan and looked exactly like corrupt data. Use `[:]`, and anchor any "the frames are
+    empty" claim on a median compared against the scan's own background before acting on it.
+21b. **Streaming completion is NOT output completion.** The orchestrator's `Streaming: 100%` (or a
+    full `Received image` count) means the daemon has *seen* every frame; the per-frame
+    `.output.h5` files are written afterwards, in a batch. A validator launched on the streaming
+    line ran on **275** of sampleK scan 1's eventual **2,498** outputs and reported 686 validated
+    instances instead of ~6,000 — with no error anywhere, because it correctly validated
+    everything that existed at the time. Before any post-processing step, require the output
+    count to be **unchanged across two checks ~30 s apart** and non-trivially large.
+22. **A peak WIDTH measured as a second moment is not intensity-independent, so it does not
+    escape a flux confound on its own.** The reasoning "amplitude drifts, shape does not" is
+    right about the underlying reflection and wrong about the estimator: a fixed-box second
+    moment weights the noisy tails, so a dimmer peak measures *wider*. On the homoepitaxial
+    series the median widths ran 1.981 / 2.651 / 2.775 px, apparently monotonic with deposit
+    thickness — while the median peak intensities ran 1,491 / 1,358 / 1,087, falling in exact
+    lockstep. **Two quantities that move together perfectly are one quantity until proven
+    otherwise.** The control is to compare width *within matched intensity bins*; only a
+    difference that survives that is a property of the crystal. This generalises: any shape
+    statistic (width, ellipticity, kurtosis, profile asymmetry) computed over a fixed window
+    inherits the SNR of what is inside it.
 
 ## Worked example
 
