@@ -114,6 +114,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # only some of them is parsed and then silently dropped, so the run proceeds
     # with the setting quietly not applied.
     "exclude_spots_file": "",
+    "exclude_spots_dir": "",
     "filter_radius":    101,
     "median_passes":    1,
     "watershed_enabled":True,
@@ -213,6 +214,8 @@ def parse_config(config_file: str) -> Dict[str, Any]:
                     cfg["min_area"] = int(rest[0])
                 elif key == "ExcludeSpotsFile":
                     cfg["exclude_spots_file"] = rest[0]
+                elif key == "ExcludeSpotsDir":
+                    cfg["exclude_spots_dir"] = rest[0]
                 elif key == "FilterRadius":
                     cfg["filter_radius"] = int(rest[0])
                 elif key == "NMeadianPasses":

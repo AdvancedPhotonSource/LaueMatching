@@ -71,6 +71,19 @@ def _preprocess_one(h5_path, h5loc, frame_idx, nr_px_y, nr_px_x, cfg, background
         return {"error": f"load: {e}"}
     if raw.shape != (nr_px_y, nr_px_x):
         return {"error": f"shape {raw.shape} != ({nr_px_y},{nr_px_x})"}
+    # Iterative indexing: if ExcludeSpotsDir is set, this frame's own residual
+    # list is loaded here, where the frame's identity is still known. cfg is
+    # copied because it is shared across the worker pool and the mask is
+    # frame-specific -- caching it on the shared dict would leak one frame's
+    # exclusions onto every later frame.
+    _dir = cfg.get("exclude_spots_dir", "")
+    if _dir:
+        from laue_index.preprocess import (exclusion_file_for_frame,
+                                           load_exclusion_mask)
+        _f = exclusion_file_for_frame(_dir, h5_path)
+        cfg = dict(cfg)
+        cfg["_exclude_mask_frame"] = (
+            load_exclusion_mask(_f, nr_px_y, nr_px_x) if _f else None)
     blurred, _filt_img, filt_labels, centers = lsu.preprocess_image(
         raw, cfg, background=background
     )

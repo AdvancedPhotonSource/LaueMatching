@@ -121,6 +121,7 @@ class ImageProcessingConfig:
     # so the run proceeds with the exclusion quietly not applied.  Keep the two
     # in step.
     exclude_spots_file: str = ""
+    exclude_spots_dir: str = ""
     filter_radius: int = 101
     median_passes: int = 5
     watershed_enabled: bool = True

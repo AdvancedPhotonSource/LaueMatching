@@ -91,6 +91,13 @@ SCHEMA = [
     Param("ThresholdPercentile", "threshold_percentile", float, 90.0, "image_processing", _IMG,
           doc="Used only if ThresholdMethod is 'percentile'"),
     Param("MinArea", "min_area", int, 10, "image_processing", _IMG),
+    Param("ExcludeSpotsDir", "exclude_spots_dir", str, "", "image_processing", _IMG,
+          doc="Directory of PER-FRAME exclusion lists for iterative indexing: one "
+              "'<frame-stem>.txt' of 'x y [radius]' rows per frame, holding the spots "
+              "an already-accepted orientation explained on THAT frame. A missing file "
+              "means nothing to exclude there, which is normal once a frame is "
+              "exhausted. Applied on top of ExcludeSpotsFile, not instead of it, so a "
+              "static substrate list and a per-frame residual list compose."),
     Param("ExcludeSpotsFile", "exclude_spots_file", str, "", "image_processing", _IMG,
           doc="Detector positions whose spots must NOT count as evidence. .npy bool "
               "mask (NrPxY,NrPxX), or a text file of 'x y [radius]' rows. Whole "

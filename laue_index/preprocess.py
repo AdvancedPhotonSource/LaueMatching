@@ -180,17 +180,48 @@ def load_exclusion_mask(spec, nr_px_y: int, nr_px_x: int):
         if pts.size == 0:
             return None
         m = np.zeros((nr_px_y, nr_px_x), dtype=bool)
-        yy, xx = np.ogrid[0:nr_px_y, 0:nr_px_x]
+        # Stamp each disc into its own local window. The obvious whole-frame
+        # formulation (`m |= (xx-cx)**2 + (yy-cy)**2 <= r*r` over open grids)
+        # costs O(N * nr_px_y * nr_px_x) -- fine for one static list loaded once,
+        # ~2 s per frame for a per-frame list under ExcludeSpotsDir, which is the
+        # difference between iterative indexing being practical and not.
         for row in pts:
             cx, cy = float(row[0]), float(row[1])
             r = float(row[2]) if len(row) > 2 else 8.0
-            m |= ((xx - cx) ** 2 + (yy - cy) ** 2) <= r * r
+            x0, x1 = max(0, int(np.floor(cx - r))), min(nr_px_x, int(np.ceil(cx + r)) + 1)
+            y0, y1 = max(0, int(np.floor(cy - r))), min(nr_px_y, int(np.ceil(cy + r)) + 1)
+            if x0 >= x1 or y0 >= y1:
+                continue
+            yy, xx = np.ogrid[y0:y1, x0:x1]
+            m[y0:y1, x0:x1] |= ((xx - cx) ** 2 + (yy - cy) ** 2) <= r * r
         return m
+
+
     except Exception as exc:                                   # noqa: BLE001
         # A silently-ignored exclusion list would quietly restore the very
         # evidence it was meant to remove, so make the failure visible.
         print(f"WARNING: could not read ExcludeSpotsFile {spec!r}: {exc}")
         return None
+
+
+def exclusion_file_for_frame(exclude_dir, h5_path):
+    """Per-frame exclusion list for iterative indexing, or "" if there is none.
+
+    ``ExcludeSpotsDir`` holds one ``<frame-stem>.txt`` per frame, each listing the
+    ``x y [radius]`` of the spots an ALREADY-ACCEPTED orientation explained on that
+    frame. Removing them and re-indexing is what exposes the next orientation down;
+    a single scan-wide list cannot do this, because which spots are spoken for
+    differs from frame to frame.
+
+    A missing file means "nothing to exclude on this frame", which is the normal
+    case once a frame is exhausted -- it is not an error.
+    """
+    if not exclude_dir:
+        return ""
+    import os
+    stem = os.path.splitext(os.path.basename(str(h5_path)))[0]
+    p = os.path.join(str(exclude_dir), stem + ".txt")
+    return p if os.path.exists(p) else ""
 
 
 def apply_exclusion(filt_img, filt_lbl, centers, exclude_mask):
@@ -409,6 +440,13 @@ def preprocess_image(
     if _excl is None and cfg.get("exclude_spots_file", ""):
         _excl = load_exclusion_mask(cfg["exclude_spots_file"], nr_px_y, nr_px_x)
         cfg["_exclude_mask"] = _excl        # cache: this runs per frame
+    # Per-frame residual list (iterative indexing). Composed WITH the static list
+    # rather than replacing it, so a substrate exclusion and a residual exclusion
+    # can be in force at once. Not cached -- it differs on every frame, which is
+    # the whole point.
+    _pf = cfg.get("_exclude_mask_frame", None)
+    if _pf is not None:
+        _excl = _pf if _excl is None else (_excl | _pf)
     if _excl is not None:
         filt_img, filt_labels, centers, _nd = apply_exclusion(
             filt_img, filt_labels, centers, _excl)
