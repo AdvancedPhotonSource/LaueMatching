@@ -75,10 +75,10 @@ purpose: a handbook has to stay short enough to follow, and a campaign record ha
 honest enough to stop a refuted idea coming back. When a rule below cites a measurement, the
 full account — including the controls that killed the competing explanation — is in a notebook.
 
-- [`Laue_Lab_Notebook_bt_34ide_jul26.md`](Laue_Lab_Notebook_bt_34ide_jul26.md) — Zn on
+- [`LAB_NOTEBOOK.md`](LAB_NOTEBOOK.md) — Zn on
   the fcc substrate and Al on Al. Three retracted claims, the image-peel autopsy, the α-brass
   identifiability limit, and the measurement ledger.
-- [`Laue_Lab_Notebook_bt_34ide_jul26b.md`](Laue_Lab_Notebook_bt_34ide_jul26b.md) — Zn on Zn. The
+- [`LAB_NOTEBOOK_ZnZn.md`](LAB_NOTEBOOK_ZnZn.md) — Zn on Zn. The
   substrate/deposit direction saga (it flipped several times; **read §5 before re-arguing it**),
   scattering-vs-fluorescence, the readback race, and why the layers separate on the map but not
   per position.
