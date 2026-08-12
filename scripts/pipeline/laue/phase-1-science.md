@@ -7,6 +7,12 @@
 
 ## Phase 1 — Decide what science is askable (the part that cannot be automated)
 
+> **Check the campaign's lab notebook before halting to ask.** If a notebook exists for this
+> experiment folder (`LAB_NOTEBOOK_<campaign>.md`), it answers most of what follows —
+> material, phases, geometry provenance, wire status — and re-asking wastes the reader's
+> time. Ask only for what the notebook does not settle. Phase 1 reads as if every session
+> starts from zero; for a returning campaign it does not.
+
 Ask the user these, in this order. The first three block everything; the rest shape the report.
 
 1. **Material and phases present.** Space group + lattice parameters (nm) for each. If unknown from
@@ -15,7 +21,13 @@ Ask the user these, in this order. The first three block everything; the rest sh
 2. **Refined detector geometry** — the `geoN_*.xml` from the calibration of *this* run.
    `P_Array` / `R_Array` / pixel size / detector size come from it. Geometry from another run is
    the single fastest way to get a confident, wrong answer.
-3. **Energy window** of the incident spectrum (keV).
+3. **Energy window** of the incident spectrum (keV). **Do not read it from
+   `entry1/sample/incident_energy`** — measured 2026-08-12 across all 10,201 frames of
+   `bt_34ide_jul26/sampleD`, that field is a constant **−56.05**, which is not a
+   physical energy for a 5–30 keV pink beam. It is a metadata-field problem, not a data
+   problem. Get the window from the beamline record or the campaign notebook, and state
+   which — an unsourced energy window is exactly what hard rule "never take a number from a
+   name" exists to prevent, one level up.
 3b. **What frame are the orientations in, and where is the specimen surface?** The indexer's
    orientation matrices live in the **LAB** frame, and **lab Z is the incident beam** —
    `Phase.project` computes `kf = ki - 2*qh[:,2]*qh`, which is only valid for `ki = (0,0,1)`

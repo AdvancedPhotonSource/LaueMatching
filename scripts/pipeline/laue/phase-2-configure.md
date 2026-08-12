@@ -7,6 +7,19 @@
 
 ## Phase 2 — Configure
 
+> **`$WORK` first — it is used throughout Phases 2, 3, 4 and 6 and is defined nowhere
+> else.** It is the campaign's own working directory, holding `params/`, `db/` and
+> `results/`. It is **not** the read-only experiment folder. Pick one you own on a host
+> that can see the data, export it, and keep using the same one:
+>
+> ```bash
+> export WORK=/gdata/dm/34IDE/<Run>/<Campaign>/laue_matching_results   # yours to write
+> mkdir -p $WORK/params $WORK/db $WORK/results
+> ```
+>
+> The orientation database (`db/100MilOrients.bin`) is shared across every phase and
+> campaign — point at an existing one rather than regenerating it. Never `/tmp`.
+
 Per phase, once per material:
 
 ```bash

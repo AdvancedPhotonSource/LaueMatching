@@ -53,13 +53,27 @@ Machines that can see `$LAUE_ROOT` and have the epix34id LaueMatching install
 | copland | 2015 GB | 96 | 2x A6000 48 GB | **cannot even READ** the-analysis-host (not merely write) -- unusable for indexing this data, despite the RAM |
 | alleppey | 502 GB | 112 | 4x H100 80-96 GB | usually shared; check `nvidia-smi` first |
 | sentosa | 250 GB | 64 | 2x H200 144 GB + 2x Blackwell | Blackwell cards (2,3) are **sm_120**, often in use |
-| shannon | 125 GB | 40 | 3x A4500 20 GB | 34-ID-E box; smallest RAM, budget 2 daemons max |
+| shannon | 125 GB | 40 | 3x A4500 20 GB | 34-ID-E box; smallest RAM, budget 2 daemons max. **Was unreachable 2026-08-12** (no route, including via copland) |
+| chutoro | — | 64 | 2x A6000 48 GB | added 2026-08-12: has the install, sees `/gdata/dm/34IDE`, and `epix34id@chutoro` is **directly key-authorised** — no shannon hop |
 
 **Log in as `epix34id` on every host** (not s1iduser): the data, the DB and the caches are all
 owned by epix34id, and the s1iduser LaueMatching build is older -- it ignores `LAUE_STREAM_PORT`
-and silently binds 60517, so two daemons on one host collide. Reachability: epix34id keys live on
-shannon, so the route is `copland(s1iduser) -> epix34id@shannon -> epix34id@<host>`. Every remote
-shell is **tcsh**: pipe scripts to `bash -s`, and never use `$(...)` in the outer ssh command.
+and silently binds 60517, so two daemons on one host collide.
+
+**Reachability — try the direct route first.** This section used to say the only route was
+`copland(s1iduser) -> epix34id@shannon -> epix34id@<host>` because "epix34id keys live on
+shannon". That is **false for at least chutoro**, where `ssh epix34id@chutoro` is directly
+key-authorised. With shannon down on 2026-08-12 the documented chain was a dead end and the
+direct route worked immediately. Try `epix34id@<host>` first; fall back to the hop only if it
+refuses.
+
+Note also that the data path differs by mount: this section is written around
+`$LAUE_ROOT`, while the campaigns are reachable on copland and chutoro as
+`/gdata/dm/34IDE/<Run>/<Campaign>`. Whether these are the same underlying store has **not**
+been established — check before assuming a path from one works on the other.
+
+Every remote shell is **tcsh**: pipe scripts to `bash -s`, and never use `$(...)` in the outer
+ssh command.
 
 `scripts/pipeline/launch_shard.sh SHARD GPU PORT NCPUS` runs one orchestrator on whatever host it
 is invoked on. Stagger launches by ~60 s: each daemon reads 19 GB before binding its port.
