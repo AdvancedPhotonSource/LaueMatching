@@ -68,6 +68,26 @@ orientation every time — a fake result with a beautiful null. Both finish and 
 When you halt, say which row fired, what you measured, and what you would need in order to
 proceed. Finish everything not blocked by it first.
 
+### The doc set — what to read when
+
+The phases below carry the actual commands. This spine names them by number throughout and,
+until 2026-08-12, never linked them: a fresh session that trusted this file to be "the one
+you keep loaded" read the invariants and the worked example and never learned the procedure
+existed in separate files. It only found them by listing the directory.
+
+| file | covers | read |
+|---|---|---|
+| [`phase-0-survey.md`](phase-0-survey.md) | survey the experiment folder before promising anything | first |
+| [`phase-1-science.md`](phase-1-science.md) | what science is askable — the part that cannot be automated | before configuring |
+| [`phase-2-configure.md`](phase-2-configure.md) | params, per-material inputs, the orientation database | before indexing |
+| [`phase-3-index.md`](phase-3-index.md) | sharded indexing across GPUs and hosts | the long step |
+| [`phase-4-analyse.md`](phase-4-analyse.md) | nulls, gating, grain definition, tolerance sweep | after indexing |
+| [`phase-5-report.md`](phase-5-report.md) | PDF and artifact structure, overview + per-sample pages | at the end |
+| [`phase-6-material.md`](phase-6-material.md) | material configuration — a verification step, not a port | when adding a phase |
+| [`DIAGNOSIS.md`](DIAGNOSIS.md) | symptom → test → cause → lever | when something looks wrong |
+| [`ENVELOPE.md`](ENVELOPE.md) | what this measurement can and cannot determine | before promising an answer |
+| [`RUNBOOK.md`](RUNBOOK.md) | where it runs, healthy ranges, current pick-up point | on resume |
+
 ### Handbook vs lab notebook
 
 **This file says what to do. The lab notebooks say what was found.** They are kept apart on
