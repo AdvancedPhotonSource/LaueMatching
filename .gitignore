@@ -26,3 +26,12 @@ simulation/valid_hkls.csv
 *.tif
 100MilOrients.bin
 __pycache__/
+
+# Local IDE / tooling.
+# `.claude/*` and not `.claude/`: git does not descend into an excluded DIRECTORY,
+# so a negation under it never matches. Excluding the contents keeps the directory
+# walkable and lets shared skills be re-included.
+.claude/*
+# Shared skills ARE project assets -- a skill that ships with the clone is usable
+# by whoever checks the repo out. Personal settings and session state stay ignored.
+!.claude/skills/
