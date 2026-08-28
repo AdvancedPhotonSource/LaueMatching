@@ -711,8 +711,12 @@ int main(int argc, char *argv[]) {
     LowNr = strncmp(aline, str, strlen(str));
     if (LowNr == 0) {
       sscanf(aline, "%s %s", dummy, dummy);
-      if (strncmp(dummy, "NelderMead", 10) == 0)
-        useBobyqa = 0;
+      useBobyqa = 0; /* Nelder-Mead always; see LaueMatchingHeaders.h */
+      if (strncmp(dummy, "BOBYQA", 6) == 0)
+        printf("NOTE: Optimizer BOBYQA requested, but BOBYQA has been "
+               "removed. Using Nelder-Mead, which measured better on "
+               "this objective (median 0.0041 vs 0.0054 deg, p95 3.3x "
+               "tighter) at the same cost.\n");
       continue;
     }
     str = "ResultDir";
@@ -1171,7 +1175,7 @@ int main(int argc, char *argv[]) {
          "  Waiting for images...\n\n",
          PORT, nrOrients, nrPxX, nrPxY, imageBytes / 1e6, numStreams,
          outArrOnGPU ? "OFF (full outArr on GPU)" : "ON", chunkSize,
-         useBobyqa ? "BOBYQA" : "NelderMead", total_init);
+         "NelderMead", total_init);
   fflush(stdout);
 
   // Use maxNrSpots*3 for fitting (same as batch mode)

@@ -51,79 +51,23 @@ else()
 endif()
 
 include(GNUInstallDirs)
-include(ExternalProject)
 
 # ---------------------------------------------------------------------------
-# NLOPT Dependency
+# Optimizer: vendored, no external dependency
 # ---------------------------------------------------------------------------
-# Install into LIBS/NLOPT/ in the source tree so the layout matches the
-# existing Makefile convention.  If a pre-built NLOPT is already there
-# (nlopt.h exists) we skip the download entirely.
-# ---------------------------------------------------------------------------
-set(NLOPT_INSTALL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/LIBS/NLOPT")
-set(NLOPT_INCLUDE_DIR "${NLOPT_INSTALL_DIR}/include")
-set(NLOPT_LIB_DIR     "${NLOPT_INSTALL_DIR}/lib")
-set(NLOPT_LIB64_DIR   "${NLOPT_INSTALL_DIR}/lib64")
-
-if(EXISTS "${NLOPT_INCLUDE_DIR}/nlopt.h")
-  message(STATUS "NLOPT already present in ${NLOPT_INSTALL_DIR} — skipping download")
-else()
-  message(STATUS "NLOPT not found — downloading and building into ${NLOPT_INSTALL_DIR}")
-  ExternalProject_Add(nlopt_ext
-    GIT_REPOSITORY https://github.com/stevengj/nlopt.git
-    GIT_TAG        master
-    GIT_SHALLOW    TRUE
-    CMAKE_ARGS
-      -DCMAKE_INSTALL_PREFIX=${NLOPT_INSTALL_DIR}
-      -DCMAKE_BUILD_TYPE=Release
-      -DNLOPT_CXX=OFF
-      -DNLOPT_PYTHON=OFF
-      -DNLOPT_OCTAVE=OFF
-      -DNLOPT_MATLAB=OFF
-      -DNLOPT_GUILE=OFF
-      -DNLOPT_SWIG=OFF
-      -DNLOPT_TESTS=OFF
-      -DBUILD_SHARED_LIBS=OFF
-      # Force lib/, never lib64/. GNUInstallDirs picks lib64 on RHEL/Fedora/
-      # SUSE, and the imported-target path below is resolved at CONFIGURE time,
-      # before ExternalProject has downloaded anything -- so it cannot see where
-      # NLopt will land and falls back to lib/. Pinning the libdir removes the
-      # race instead of trying to predict it.
-      -DCMAKE_INSTALL_LIBDIR=lib
-    BUILD_BYPRODUCTS
-      "${NLOPT_LIB_DIR}/libnlopt.a"
-      "${NLOPT_LIB64_DIR}/libnlopt.a"
-  )
-endif()
-
-# Ensure the include directory exists at configure time so CMake's
-# INTERFACE_INCLUDE_DIRECTORIES validation passes (ExternalProject
-# only populates it at build time).
-file(MAKE_DIRECTORY "${NLOPT_INCLUDE_DIR}")
-
-# Create an imported target for NLOPT so we can use target_link_libraries()
-add_library(NLOPT::NLOPT STATIC IMPORTED GLOBAL)
-# Check lib64 first, then lib
-if(EXISTS "${NLOPT_LIB64_DIR}/libnlopt.a")
-  set(_NLOPT_LIB "${NLOPT_LIB64_DIR}/libnlopt.a")
-elseif(EXISTS "${NLOPT_LIB_DIR}/libnlopt.a")
-  set(_NLOPT_LIB "${NLOPT_LIB_DIR}/libnlopt.a")
-else()
-  # Neither exists yet: the normal case on a clean checkout, because
-  # ExternalProject downloads and builds NLopt during `make`, long after this
-  # runs. We pin -DCMAKE_INSTALL_LIBDIR=lib above precisely so that this
-  # fallback is guaranteed right rather than merely usual.
-  #
-  # It used to be only usual: on RHEL/Fedora/SUSE NLopt installed to lib64/,
-  # this line pointed at lib/, and a clean `./build.sh` failed with
-  # "No rule to make target .../LIBS/NLOPT/lib/libnlopt.a". CI never caught it
-  # because ubuntu-latest is a lib/ distro.
-  set(_NLOPT_LIB "${NLOPT_LIB_DIR}/libnlopt.a")
-endif()
-set_target_properties(NLOPT::NLOPT PROPERTIES
-  IMPORTED_LOCATION             "${_NLOPT_LIB}"
-  INTERFACE_INCLUDE_DIRECTORIES "${NLOPT_INCLUDE_DIR}"
-)
+# NLopt used to be fetched and built here by ExternalProject. It is gone.
+#
+# The refiner only ever needed a bounded simplex: BOBYQA was measured WORSE
+# than Nelder-Mead on this objective (median 0.0054 vs 0.0041 deg over 198
+# paired synthetic seeds, p95 3.3x looser, max 25x looser, same wall-clock),
+# which is unsurprising -- the objective samples intensity at integer pixels
+# and is piecewise-constant, so a smooth quadratic model has nothing to fit.
+#
+# src/nelder_mead.{c,h} is an exact reimplementation of NLopt's LN_NELDERMEAD
+# (nldrmd.c), vendored from MIDAS packages/midas_ckernel/c_src. Removing the
+# dependency means: no network fetch during a build, no lib/lib64 install-path
+# divergence across distros, and the C can be compiled at `pip install` time.
+set(LAUE_OPTIMIZER_SRC ${CMAKE_CURRENT_SOURCE_DIR}/src/nelder_mead.c)
 
 # ---------------------------------------------------------------------------
 # OpenMP
@@ -145,18 +89,13 @@ set(LAUE_C_FLAGS -fPIC -O3 -Wall)
 # ---------------------------------------------------------------------------
 # LaueMatchingCPU
 # ---------------------------------------------------------------------------
-add_executable(LaueMatchingCPU src/LaueMatchingCPU.c)
+add_executable(LaueMatchingCPU src/LaueMatchingCPU.c ${LAUE_OPTIMIZER_SRC})
 
 target_compile_options(LaueMatchingCPU PRIVATE ${LAUE_C_FLAGS})
-target_link_libraries(LaueMatchingCPU PRIVATE NLOPT::NLOPT m)
+target_link_libraries(LaueMatchingCPU PRIVATE m)
 
 if(OpenMP_C_FOUND AND BUILD_OMP)
   target_link_libraries(LaueMatchingCPU PRIVATE OpenMP::OpenMP_C)
-endif()
-
-# If NLOPT was just downloaded, the CPU target must wait for the build
-if(TARGET nlopt_ext)
-  add_dependencies(LaueMatchingCPU nlopt_ext)
 endif()
 
 # Install
@@ -177,7 +116,7 @@ add_custom_command(TARGET LaueMatchingCPU POST_BUILD
 if(USE_CUDA)
 
 
-  add_executable(LaueMatchingGPU src/LaueMatchingGPU.cu)
+  add_executable(LaueMatchingGPU src/LaueMatchingGPU.cu ${LAUE_OPTIMIZER_SRC})
 
   set_target_properties(LaueMatchingGPU PROPERTIES
     CUDA_SEPARABLE_COMPILATION ON     # -rdc=true
@@ -188,17 +127,13 @@ if(USE_CUDA)
     $<$<COMPILE_LANGUAGE:CUDA>:-O3 -w>
   )
 
-  target_link_libraries(LaueMatchingGPU PRIVATE NLOPT::NLOPT m)
+  target_link_libraries(LaueMatchingGPU PRIVATE m)
 
   if(OpenMP_C_FOUND AND BUILD_OMP)
     target_compile_options(LaueMatchingGPU PRIVATE
       $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-fopenmp>
     )
     target_link_libraries(LaueMatchingGPU PRIVATE gomp)
-  endif()
-
-  if(TARGET nlopt_ext)
-    add_dependencies(LaueMatchingGPU nlopt_ext)
   endif()
 
   install(TARGETS LaueMatchingGPU RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
@@ -214,7 +149,7 @@ if(USE_CUDA)
   # -------------------------------------------------------------------------
   # LaueMatchingGPUStream  (persistent GPU daemon — socket-based streaming)
   # -------------------------------------------------------------------------
-  add_executable(LaueMatchingGPUStream src/LaueMatchingGPUStream.cu)
+  add_executable(LaueMatchingGPUStream src/LaueMatchingGPUStream.cu ${LAUE_OPTIMIZER_SRC})
 
   set_target_properties(LaueMatchingGPUStream PROPERTIES
     CUDA_SEPARABLE_COMPILATION ON
@@ -225,17 +160,13 @@ if(USE_CUDA)
     $<$<COMPILE_LANGUAGE:CUDA>:-O3 -w>
   )
 
-  target_link_libraries(LaueMatchingGPUStream PRIVATE NLOPT::NLOPT m pthread)
+  target_link_libraries(LaueMatchingGPUStream PRIVATE m pthread)
 
   if(OpenMP_C_FOUND AND BUILD_OMP)
     target_compile_options(LaueMatchingGPUStream PRIVATE
       $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-fopenmp>
     )
     target_link_libraries(LaueMatchingGPUStream PRIVATE gomp)
-  endif()
-
-  if(TARGET nlopt_ext)
-    add_dependencies(LaueMatchingGPUStream nlopt_ext)
   endif()
 
   install(TARGETS LaueMatchingGPUStream RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
@@ -258,7 +189,7 @@ message(STATUS "  Build type:     ${CMAKE_BUILD_TYPE}")
 message(STATUS "  Install prefix: ${CMAKE_INSTALL_PREFIX}")
 message(STATUS "  OpenMP:         ${BUILD_OMP}")
 message(STATUS "  CUDA (GPU):     ${USE_CUDA}")
-message(STATUS "  NLOPT dir:      ${NLOPT_INSTALL_DIR}")
+message(STATUS "  Optimizer:      vendored Nelder-Mead (no NLopt)")
 if(USE_CUDA)
   message(STATUS "  CUDA archs:     ${CMAKE_CUDA_ARCHITECTURES}")
 endif()

@@ -251,8 +251,12 @@ int main(int argc, char *argv[]) {
     LowNr = strncmp(aline, str, strlen(str));
     if (LowNr == 0) {
       sscanf(aline, "%s %s", dummy, dummy);
-      if (strncmp(dummy, "NelderMead", 10) == 0)
-        useBobyqa = 0;
+      useBobyqa = 0; /* Nelder-Mead always; see LaueMatchingHeaders.h */
+      if (strncmp(dummy, "BOBYQA", 6) == 0)
+        printf("NOTE: Optimizer BOBYQA requested, but BOBYQA has been "
+               "removed. Using Nelder-Mead, which measured better on "
+               "this objective (median 0.0041 vs 0.0054 deg, p95 3.3x "
+               "tighter) at the same cost.\n");
       continue;
     }
   }

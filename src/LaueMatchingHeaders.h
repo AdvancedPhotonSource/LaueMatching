@@ -13,7 +13,7 @@
 
 #include <fcntl.h>
 #include <math.h>
-#include <nlopt.h>
+#include "nelder_mead.h"
 #include <omp.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -54,7 +54,11 @@ extern double cellVol;
 extern double phiVol;
 extern int nSym;
 extern double Symm[24][4];
-extern int useBobyqa; // 1 = BOBYQA (default), 0 = Nelder-Mead
+// Retained only so an existing `Optimizer BOBYQA` line in a parameter file
+// still parses. BOBYQA is gone -- Nelder-Mead is used unconditionally, and
+// measured BETTER on this objective (see FitOrientation). Requesting BOBYQA
+// now prints a notice and proceeds with Nelder-Mead.
+extern int useBobyqa; // vestigial: reported, never selects an algorithm
 
 // ── Optimization data bundle ────────────────────────────────────────────
 struct dataFit {
@@ -767,24 +771,50 @@ FitOrientation(float *image, double euler[3], int *hkls, int nhkls, int nrPxX,
   f_data.Elo = Elo;
   f_data.Ehi = Ehi;
   void *trp = (void *)&f_data;
-  nlopt_opt opt;
-  // BOBYQA builds a smooth quadratic model, which fails on the piecewise-
-  // constant (integer-pixel) overlap objective when the seed is far from the
-  // peak.  The coarse stage forces Nelder-Mead, which tolerates the
-  // non-smooth objective and climbs the blurred gradient.
-  opt = nlopt_create((useBobyqa && !forceNelderMead) ? NLOPT_LN_BOBYQA
-                                                     : NLOPT_LN_NELDERMEAD,
-                     n);
-  nlopt_set_lower_bounds(opt, xl);
-  nlopt_set_upper_bounds(opt, xu);
-  nlopt_set_min_objective(opt, problem_function, trp);
-  if (initStepRad > 0.0)
-    nlopt_set_initial_step1(opt, initStepRad);
-  nlopt_set_ftol_rel(opt, 1e-6);
-  nlopt_set_xtol_rel(opt, 1e-6);
-  nlopt_set_maxeval(opt, 200);
-  nlopt_optimize(opt, x, &minf);
-  nlopt_destroy(opt);
+  // Nelder-Mead for BOTH stages, via the vendored simplex -- no NLopt.
+  //
+  // The objective (calcOverlap) samples observed intensity at the INTEGER pixel
+  // of each predicted reflection, so it is piecewise-constant: zero gradient
+  // except where a spot crosses a pixel boundary. BOBYQA fits a smooth
+  // quadratic model to that staircase, which is why the coarse stage always
+  // forced Nelder-Mead. Measured on 198 paired synthetic seeds perturbed by up
+  // to one 0.4 deg grid spacing, scored as misorientation to a known truth:
+  //
+  //   Nelder-Mead   median 0.004103 deg   p95 0.009076   max 0.013942   0.609 s
+  //   BOBYQA        median 0.005432 deg   p95 0.029568   max 0.345720   0.610 s
+  //
+  // Nelder-Mead is better on every statistic, wins 132/198 paired, and costs
+  // the same wall-clock. BOBYQA's worst case is its own seed error -- on that
+  // seed it did not refine at all, which is the quadratic model failing exactly
+  // as the comment above always predicted. Dropping it removes the last
+  // external dependency, so the C builds with no NLopt to fetch.
+  // See PREREGISTER.md / RESULTS.md in the optimiser-comparison analysis dir.
+  //
+  // `forceNelderMead` is retained in the signature: it is now always true in
+  // effect, and callers still pass it to document which stage they are in.
+  (void)forceNelderMead;
+  NLoptConfig cfg;
+  memset(&cfg, 0, sizeof(cfg));
+  cfg.objective_function = problem_function;
+  cfg.obj_data = trp;
+  cfg.dimension = n;
+  cfg.lower_bounds = xl;
+  cfg.upper_bounds = xu;
+  cfg.initial_guess = x;          /* IN/OUT: holds the best point on return */
+  cfg.ftol_rel = 1e-6;
+  cfg.xtol_rel = 1e-6;
+  cfg.max_evaluations = 200;
+  double nmStep[n];               /* same VLA form as x/xl/xu above */
+  if (initStepRad > 0.0) {
+    /* nlopt_set_initial_step1 set ONE scalar for every dimension; the vendored
+     * API takes a per-dimension array, so broadcast it. NULL leaves the NLopt
+     * default-step heuristic, which is what the fine stage always used. */
+    for (i = 0; i < (int)n; i++)
+      nmStep[i] = initStepRad;
+    cfg.step_sizes = nmStep;
+  }
+  run_nlopt_optimization(MIDAS_LN_NELDERMEAD, &cfg);
+  minf = cfg.min_function_val;
   for (i = 0; i < 3; i++)
     eulerFit[i] = x[i];
   if (doCrystalFit != 0) {
