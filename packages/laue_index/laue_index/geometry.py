@@ -15,7 +15,7 @@ NOT depend on it here: LaueMatching is a standalone, published, numpy+C indexer
 and ``midas_stress`` pulls in ``torch``; also ``misorientation_om`` returns the
 angle only (the CSL twin filter needs the axis too).  Decision (kept): duplicate
 consciously now; the future single-source is a small numpy-only orientation leaf
-that both ``midas_stress`` and this package depend on (the §1.5 shared leaf).
+that both ``midas_stress`` and this package depend on.
 """
 from __future__ import annotations
 

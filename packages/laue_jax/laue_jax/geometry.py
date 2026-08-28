@@ -2,8 +2,7 @@
 
 Math identical to ``laue_torch/geometry.py`` (which mirrors
 ``scripts/GenerateSimulation.py`` and ``src/LaueMatchingCPU.c``), expressed as
-JAX ops so the whole chain is differentiable in one framework (Plan A, Option
-7.1 of jax_cpfem_followup_plan.md).
+JAX ops so the whole chain is differentiable in one framework.
 
 Run with ``jax.config.update("jax_enable_x64", True)`` to match the float64
 numerics of the torch reference.

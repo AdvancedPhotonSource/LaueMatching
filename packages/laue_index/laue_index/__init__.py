@@ -3,9 +3,8 @@
 REFACTOR_PLAN §3: the loose ``scripts/`` are being migrated into this package,
 laid out like the sibling ``laue_torch`` (curated public API, single-
 responsibility modules, typed records).  This package stays independent of
-``laue_torch`` / ``laue_jax`` / ``jax_cpfem`` (see the §1.5 constraint box);
-shared pure math is duplicated with ``# TODO(unify-after-publish)`` until a
-common leaf can be extracted.
+``laue_torch`` and ``laue_jax``; shared pure math is duplicated with
+``# TODO(unify-after-publish)`` until a common leaf can be extracted.
 
 NOTE: those ``unify-after-publish`` TODOs are now actionable -- ``laue_torch``
 and ``laue_jax`` are packaged for release rather than private and paper-tied,

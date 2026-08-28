@@ -1,7 +1,7 @@
 """Differentiable JAX Laue forward projection (port of laue_torch).
 
 Single-framework JAX implementation so the Laue forward composes with JAX-CPFEM
-in one autodiff graph (Plan A of jax_cpfem_followup_plan.md, bridge Option 7.1).
+in one autodiff graph.
 
 Enable float64 to match the laue_torch reference::
 

@@ -19,7 +19,7 @@ This module centralises that knowledge:
 Pure: numpy only, no I/O state, no torch.
 ``# TODO(unify-after-publish)``: the orientation/recip/lattice math here is
 duplicated from the paper-tied ``laue_torch`` on purpose (see REFACTOR_PLAN
-§1.5 constraint box); extract a shared leaf once those packages publish.
+extract a shared leaf now that those packages have published.
 """
 from __future__ import annotations
 
