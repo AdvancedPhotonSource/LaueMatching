@@ -11,14 +11,26 @@ The 5-arg CLI contract is the integration boundary with the C side (REFACTOR_PLA
 """
 from __future__ import annotations
 
+import importlib.resources
 import logging
 import os
+import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
+from pathlib import Path
 
 logger = logging.getLogger("LaueMatching")
 
-__all__ = ["IndexerResult", "resolve_executable", "run_indexer"]
+__all__ = ["IndexerResult", "BinaryUnavailableError", "available",
+           "binary_path", "resolve_executable", "run_indexer"]
+
+#: Override the binary location outright. Checked first.
+BINARY_ENV = "LAUEMATCHING_BIN"
+
+
+class BinaryUnavailableError(RuntimeError):
+    """The indexing executable could not be found."""
 
 
 @dataclass
@@ -30,26 +42,114 @@ class IndexerResult:
     error: str | None = None
 
 
-def resolve_executable(repo_root: str, compute_type: str = "CPU",
-                       do_forward: bool = False) -> str:
-    """Pick the indexing executable path (<repo_root>/bin/<name>)."""
+def _executable_name(compute_type: str = "CPU", do_forward: bool = False) -> str:
+    """Which of the three binaries this request needs."""
     compute_type = compute_type.upper()
     if compute_type == "GPU" and not do_forward:
-        name = "LaueMatchingGPU"
-    else:
-        name = "LaueMatchingCPU"
-        if compute_type == "GPU" and do_forward:
-            logger.warning("GPU requested but DoFwd is enabled. Using CPU implementation (LaueMatchingCPU).")
-        elif compute_type != "CPU":
-            logger.warning(f"Processing type '{compute_type}' not recognized or incompatible. Using CPU implementation.")
-    return os.path.join(repo_root, "bin", name)
+        return "LaueMatchingGPU"
+    if compute_type == "GPU" and do_forward:
+        logger.warning("GPU requested but DoFwd is enabled. Using CPU implementation (LaueMatchingCPU).")
+    elif compute_type != "CPU":
+        logger.warning(f"Processing type '{compute_type}' not recognized or incompatible. Using CPU implementation.")
+    return "LaueMatchingCPU"
 
 
-def _build_env(repo_root: str) -> dict:
+def _candidates(name: str, repo_root: str | None = None) -> list[Path]:
+    """Every place the binary might legitimately live, in priority order.
+
+    The old implementation returned exactly one path,
+    ``<repo_root>/bin/<name>``, and required the caller to know where a source
+    checkout was. That made an installed package unusable: `pip install
+    laue-index` gave a wrapper whose central function needed a repo, and whose
+    error advised running `make` in a build directory that does not exist.
+    """
+    out: list[Path] = []
+    env = os.environ.get(BINARY_ENV)
+    if env:
+        p = Path(env)
+        # Accept either the executable itself or a directory holding it.
+        out.append(p / name if p.is_dir() else p)
+    # Built into the package by scikit-build-core at `pip install` time.
+    try:
+        out.append(Path(str(importlib.resources.files("laue_index") / "bin" / name)))
+    except (ModuleNotFoundError, FileNotFoundError, TypeError):
+        pass
+    # Editable installs: importlib.resources resolves to the SOURCE tree, which
+    # has no bin/, while the binary sits in site-packages.
+    pyver = f"python{sys.version_info.major}.{sys.version_info.minor}"
+    for prefix in {sys.prefix, sys.exec_prefix}:
+        out.append(Path(prefix) / "lib" / pyver / "site-packages" / "laue_index" / "bin" / name)
+    # On PATH (release tarball unpacked somewhere, conda, a manual install).
+    which = shutil.which(name)
+    if which:
+        out.append(Path(which))
+    # A source checkout, the historical location.
+    if repo_root:
+        out.append(Path(repo_root) / "bin" / name)
+    return out
+
+
+def binary_path(compute_type: str = "CPU", do_forward: bool = False,
+                repo_root: str | None = None) -> Path:
+    """Path to the indexing binary. May not exist -- test with :func:`available`.
+
+    Returns the first candidate that exists; if none do, returns the first
+    candidate so the caller can name a concrete path in a diagnostic.
+    """
+    name = _executable_name(compute_type, do_forward)
+    cands = _candidates(name, repo_root)
+    for c in cands:
+        if c.is_file():
+            return c
+    return cands[0]
+
+
+def available(compute_type: str = "CPU", do_forward: bool = False,
+              repo_root: str | None = None) -> bool:
+    """True if the binary this request needs is present and executable."""
+    p = binary_path(compute_type, do_forward, repo_root)
+    return p.is_file() and os.access(p, os.X_OK)
+
+
+def _unavailable_message(compute_type: str, do_forward: bool,
+                         repo_root: str | None) -> str:
+    name = _executable_name(compute_type, do_forward)
+    lines = [f"{name} not found. Looked in, in order:"]
+    lines += [f"  - {c}" for c in _candidates(name, repo_root)]
+    lines += [
+        "",
+        "The C indexer is compiled at `pip install` time. If your machine had no",
+        "compiler then, reinstall after installing one, or point at a binary you",
+        f"already have with {BINARY_ENV}=/path/to/{name} (or to its directory).",
+        "From a source checkout, ./build.sh writes it to bin/.",
+    ]
+    return "\n".join(lines)
+
+
+def resolve_executable(repo_root: str | None = None, compute_type: str = "CPU",
+                       do_forward: bool = False) -> str:
+    """Back-compatible shim: the path as a string.
+
+    Kept because `scripts/RunImage.py` calls it positionally with a repo root.
+    Prefer :func:`binary_path` / :func:`available` in new code.
+    """
+    return str(binary_path(compute_type, do_forward, repo_root))
+
+
+def _build_env(repo_root: str | None) -> dict:
+    """The binary has no shared-library dependencies any more.
+
+    It used to link NLopt from LIBS/NLOPT/{lib,lib64}, which had to be put on
+    LD_LIBRARY_PATH here. NLopt was dropped (the simplex is vendored into the C),
+    so there is nothing to add -- but the LIBS paths are still prepended when a
+    repo root is given, harmlessly, in case an old tree's binary is being run.
+    """
     env = dict(os.environ)
-    lib = os.path.join(repo_root, "LIBS", "NLOPT", "lib")
-    lib64 = os.path.join(repo_root, "LIBS", "NLOPT", "lib64")
-    env["LD_LIBRARY_PATH"] = f"{lib}:{lib64}:{env.get('LD_LIBRARY_PATH', '')}"
+    if repo_root:
+        lib = os.path.join(repo_root, "LIBS", "NLOPT", "lib")
+        lib64 = os.path.join(repo_root, "LIBS", "NLOPT", "lib64")
+        if os.path.isdir(lib) or os.path.isdir(lib64):
+            env["LD_LIBRARY_PATH"] = f"{lib}:{lib64}:{env.get('LD_LIBRARY_PATH', '')}"
     return env
 
 
@@ -60,11 +160,12 @@ def run_indexer(*, repo_root: str, config_file: str, orient_db_file: str,
 
     stdout/stderr are written to ``<output_path>.LaueMatching_std{out,err}.txt``.
     """
-    executable = resolve_executable(repo_root, compute_type, do_forward)
-    if not os.path.exists(executable):
-        logger.error(f"Indexing executable not found at: {executable}")
-        logger.error("Please ensure the code is compiled (e.g., run 'make' in the build directory).")
-        return IndexerResult(success=False, error="Indexing executable not found")
+    if not available(compute_type, do_forward, repo_root):
+        msg = _unavailable_message(compute_type, do_forward, repo_root)
+        for line in msg.splitlines():
+            logger.error(line)
+        return IndexerResult(success=False, error=msg)
+    executable = str(binary_path(compute_type, do_forward, repo_root))
 
     cmd = [executable, config_file, orient_db_file, hkl_file, image_bin, str(ncpus)]
     logger.info(f'Running indexing command: {" ".join(cmd)}')

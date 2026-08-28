@@ -5,6 +5,7 @@ include LICENSE
 include pyproject.toml
 include laue_index/README.md
 
+recursive-include c_src *.c *.h
 recursive-include tests *.py
 recursive-include tests/fixtures *.txt *.npz
 recursive-include tests/golden *.json

@@ -3,6 +3,7 @@ name: Build
 on:
   push:
     branches: [ "main" ]
+    tags: [ "v*", "laue-*" ]
   pull_request:
     branches: [ "main" ]
 
@@ -13,21 +14,19 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     
-    # Cache NLopt to speed up build
-    - name: Cache NLopt
-      id: cache-nlopt
-      uses: actions/cache@v4
-      with:
-        path: LIBS/NLOPT
-        key: ${{ runner.os }}-nlopt-${{ hashFiles('CMakeLists.txt') }}
-        restore-keys: |
-          ${{ runner.os }}-nlopt-
 
     - name: Install dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y cmake build-essential
         
+    - name: Vendored C is in sync
+      # packages/laue_index/c_src/ is a deliberate copy of src/ so that
+      # `pip install laue-index` can compile from its own sdist. A one-copy
+      # edit would leave the pip-installed indexer running different code from
+      # the one this job builds, with every test still green.
+      run: python3 utils/sync_vendored_c.py --check
+
     - name: Build
       run: SKIP_DOWNLOAD=1 ./build.sh
       
@@ -40,6 +39,21 @@ jobs:
           echo "Build failed: binary not found."
           exit 1
         fi
+
+    # The binaries were built and then thrown away on every push. Keep them:
+    # they are what a user without a compiler needs, and CI already made them.
+    - name: Upload CPU binary
+      uses: actions/upload-artifact@v4
+      with:
+        name: LaueMatchingCPU-linux-x86_64
+        path: bin/LaueMatchingCPU
+        if-no-files-found: error
+
+    - name: Attach to the release
+      if: startsWith(github.ref, 'refs/tags/')
+      uses: softprops/action-gh-release@v2
+      with:
+        files: bin/LaueMatchingCPU
 
   build-gpu:
     runs-on: ubuntu-latest
@@ -67,3 +81,20 @@ jobs:
             exit 1
           fi
         done
+
+    - name: Upload CUDA binaries
+      uses: actions/upload-artifact@v4
+      with:
+        name: LaueMatching-cuda12.6-linux-x86_64
+        path: |
+          bin/LaueMatchingGPU
+          bin/LaueMatchingGPUStream
+        if-no-files-found: error
+
+    - name: Attach to the release
+      if: startsWith(github.ref, 'refs/tags/')
+      uses: softprops/action-gh-release@v2
+      with:
+        files: |
+          bin/LaueMatchingGPU
+          bin/LaueMatchingGPUStream

@@ -2,8 +2,8 @@
 # The C/CUDA core (src/, built via CMakeLists.txt + build.sh) is independent;
 # this packages only the Python side (REFACTOR_PLAN §6.6).
 [build-system]
-requires = ["setuptools>=61"]
-build-backend = "setuptools.build_meta"
+requires = ["scikit-build-core>=0.10"]
+build-backend = "scikit_build_core.build"
 
 [project]
 name = "laue-index"
@@ -48,8 +48,14 @@ dev = [
 [project.scripts]
 laue-index = "laue_index.cli:main"
 
-[tool.setuptools]
-packages = ["laue_index"]
+[tool.scikit-build]
+cmake.version = ">=3.20"
+cmake.source-dir = "."
+wheel.packages = ["laue_index"]
+build-dir = "build/{wheel_tag}"
+# The C target returns early rather than erroring when a compiler, OpenMP, or
+# the repo's src/ is absent, so `pip install` still succeeds Python-only and
+# laue_index.indexer.available() reports False at runtime.
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
