@@ -5,9 +5,11 @@ description: >-
   null-gated grain map and a report: survey the raster, decide what science is
   askable, configure the material, index (sharded across GPUs), analyse against
   a measured null, and report. Use when asked to index, analyse or diagnose a
-  Laue / polychromatic microdiffraction scan, when handed a raster of Laue
-  frames, or when a Laue grain map or correlation looks wrong. Covers 34-ID-E
-  raster acquisition through the LaueMatching chain.
+  Laue / polychromatic / white-beam microdiffraction scan, when handed a raster
+  of Laue frames, or when a Laue grain map, orientation or correlation looks
+  wrong. Covers both REFLECTION geometry (34-ID-E, panel edge-on above the
+  sample) and TRANSMISSION geometry (16-BM-D / HPCAT, panel downstream and
+  centred near the direct beam), through the LaueMatching chain.
 ---
 
 # Laue microdiffraction
@@ -28,7 +30,27 @@ Experiment folder: <ABSOLUTE PATH>
 Material:          <e.g. Ni superalloy / 316L / Zr-4 / unknown, tell me from the data>
 ```
 
-## Four things to know before you start
+## Which geometry?
+
+The spine opens with a scope table. Establish this before anything else, because it changes
+where the pattern sits on the panel and therefore what every downstream assumption means:
+
+- **Reflection** (34-ID-E) — panel edge-on above the sample, pattern runs vertically.
+- **Transmission** (16-BM-D) — panel downstream, pattern radial about the beam, and the
+  **direct beam is not at the point of normal incidence**: at 30° tilt they were 751 px
+  apart. See `LAB_NOTEBOOK_16BMD_Si.md`.
+
+The forward model is identical for both. Everything built *around* it is not.
+
+## Five things to know before you start
+
+0. **Nothing you can measure inside a Laue pattern fixes the rotation about the beam.** It is
+   an exact gauge freedom — measured at φ = 90°, no predicted pixel moves by more than
+   2.3e-13 px and no energy changes at all. Relative quantities are fine; anything absolute
+   needs metrology from outside the pattern. Agreement with a second code on the same
+   calibration does **not** count. This was missed twice in one day.
+
+## Four more
 
 1. **Phase 1 is not optional and cannot be automated.** What science is askable decides
    which half of the analysis chain runs at all. Answer it in writing, including which

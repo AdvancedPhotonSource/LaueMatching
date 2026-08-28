@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "laue-jax"
+version = "0.1.0"
+description = "Differentiable JAX forward projection for white-beam Laue microdiffraction: a single-framework port of laue-torch so the Laue forward composes with JAX-CPFEM in one autodiff graph."
+readme = "README.md"
+requires-python = ">=3.9"
+license = "BSD-3-Clause"
+authors = [
+    { name = "Hemant Sharma", email = "hsharma@anl.gov" },
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+dependencies = [
+    "jax>=0.4",
+    "numpy>=1.20",
+]
+
+[project.optional-dependencies]
+# laue-torch is needed ONLY by the torch<->jax parity test, never at runtime.
+# Keeping it out of `dependencies` is deliberate: the whole point of this
+# package is a JAX-only dependency footprint.
+dev = ["pytest>=7.0", "laue-torch>=0.1.0", "torch>=2.0"]
+
+[project.urls]
+Homepage = "https://github.com/AdvancedPhotonSource/LaueMatching"
+Repository = "https://github.com/AdvancedPhotonSource/LaueMatching"
+
+[tool.setuptools]
+packages = ["laue_jax"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

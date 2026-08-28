@@ -1,0 +1,71 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "laue-torch"
+version = "0.1.0"
+description = "Differentiable PyTorch forward model for white-beam Laue microdiffraction, with per-voxel orientation- and strain-distribution (ODF/SDF) recovery, coded-aperture depth resolution, and joint multi-grain fitting."
+readme = "README.md"
+requires-python = ">=3.9"
+license = "BSD-3-Clause"
+authors = [
+    { name = "Hemant Sharma", email = "hsharma@anl.gov" },
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+dependencies = [
+    "numpy>=1.20",
+    "torch>=2.0",
+    # cli.py reads detector frames and writes TIFFs at module import.
+    "h5py>=3.0",
+    "Pillow>=9.0",
+    # coded_aperture/baseline_twostage.py imports scipy.optimize.nnls at module
+    # level, so scipy is not optional once coded_aperture ships.
+    "scipy>=1.7",
+    # --- Sibling MIDAS packages. Do NOT re-implement these primitives. ---
+    # 0.11.0 floor is what the symmetry contract test was verified against.
+    # The torch dispatch this relies on landed in 0.5.0, but only 0.11.0 has
+    # been checked against the pre-migration reference values; a lower floor
+    # would be an unverified claim. See tests/test_symmetry_contract.py.
+    "midas-stress>=0.11.0",   # symmetry-reduced misorientation (RADIANS ->
+                              # laue_torch.symmetry converts to degrees),
+                              # axis_angle_to_orient_mat, quat_to_orient_mat
+    "midas-hkls>=0.9.0",      # Lattice, SpaceGroup, hkl_gen, X-ray absorption
+    "midas-invert>=0.1.1",    # Laplace uncertainty, fit/relative_l2_loss
+]
+
+[project.optional-dependencies]
+viz = ["matplotlib>=3.5"]
+dev = ["pytest>=7.0", "matplotlib>=3.5"]
+
+[project.scripts]
+laue-torch = "laue_torch.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/AdvancedPhotonSource/LaueMatching"
+Repository = "https://github.com/AdvancedPhotonSource/LaueMatching"
+
+[tool.setuptools]
+# EXPLICIT list, never `find:`. The research tree that used to live inside this
+# package (experiments/, 417 MB) carried an __init__.py, so a find_packages()
+# would have shipped it to PyPI. It has since been moved out to research/, but
+# the explicit list is the structural guarantee, not the move.
+packages = [
+    "laue_torch",
+    "laue_torch.coded_aperture",
+    "laue_torch.jointfit",
+    "laue_torch.realdata",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "unit: synthetic-data correctness tests (fast, every PR)",
+    "contract: locks an API surface reused from a sibling MIDAS package",
+]

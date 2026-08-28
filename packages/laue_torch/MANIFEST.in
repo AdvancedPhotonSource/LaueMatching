@@ -1,0 +1,21 @@
+# setuptools' default sdist picks up package modules but NOT conftest.py,
+# tests/__init__.py or examples/ -- without this file the shipped test suite
+# is unrunnable (no fixtures) and the tutorials are absent.
+include LICENSE
+include README.md
+include pyproject.toml
+
+recursive-include tests *.py
+recursive-include examples *.py
+
+# Belt-and-braces against the unpublished research tree. It lives OUTSIDE this
+# directory (repo-root research/, git-excluded) and pyproject uses an explicit
+# packages= list, so these should be unreachable -- but a sdist that silently
+# grows a report/ directory is a disclosure, not a bug report.
+prune report
+prune experiments
+prune research
+
+global-exclude __pycache__
+global-exclude *.py[cod]
+global-exclude .DS_Store

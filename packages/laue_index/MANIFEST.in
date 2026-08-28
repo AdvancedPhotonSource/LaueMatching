@@ -1,0 +1,15 @@
+# setuptools' default sdist picks up package modules but NOT conftest.py or
+# the characterization suite's data. The golden anchors and fixtures ARE the
+# test -- shipping the test files without them makes the suite unrunnable.
+include LICENSE
+include pyproject.toml
+include laue_index/README.md
+
+recursive-include tests *.py
+recursive-include tests/fixtures *.txt *.npz
+recursive-include tests/golden *.json
+
+
+global-exclude __pycache__
+global-exclude *.py[cod]
+global-exclude .DS_Store

@@ -27,6 +27,14 @@ simulation/valid_hkls.csv
 100MilOrients.bin
 __pycache__/
 
+# Python distribution artifacts (packages/*/). Built by release.sh and CI;
+# never committed. `build/` above already covers packages/*/build/.
+dist/
+*.egg-info/
+.eggs/
+*.egg
+
+
 # Local IDE / tooling.
 # `.claude/*` and not `.claude/`: git does not descend into an excluded DIRECTORY,
 # so a negation under it never matches. Excluding the contents keeps the directory

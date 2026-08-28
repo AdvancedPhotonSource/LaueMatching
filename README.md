@@ -22,6 +22,7 @@ Developed at the [Advanced Photon Source](https://www.aps.anl.gov/) at Argonne N
 - **Crystal Symmetry** — supports all crystal systems (cubic through triclinic, including trigonal)
 - **Lattice Parameter Refinement** — optional c/a ratio fitting via NLopt optimization
 - **End-to-End Pipeline** — Python wrappers for image preprocessing, indexing, and forward simulation validation
+- **Differentiable Forward Model** — `laue_torch` PyTorch package for gradient-based geometry calibration, orientation refinement, strain fitting, and ODF inference; see [docs/torch-forward-model.md](docs/torch-forward-model.md)
 
 ---
 
@@ -146,17 +147,20 @@ LaueMatching/
 │   ├── LaueMatchingGPU.cu            # GPU single-image (CUDA)
 │   ├── LaueMatchingGPUStream.cu      # GPU streaming daemon (CUDA + TCP)
 │   └── LaueMatchingHeaders.h         # Shared definitions and utilities
-├── laue_index/                       # Typed pipeline-stage package (the Python core)
-│   ├── records.py                    #   Solution record + parse_solutions (typed; no column magic)
-│   ├── geometry.py                   #   pure CSL / disorientation helpers
-│   ├── filtering.py                  #   OrientationFilter strategies (single source of truth)
-│   ├── thresholds.py                 #   ThresholdStrategy classes
-│   ├── preprocess.py                 #   background → threshold → components → blur (+ Preprocessor)
-│   ├── indexer.py                    #   thin C-binary wrapper (run_indexer)
-│   ├── postprocess.py                #   PostProcessor (unique-spots → filter → spot-filter)
-│   ├── output.py                     #   HDF5 result writer
-│   ├── config_schema.py              #   one declarative table → config parse + write
-│   └── cli.py                        #   `laue-index` CLI (parse / filter)
+├── packages/                         # Python distributions (each pip-installable)
+│   ├── laue_index/laue_index/        # Typed pipeline-stage package (the Python core)
+│   │   ├── records.py                #   Solution record + parse_solutions (typed; no column magic)
+│   │   ├── geometry.py               #   pure CSL / disorientation helpers
+│   │   ├── filtering.py              #   OrientationFilter strategies (single source of truth)
+│   │   ├── thresholds.py             #   ThresholdStrategy classes
+│   │   ├── preprocess.py             #   background → threshold → components → blur (+ Preprocessor)
+│   │   ├── indexer.py                #   thin C-binary wrapper (run_indexer)
+│   │   ├── postprocess.py            #   PostProcessor (unique-spots → filter → spot-filter)
+│   │   ├── output.py                 #   HDF5 result writer
+│   │   ├── config_schema.py          #   one declarative table → config parse + write
+│   │   └── cli.py                    #   `laue-index` CLI (parse / filter)
+│   ├── laue_torch/                   # Differentiable PyTorch forward + ODF/SDF recovery
+│   └── laue_jax/                     # JAX port of the forward model (JAX-CPFEM bridge)
 ├── scripts/                          # Orchestration + utilities (see scripts/README.md)
 │   ├── RunImage.py                   # Single-image indexing pipeline (orchestrator)
 │   ├── laue_orchestrator.py          # Streaming pipeline entry point
@@ -169,14 +173,12 @@ LaueMatching/
 │   ├── GenerateHKLs.py               # Generate valid HKL list
 │   ├── GenerateSimulation.py         # Create synthetic Laue patterns
 │   └── ImageCleanup.py               # Pre-process raw detector images
-├── tests/                            # pytest suite + golden characterization anchors
 ├── bin/                              # Compiled binaries (created by build)
 ├── logos/                            # Project logo
 ├── LIBS/NLOPT/                       # NLopt dependency (auto-downloaded)
 ├── simulation/                       # Example data and parameter files
 ├── CMakeLists.txt                    # CMake build system (C/CUDA)
 ├── build.sh                          # Convenience build script
-├── pyproject.toml                    # Python package (laue-index) + pytest config
 ├── requirements.txt                  # Python dependencies
 └── 100MilOrients.bin                 # Pre-computed orientations (~6.7 GB)
 ```
@@ -187,7 +189,7 @@ orientation filtering) and one declarative config schema.  `scripts/` holds the
 orchestrators (`RunImage.py`, the streaming pipeline) and utilities;
 `laue_stream_utils.py` is a thin re-export shim so existing imports keep working.
 See [scripts/README.md](scripts/README.md) and
-[laue_index/README.md](laue_index/README.md).
+[packages/laue_index/laue_index/README.md](packages/laue_index/laue_index/README.md).
 
 ---
 
@@ -386,12 +388,16 @@ See `simulation/params_sim.txt` for a complete example.
 
 ## Testing
 
-The Python side has a `pytest` suite under `tests/` built on **golden
-characterization anchors** — small fixtures pin the current behaviour of each
-pipeline stage (parsing, thresholding, filtering, geometry, config round-trip,
-preprocessing) so refactors are provably behaviour-preserving.
+Each package in `packages/` carries its own suite and is tested from its own
+directory.
+
+**`laue_index`** is built on **golden characterization anchors** — small
+fixtures pin the current behaviour of each pipeline stage (parsing,
+thresholding, filtering, geometry, config round-trip, preprocessing) so
+refactors are provably behaviour-preserving.
 
 ```bash
+cd packages/laue_index
 pip install -e '.[dev]'
 pytest                      # unit suite (no orientation DB or C binary needed)
 ```
@@ -409,6 +415,18 @@ Without `LAUE_E2E=1` it skips, so CI stays green with `SKIP_DOWNLOAD=1` (the
 (`tests/test_runimage_orchestration.py`) covers RunImage's orchestration without
 the binary or DB. To regenerate a golden after an *intentional* behaviour change:
 `UPDATE_GOLDEN=1 pytest`.
+
+**`laue_torch`** and **`laue_jax`** are tested the same way:
+
+```bash
+cd packages/laue_torch && pip install -e '.[dev]' && pytest
+cd packages/laue_jax   && pip install -e '.[dev]' && pytest
+```
+
+`laue_torch`'s parity tests compare the differentiable forward against the
+repository's reference NumPy/C simulator, so they need a real checkout
+(`simulation/`, `scripts/`). Run from an installed wheel instead and they skip
+cleanly rather than failing.
 
 ---
 
@@ -461,7 +479,7 @@ H. Sharma, D. Sheyfer, R. Harder and J.Z. Tischler (2026). *J. Appl. Cryst.* **5
   `scripts/laue_stream_utils.py` is now a thin re-export shim and `RunImage.py`
   is a thin orchestrator over the stages.  pip-installable (`pip install -e .`,
   `laue-index` CLI).  Behaviour-preserving, guarded by a golden-anchored
-  characterization test suite under `tests/`.
+  characterization test suite under `packages/laue_index/tests/`.
 - **C / CUDA hardening**: `size_t` indexing (large-DB overflow safety), full
   malloc/`mmap`/`fread` checks, single end-of-run `fsync` (was per-write
   `O_SYNC`), `snprintf` bounds, kernel pixel-bounds + spot-count clamps, and a

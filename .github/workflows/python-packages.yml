@@ -1,0 +1,130 @@
+name: Python packages
+
+# Builds and publishes the Python distributions in packages/.
+#
+# The C/CUDA core is built by build.yml and is unrelated to this workflow.
+#
+# Publishing is driven by an annotated tag of the form <pypi-name>-v<version>,
+# which packages/<pkg>/release.sh creates. The tag -> package map below is a
+# hand-maintained chain: a tag that matches NO branch builds nothing and
+# publishes nothing, silently. release.sh greps this file before pushing for
+# exactly that reason.
+
+on:
+  push:
+    tags:
+      - 'laue-torch-v*'
+      - 'laue-jax-v*'
+      - 'laue-index-v*'
+  pull_request:
+    paths:
+      - 'packages/**'
+      - '.github/workflows/python-packages.yml'
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: test ${{ matrix.package }} (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [laue_torch, laue_jax, laue_index]
+        python-version: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install package + dev extras
+        working-directory: packages/${{ matrix.package }}
+        run: |
+          python -m pip install --upgrade pip
+          # CPU-only torch: the GPU wheels are multi-GB and nothing here needs them.
+          pip install --extra-index-url https://download.pytorch.org/whl/cpu -e ".[dev]"
+
+      - name: Run tests
+        working-directory: packages/${{ matrix.package }}
+        env:
+          KMP_DUPLICATE_LIB_OK: 'TRUE'
+        run: pytest -q --tb=short
+
+  build:
+    name: build sdist + wheel
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    outputs:
+      package: ${{ steps.identify.outputs.package }}
+      pypi_name: ${{ steps.identify.outputs.pypi_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Identify package from tag
+        id: identify
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          echo "Tag: $TAG"
+          if [[ "$TAG" == laue-torch-v* ]]; then
+            echo "package=laue_torch" >> "$GITHUB_OUTPUT"
+            echo "pypi_name=laue-torch" >> "$GITHUB_OUTPUT"
+          elif [[ "$TAG" == laue-jax-v* ]]; then
+            echo "package=laue_jax" >> "$GITHUB_OUTPUT"
+            echo "pypi_name=laue-jax" >> "$GITHUB_OUTPUT"
+          elif [[ "$TAG" == laue-index-v* ]]; then
+            echo "package=laue_index" >> "$GITHUB_OUTPUT"
+            echo "pypi_name=laue-index" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::Tag '$TAG' matches no package. Nothing would be published."
+            exit 1
+          fi
+
+      - name: Build
+        working-directory: packages/${{ steps.identify.outputs.package }}
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build
+
+      - name: Verify the sdist carries no unpublished research
+        working-directory: packages/${{ steps.identify.outputs.package }}
+        run: |
+          SDIST=$(ls dist/*.tar.gz | head -1)
+          echo "Inspecting $SDIST"
+          if tar -tzf "$SDIST" | grep -iE '(^|/)(report|experiments|research)/'; then
+            echo "::error::sdist contains unpublished research paths. Refusing to publish."
+            exit 1
+          fi
+          SIZE_MB=$(( $(wc -c < "$SDIST") / 1048576 ))
+          echo "sdist size: ${SIZE_MB} MB"
+          if [ "$SIZE_MB" -gt 10 ]; then
+            echo "::error::sdist is ${SIZE_MB} MB; expected ~1 MB. Something bulky got swept in."
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: packages/${{ steps.identify.outputs.package }}/dist/
+
+  publish:
+    name: publish to PyPI
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      # Required for PyPI trusted publishing (OIDC). No API token is stored.
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@release/v1
