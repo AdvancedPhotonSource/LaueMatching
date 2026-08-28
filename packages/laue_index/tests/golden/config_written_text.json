@@ -22,6 +22,8 @@
   "Threshold           0.0 # Used only if ThresholdMethod is 'fixed'",
   "ThresholdPercentile 90.0 # Used only if ThresholdMethod is 'percentile'",
   "MinArea             5",
+  "ExcludeSpotsDir      # Directory of PER-FRAME exclusion lists for iterative indexing: one '<frame-stem>.txt' of 'x y [radius]' rows per frame, holding the spots an already-accepted orientation explained on THAT frame. A missing file means nothing to exclude there, which is normal once a frame is exhausted. Applied on top of ExcludeSpotsFile, not instead of it, so a static substrate list and a per-frame residual list compose.",
+  "ExcludeSpotsFile     # Detector positions whose spots must NOT count as evidence. .npy bool mask (NrPxY,NrPxX), or a text file of 'x y [radius]' rows. Whole connected components centred inside are dropped AFTER component filtering, so they never reach the matcher. Use for a known substrate, or between passes of iterative indexing. Do NOT try to do this by editing the images: removing a reflection promotes its neighbourhood to local maxima and manufactures a ring of false peaks (measured 2.7-3.4x for weak spots, 21x for a saturated one).",
   "FilterRadius        101",
   "NMeadianPasses      5",
   "WatershedImage      0",

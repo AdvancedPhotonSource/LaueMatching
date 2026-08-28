@@ -98,14 +98,19 @@ def test_pixel_set_matches_numpy_reference(params_path, hkl_csv, four_orients):
     assert not extra, f"{len(extra)} torch pixels not in reference: {list(extra)[:5]}"
 
 
-def test_render_produces_image(params_path, four_orients):
+def test_render_produces_image(params_path, hkl_csv, four_orients):
     import GenerateSimulation as gs
 
     p = parse_params(str(params_path))
     t = p.to_tensors()
     cp = gs.ConfigParser(str(params_path))
     params = cp.get_params()
-    hkl_data = np.genfromtxt(Path(params_path).parent / "valid_hkls.csv")
+    # Use the hkl_csv FIXTURE, not a path built from params_path. valid_hkls.csv
+    # is generated, not committed, so it is absent from a fresh clone and from
+    # an installed sdist; the fixture skips, a hand-built path raises
+    # FileNotFoundError. The other three parity tests already use it -- this one
+    # did not, and was the only parity test that failed on CI.
+    hkl_data = np.genfromtxt(hkl_csv)
     orients = np.genfromtxt(four_orients).reshape(-1, 3, 3)
 
     hkls = torch.tensor(hkl_data[:, :3].astype(np.int64))

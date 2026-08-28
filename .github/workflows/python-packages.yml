@@ -42,6 +42,14 @@ jobs:
         working-directory: packages/${{ matrix.package }}
         run: |
           python -m pip install --upgrade pip
+          # Sibling packages must come from THIS TREE, not from PyPI. laue_jax's
+          # dev extra names laue-torch, and resolving that from the index either
+          # fails before the first release or -- worse, afterwards -- silently
+          # tests the last published version instead of the code being changed.
+          if [ "${{ matrix.package }}" = "laue_jax" ]; then
+            pip install --extra-index-url https://download.pytorch.org/whl/cpu \
+              -e ../laue_torch
+          fi
           # CPU-only torch: the GPU wheels are multi-GB and nothing here needs them.
           pip install --extra-index-url https://download.pytorch.org/whl/cpu -e ".[dev]"
 
@@ -53,6 +61,10 @@ jobs:
 
   build:
     name: build sdist + wheel
+    # GATE THE UPLOAD ON THE TESTS. Without `needs: test`, build and publish run
+    # in parallel with the matrix and a red suite does not stop the release --
+    # laue-torch 0.1.0 published while two of its own tests were failing.
+    needs: test
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     outputs:

@@ -7,6 +7,8 @@
   "ehi": 30.0,
   "elo": 5.0,
   "enhance_contrast": false,
+  "exclude_spots_dir": "",
+  "exclude_spots_file": "",
   "filter_radius": 101,
   "gauss_sigma_max": 0.0,
   "gaussian_factor": 0.25,

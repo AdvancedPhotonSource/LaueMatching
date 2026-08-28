@@ -169,16 +169,30 @@ def test_superposition_and_stacking():
 
 
 def test_gradients_reach_length_axis_and_position():
-    px = torch.tensor([40.0], dtype=torch.float64, requires_grad=True)
+    """Gradients must reach px, length and axis.
+
+    px is deliberately OFF the pixel-grid symmetry point. At px = 40.0 in an
+    80x80 image the streak is exactly centred, and d/dpx of a symmetric
+    functional like ``(img**2).sum()`` vanishes *analytically* -- so asserting a
+    non-zero gradient there tests nothing about whether gradients flow.
+
+    Measured at px=40.0: |grad| = 4.4e-16 on torch 2.9 (rounding residue, which
+    happened to satisfy `> 0`) and exactly 0.0 on torch 2.13, where this test
+    failed on CI while passing locally. Same at 40.5 and 41.0. Off-centre the
+    gradient is a real 1.1e-05, ~1e11 times larger than the noise floor.
+    """
+    px = torch.tensor([40.3], dtype=torch.float64, requires_grad=True)
     L = torch.tensor([20.0], dtype=torch.float64, requires_grad=True)
     ax = torch.tensor([[1.0, 0.3]], dtype=torch.float64, requires_grad=True)
     img = streak_splat(px, torch.tensor([40.0], dtype=torch.float64),
                        torch.ones(1, dtype=torch.float64), ax, L,
                        1.06, 1.5, (80, 80), 41)
     (img ** 2).sum().backward()
+    # Floor well above float64 rounding residue, so a genuinely dead gradient
+    # cannot pass on numerical noise the way the original assertion could.
     for name, t in (("px", px), ("length", L), ("axis", ax)):
         assert t.grad is not None and torch.isfinite(t.grad).all(), name
-        assert float(t.grad.abs().sum()) > 0, f"{name} got a zero gradient"
+        assert float(t.grad.abs().sum()) > 1e-12, f"{name} got a zero gradient"
 
 
 def test_rejects_bad_inputs():
