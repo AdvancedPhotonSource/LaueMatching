@@ -116,7 +116,15 @@ jobs:
         working-directory: packages/${{ needs.select.outputs.package }}
         run: |
           python -m pip install --upgrade pip build
-          python -m build
+          # laue_index compiles C via scikit-build-core, so a wheel here would be
+          # tagged linux_x86_64 -- which PyPI refuses. Publish the sdist and let
+          # pip compile on the user's machine. laue_torch and laue_jax are pure
+          # Python, so their py3-none-any wheels are fine and worth shipping.
+          if [ "${{ needs.select.outputs.package }}" = "laue_index" ]; then
+            python -m build --sdist
+          else
+            python -m build
+          fi
 
       - name: Verify the sdist carries no unpublished research
         working-directory: packages/${{ needs.select.outputs.package }}

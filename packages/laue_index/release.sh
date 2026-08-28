@@ -125,7 +125,14 @@ if ! python -c "import build" 2>/dev/null; then
 fi
 
 set -o pipefail
-python -m build 2>&1 | tail -5
+# SDIST ONLY. scikit-build-core compiles the C, so `python -m build` emits a
+# PLATFORM wheel (cp312-cp312-linux_x86_64 on CI) and PyPI rejects bare
+# linux_x86_64 -- only manylinux/musllinux are accepted. Publishing a platform
+# wheel would also silently shadow the sdist for matching users and start a
+# wheel matrix we have deliberately chosen not to maintain (see the MIDAS
+# cibuildwheel post-mortem). midas-index, the model for this package, is
+# sdist-only on PyPI for the same reason.
+python -m build --sdist 2>&1 | tail -5
 set +o pipefail
 
 if [ ! -d dist ] || [ -z "$(ls -A dist 2>/dev/null)" ]; then
