@@ -71,3 +71,49 @@ the groups? If it does not, the split is an artefact of the cutoff.
 **Lever.** Contrast on an independent signature, and store the threshold's statistic beside
 any threshold-defined split so no reader mistakes the split for a result. Lab Notebook,
 invariant 9.
+
+## A diffuse fan that does not come from the direct beam
+
+symptom: background.structured
+
+**Test.** Fit the local streak directions (structure tensor) for a common convergence point,
+and compare that point against **where the transmitted beam meets the detector plane** —
+computed from the geometry, *not* taken to be the PONI. On a tilted panel the two differ:
+measured 751 px apart at 30° tilt. Control the fit against random directions at the same
+pixels; a real convergence gave 29.5 px residual against 86.9 ± 0.3 px for the control.
+
+If the streaks converge on the beam, it is small-angle scattering. If each streak instead
+follows its own direction anchored to a Bragg reflection, it is asterism — but prove that
+with a control matched for **spatial support** (invariant 28), because predicted reflections
+occupy only part of the panel and an unmatched control will hand you 28σ for nothing.
+
+**Cause.** Small-angle scattering off the direct beam from sharp density contrast in the
+specimen — a crack, scribe line or scratch. It raises the frame median (5 → 40 counts here),
+which raises a percentile threshold, which **drowns weak Laue spots**: those positions show
+*more* total intensity and *fewer* indexable peaks.
+
+**Lever.** Subtract a per-frame smooth background before thresholding; do not use a single
+shared background, because the feature is present at only a narrow band of positions
+(invariant 16 in reverse). To identify the feature itself, ask for an optical or SEM look —
+SAXS says sharp contrast, not which kind. Lab Notebook 16BMD §5, invariants 24 and 28.
+
+## Two codes agree suspiciously well, or a residual will not go below a floor
+
+symptom: systematic.common_offset
+
+**Test.** Before quoting any residual that follows a fitted transform, print **`mean(dx)` and
+`mean(dy)` separately**. A median hides a constant offset completely. If the offsets are
+constant to many decimals across spots spanning the panel, the two models are identical and
+what you are quoting is fit residual, not accuracy. Then re-predict with the **unfitted**
+geometry and see whether the residual collapses to a pure translation.
+
+**Cause.** Orthogonal Procrustes / Kabsch has three rotational DOF and no translation, so a
+rigid pixel-origin offset is absorbed as a spurious rotation. Measured: 0.667 px became
+0.0423° of crystal rotation, larger than the 0.0188° agreement it produced. Common origin
+offsets: pixel-centre vs pixel-corner (`(N−1)/2` vs `N/2`, exactly 0.5 px), and a documented
+beam shift between the calibration beam and the experiment beam.
+
+**Lever.** Fix the origin convention and re-predict with no fit at all — here that took the
+residual to 4e-5 px. And remember what agreement between two codes can and cannot test: it
+tests their algebra, never anything they both read from the same calibration (invariant 26).
+Lab Notebook 16BMD §3–4, invariants 25 and 26.

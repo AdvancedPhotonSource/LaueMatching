@@ -144,11 +144,27 @@ class LaueMatching:
         LatC = self.latticeParameter
         
         # Calculate the maximum scattering vector magnitude
-        XYZ = detector.pixel2XYZ((detector.Nx-1)/2, detector.Ny-1)
-        if XYZ is None:
-            raise ValueError("Could not compute detector coordinates")
-            
-        thMax = math.atan2(XYZ.item((0,1)), XYZ.item((0,2))) / 2
+        # Largest Bragg angle anywhere on the panel.  Taking it from the
+        # top-centre pixel in the Y-Z plane is right only when the panel is
+        # edge-on above the sample and the pattern runs vertically (34-ID-E
+        # reflection geometry).  In transmission the direct beam lands near the
+        # panel centre, the largest 2-theta is at a CORNER, and the X component
+        # that atan2(Y,Z) discards is the dominant one -- which silently
+        # truncates the reflection list.  Take the full 3-D angle to the beam
+        # over all four corners instead; for an edge-on panel this returns the
+        # same or a slightly larger value, so it never drops reflections.
+        thMax = 0.0
+        for cpx, cpy in ((0, 0), (detector.Nx-1, 0),
+                         (0, detector.Ny-1), (detector.Nx-1, detector.Ny-1)):
+            XYZ = detector.pixel2XYZ(cpx, cpy)
+            if XYZ is None:
+                raise ValueError("Could not compute detector coordinates")
+            v = np.asarray(XYZ).ravel()
+            n = math.sqrt(float(v @ v))
+            if n == 0:
+                raise ValueError("Degenerate detector corner position")
+            # cos(2 theta) = XYZhat . ki, with the incident beam along +Z
+            thMax = max(thMax, math.acos(max(-1.0, min(1.0, float(v[2]) / n))) / 2)
         Qmax = 4*math.pi * math.sin(thMax) * Ehi/self.hc_keVnm
         
         # Calculate maximum indices based on lattice parameters

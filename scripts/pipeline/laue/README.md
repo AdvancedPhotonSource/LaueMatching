@@ -27,21 +27,39 @@ half of the analysis chain runs at all.
 > the phase name -- the old rule silently handed cubic-24 operators to any phase not called
 > `"alpha"`.
 
-**Scope.** This doc set covers **34-ID-E Laue microdiffraction** through the
-`LaueMatching` chain: a raster of frames, a per-frame indexing pass, and the
-grain/orientation analysis over the resulting map. It assumes the material port
-(Phase 6) — lattice, reflection list, detector geometry, energy window and symmetry all
-read from the indexing parameter file. **Outside that — a different beamline, a
-non-raster acquisition, or a phase whose parameter file does not exist yet — stop and
-ask rather than adapting a phase below.**
+**Scope.** This doc set covers **Laue microdiffraction** through the `LaueMatching` chain: a
+raster of frames, a per-frame indexing pass, and the grain/orientation analysis over the
+resulting map. Two geometries are covered and they are **not** interchangeable:
+
+| | **Reflection** | **Transmission** |
+|---|---|---|
+| station | 34-ID-E | 16-BM-D (HPCAT) |
+| panel | edge-on above the sample, normal along lab **+Y** | downstream, centred near the beam |
+| direct beam | not on the panel, far off | **just off the panel edge — and NOT at the PONI** |
+| pattern runs | vertically | radially about the beam |
+| worked example | `LAB_NOTEBOOK.md` | `LAB_NOTEBOOK_16BMD_Si.md` |
+
+The **forward model is the same** for both — `kf = ki − 2(q̂·ki)q̂` is the general Bragg
+mirror and has no hemisphere restriction (invariant 23). What differs is everything that
+assumed where the pattern sits on the panel: see invariants 23–26 and Phase 2.
+
+It assumes the material port (Phase 6) — lattice, reflection list, detector geometry, energy
+window and symmetry all read from the indexing parameter file. **Outside that — a third
+geometry, a non-raster acquisition, or a phase whose parameter file does not exist yet — stop
+and ask rather than adapting a phase below.**
 
 ### Verify the configuration before you start
+
+**Run everything below from `scripts/pipeline/`** — every relative path in this doc set is
+written from there, and from the repository root the first command fails with
+`No such file or directory`.
 
 The install gate here is the material selftest, because the failure it catches is silent:
 symmetry follows the **space group**, not the phase name, and the old rule handed cubic-24
 operators to any phase not called `"alpha"`.
 
 ```bash
+cd scripts/pipeline                              # every path below is relative to here
 export LAUE_PHASES=<phase>                       # comma-separated; single-phase is fine
 export LAUE_PARAMS_<PHASE>=<path to params.txt>  # upper-case suffix
 python analysis/laue_material.py                 # selftest must pass
@@ -95,13 +113,18 @@ purpose: a handbook has to stay short enough to follow, and a campaign record ha
 honest enough to stop a refuted idea coming back. When a rule below cites a measurement, the
 full account — including the controls that killed the competing explanation — is in a notebook.
 
-- [`LAB_NOTEBOOK.md`](LAB_NOTEBOOK.md) — Zn on
+- [`LAB_NOTEBOOK.md`](LAB_NOTEBOOK.md) — method and defect record for
   the fcc substrate and Al on Al. Three retracted claims, the image-peel autopsy, the α-brass
   identifiability limit, and the measurement ledger.
 - [`LAB_NOTEBOOK_ZnZn.md`](LAB_NOTEBOOK_ZnZn.md) — Zn on Zn. The
   substrate/deposit direction saga (it flipped several times; **read §5 before re-arguing it**),
   scattering-vs-fluorescence, the readback race, and why the layers separate on the map but not
   per position.
+- [`LAB_NOTEBOOK_16BMD_Si.md`](LAB_NOTEBOOK_16BMD_Si.md) — **the transmission-geometry
+  campaign.** Si wafer at 16-BM-D, six ω settings. The PONI-is-not-the-beam trap, the
+  pixel-origin offset that a Procrustes fit turned into a crystal rotation, seven retracted
+  claims, and the beam-azimuth gauge that makes absolute orientation unrecoverable. **Read §4
+  before quoting any agreement number.**
 
 **Write a new lab notebook per campaign, not per dataset**, and start it on day one — the
 retractions are the part that decays fastest. Structure that works: what the campaign
@@ -285,6 +308,91 @@ the a two-phase hcp/bcc alloy campaign, and its current state).
     difference that survives that is a property of the crystal. This generalises: any shape
     statistic (width, ellipticity, kurtosis, profile asymmetry) computed over a fixed window
     inherits the SNR of what is inside it.
+
+23. **The forward model is 2θ-agnostic; the things built around it are not.**
+    `kf = ki − 2(q̂·ki)q̂` (`LaueMatchingHeaders.h:449-469`) is the general Bragg mirror and
+    works unchanged in transmission — the beam is along +Z either way, only the *detector*
+    moves. But `GenerateHKLs.py` took θ_max from the **top-centre pixel** in the Y–Z plane,
+    which is right only for a panel edge-on above the sample. In transmission the largest 2θ
+    is at a **corner** and carries the X component `atan2(Y,Z)` discards: measured hmax
+    **35 → 14**, truncating at d ≈ 0.39 Å on data that demonstrably contains d = 0.334 Å.
+    Fixed to a four-corner maximum. Before porting to any new geometry, ask of every step
+    *"does this assume where the pattern sits on the panel?"*
+
+24. **ON A TILTED DETECTOR THE PONI IS NOT THE BEAM.** The point of normal incidence and the
+    point where the transmitted beam meets the panel are different, and at 30° tilt they were
+    **751 px apart** — PONI at (502, 526), beam at (−249, 525), off the panel. Every
+    "distance from the direct beam" computed against the PONI is wrong. This produced a
+    confident, completely wrong reading of a diffuse feature until the beam position was
+    computed properly (`LAB_NOTEBOOK_16BMD_Si.md` §5).
+
+25. **A ROTATION FIT CANNOT REPRESENT A TRANSLATION, SO IT LAUNDERS ORIGIN ERRORS INTO
+    ORIENTATION ERRORS.** Orthogonal Procrustes / Kabsch has three DOF, all rotational. Given
+    a rigid pixel-origin offset it returns a spurious *rotation* and a plausible-looking
+    residual. Here a 0.667 px offset became a **0.0423° crystal rotation** — larger than the
+    0.0188° agreement it then produced — and the quoted "0.23 px median" was the in-sample
+    residual of a fit to the same 99 points used to score it. **Check `mean(dx)`, `mean(dy)`
+    before quoting any post-fit residual**; a median can never expose a constant offset. Here
+    they were −0.5000 and −0.4419 px, constant to 1e-10, and both had exact explanations
+    (pixel-centre vs corner; a documented 0.01 mm white-beam shift).
+
+26. **Two codes can share a convention error invisibly.** Agreement between packages tests
+    their algebra — reciprocal metric, q sign, handedness, hkl list — and **nothing** they
+    both take from the same input. Measured shared-input sensitivity here: 1 px beam-centre
+    error → 0.089° of orientation, 0.1° of detector tilt → 0.191°, 1 mm of distance →
+    0.026°, every one larger than the agreement being celebrated.
+
+27. **THE BEAM-AZIMUTH GAUGE IS EXACT AND NO AMOUNT OF LAUE DATA BREAKS IT.** With
+    `ki = (0,0,1)`, rotating detector and crystal together about the beam leaves every
+    predicted pixel and every predicted energy identical — measured at **φ = 90°**,
+    max|Δpx| = **2.3e-13**, max|ΔE| = **0**. A powder calibration cannot fix it either: the
+    CeO₂ rings move by 1.9e-14° in 2θ while χ sweeps 30°. So **every orientation any of this
+    produces is correct only up to an unmeasured rotation about the beam**, and no cross-check
+    internal to the diffraction — not a rotation series, not agreement with another code —
+    can establish otherwise. Breaking it needs metrology outside the pattern: a surveyed
+    rotation-axis direction, a surveyed detector translation, a knife-edge on a surveyed axis,
+    or a plumb/fiducial reading. **Sample translation will not do it.** Recorded in the ledger
+    as `project_eiger_1m_laue_calib.md`; missed twice in one day here, which is why it is now
+    an invariant.
+
+28. **A null must have the SAME SPATIAL SUPPORT as the data.** "80 % of streak intensity
+    within 40 px of a predicted reflection, against 35.7 % for random orientations, 28σ" was
+    an artefact: the true orientation puts its reflections in the half of the panel where the
+    streaks are, random ones spread over the whole panel including the empty half. The
+    statistic measured *"are the reflections in the left half"*. Controls that preserve the
+    support — scramble radius keeping angle, or angle keeping radius, about the relevant
+    origin — gave **0.5–2.0σ**.
+
+29. **The null's denominator is the SEARCH, not one draw — and its matching criterion must be
+    the indexer's.** A gate safe against a single random orientation is not safe against
+    best-of-1e8: at 3 distinct spots, ~1,400 of 1e8 reach it by chance here, at 6 it is 0.01.
+    Separately, a null measured with a 2 px centroid tolerance on thresholded frames was
+    **118× too permissive** for `NMatches`, which `writeCalcOverlap` scores with **zero-pixel
+    tolerance** on the daemon's own image (11.5× more acceptance area) and `maxNrSpots *= 3`.
+    Measure the null with the criterion, budget and image the indexer actually uses.
+
+30. **Screen detector artefacts on what the INDEXER sees, not on raw counts.** A screen at
+    `max(50 × frame_median, 250)` raw counts left a **9–250 count blind band**, because the
+    indexer keeps everything above the per-frame 99.8 percentile, median 9 counts. Twenty-two
+    pixels lived there, twelve on the first column after a module gap in contiguous runs long
+    enough to pass `MinArea 4` as a fixed-position "spot" on every frame. **The discriminator
+    for a rotation series is occupancy in the MINIMUM over all settings**: an artefact is
+    present at every ω, a reflection cannot be (measured ceiling for real reflections: 59.5 %
+    in one scan, ~0 in the others). Masking them removed **821 spurious orientations**.
+
+31. **`midas_stress.misorientation_om` returns the axis in the CRYSTAL frame, folded into the
+    fundamental sector.** The signature to read: components sorted descending, all positive.
+    Reporting it as a lab-frame direction put a goniometer axis **11.07°** off; a noise-free
+    synthetic whose true axis is exactly lab +X returns the same wrong vector. To get the lab
+    axis, remove the symmetry variant explicitly. And note the axis scatter is **zero by
+    construction** for rotations about a common axis, so it constrains nothing.
+
+32. **Compare a rotation series PER POSITION, never per-scan modal orientation.** Seeding a
+    "modal orientation" from each scan's best frame landed on *different* orientation clusters
+    in different scans and produced a clean-looking **refutation** (11.9° RMS, no common axis)
+    of a result that is real at 0.008°. And when reporting, remember N scans give **N−1**
+    independent comparisons, not N(N−1)/2: fifteen pairs here regress onto six per-scan
+    offsets at R² 0.97.
 
 ## Worked example
 

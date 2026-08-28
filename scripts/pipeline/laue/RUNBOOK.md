@@ -36,21 +36,36 @@ alarms on the dense scans and silence on the broken ones. Every row carries its 
 | stage-readback mislabels | 180 of 20,301 frames (0.89 %) | present on **both** Zn scans — assume it until checked |
 | plateau collapse in peak counts | 35–45 % of whole-frame counts | flat-top saturated reflections counted as dozens of peaks |
 | map↔binary-mask correlation | tops out ~0.5 at perfect registration | a strong visual overlay is not a high pixel correlation |
+| **transmission, 16-BM-D Si** | 16 sharp spots/frame median, max 93 | 40 % of raster positions off-sample and carrying zero spots is normal |
+| **transmission, distinct observed** | median 45 per accepted orientation | stacking ratio **1.02**; anything ≳ 2 is harmonic stacking, re-gate |
+| **transmission, index rate** | **0.19 s/frame** on one GPU | after the 12.2 GB forward cache is built (~100 s, geometry-specific) |
 
 ## R3. Current pick-up point
 
 > **Every session updates this before it ends.** A stale pick-up point is worse than none.
 
-**Last updated: 2026-08-11.**
+**Last updated: 2026-08-25.**
 
-**State.** The handbook was split into this doc set today. No change to any procedure or
-claim — the text was moved, and `DIAGNOSIS.md` and this file are new.
+**State.** First campaign outside 34-ID-E reflection geometry is complete: **16-BM-D
+white-beam transmission**, Si wafer, 15,300 frames over six ω settings, all indexed. The doc
+set now covers both geometries — see the scope table in the spine. Invariants **23–32** and
+`LAB_NOTEBOOK_16BMD_Si.md` are new; `ENVELOPE.md` §1 has a new row that applies to *both*
+geometries and is the most consequential thing in this update.
 
 **Open:**
 
-1. `DIAGNOSIS.md` has three entries. It grows the day someone works out what a strange
-   plot meant, written the same day.
-2. The material port is **done** (2026-07-24, on the Zn/Zn dataset); Phase 6 is a
-   *verification* step, not a porting step.
-3. Substrate/deposit direction on Zn/Zn flipped several times — **read
+1. **Absolute orientation is not recoverable from any Laue data this chain has.** The
+   beam-azimuth gauge is exact (invariant 27, `ENVELOPE.md` §1 row 5). Breaking it needs
+   external metrology, and the ask has gone to 16-BM-D. Until it comes back, quote relative
+   quantities only.
+2. `GenerateHKLs.py` θ_max fix (four-corner) is **applied but not committed** in the working
+   tree. It cannot drop reflections at 34-ID-E, but it has not been re-run there.
+3. `GaussSigmaMax` is silently ignored by the streaming config path — the detection blur is a
+   default, not the params value.
+4. The transmission "search-safe gate ≥ 6 distinct observed" rests on an extrapolation from
+   three measured null bins. Treat as unverified.
+5. The ~40 µm filament in the 16-BM-D wafer is unidentified; SAXS cannot separate crack from
+   scribe from scratch.
+6. `DIAGNOSIS.md` now has five entries.
+7. Substrate/deposit direction on Zn/Zn flipped several times — **read
    `LAB_NOTEBOOK_ZnZn.md` §5 before re-arguing it.**

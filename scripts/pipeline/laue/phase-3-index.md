@@ -50,7 +50,7 @@ Machines that can see `$LAUE_ROOT` and have the epix34id LaueMatching install
 
 | host | RAM | cores | GPUs | notes |
 |---|---|---|---|---|
-| copland | 2015 GB | 96 | 2x A6000 48 GB | **cannot even READ** the-analysis-host (not merely write) -- unusable for indexing this data, despite the RAM |
+| copland | 2015 GB | 96 | 2x A6000 48 GB | **cannot even READ** the analysis host (not merely write) -- unusable for indexing this data, despite the RAM |
 | alleppey | 502 GB | 112 | 4x H100 80-96 GB | usually shared; check `nvidia-smi` first |
 | sentosa | 250 GB | 64 | 2x H200 144 GB + 2x Blackwell | Blackwell cards (2,3) are **sm_120**, often in use |
 | shannon | 125 GB | 40 | 3x A4500 20 GB | 34-ID-E box; smallest RAM, budget 2 daemons max. **Was unreachable 2026-08-12** (no route, including via copland) |

@@ -28,10 +28,24 @@ No suggestions here. State the consequence and the substitute.
 | Detector distance | 513 mm | station geometry | — | — |
 | Incident beam axis | lab **Z**; `Phase.project` computes `kf = ki - 2*qh[:,2]*qh`, valid only for `ki = (0,0,1)` | `phase-1-science.md` §3b (confirm with `ph.ki`) | A geometry with a different `ki` is not describable by this forward model. | none — stop and ask |
 | Panel orientation check | — | — | The usual validation (rotate a crystal about the beam, check the pattern rotates rigidly) **needs a detector perpendicular to the beam**. Edge-on, all three axes fail and prove nothing. | Validate instead by forward-model prediction of observed peaks against a random-orientation null. |
+| **Rotation about the beam axis** | **an exact, unmeasured gauge freedom** | measured: at φ = 90° the largest change in any predicted pixel is **2.3e-13 px** and in any energy **0**; the CeO₂ rings move 1.9e-14° in 2θ while χ sweeps 30° | **Absolute orientation in the laboratory frame.** Every orientation this chain produces is correct only up to an unknown rotation about the beam. No cross-check *internal* to the diffraction can fix it — not a rotation series, not agreement with a second code on the same calibration. | Metrology from outside the pattern: a **surveyed rotation-axis direction** (cheapest, and nearly fully informative when the axis is ⊥ beam), a **surveyed detector translation**, a knife-edge on a surveyed lab axis, or a plumb/fiducial reading of the panel column direction. **Sample translation will not work** — the source is the beam–sample intersection and the beam is lab-fixed. |
 
 **Consequence worth stating on any report:** every angle this pipeline produces is relative
 to an instrument frame until the surface normal is supplied. On sampleH that distinction turned
 a meaningless "69.7° from Z" into "**c-axis avoids the growth direction by 8×**".
+
+**And the instrument frame itself is only fixed up to a rotation about the beam** (row 5).
+Relative quantities — misorientation, texture, grain boundaries, a rotation series — are
+unaffected, because the gauge cancels. Anything absolute is not. Say which kind you are
+quoting.
+
+> **Transmission geometry (16-BM-D).** Rows 1–3 above are written for the 34-ID-E edge-on
+> panel. In transmission the panel sits downstream and the pattern is radial about the beam,
+> so: the direct beam lands **on or just off the panel** and is **not** the point of normal
+> incidence — at 30° tilt they were 751 px apart (invariant 24); the largest 2θ is at a
+> **corner**, not the top edge (invariant 23); and the low-energy cutoff may be a **measured**
+> detector discriminator setting rather than a guess (`Threshold_setting` in the Pilatus
+> header). Row 5 applies identically to both geometries.
 
 ## 2. Configured — set per run, changeable next time
 
