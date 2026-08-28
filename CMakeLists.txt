@@ -84,6 +84,12 @@ else()
       -DNLOPT_SWIG=OFF
       -DNLOPT_TESTS=OFF
       -DBUILD_SHARED_LIBS=OFF
+      # Force lib/, never lib64/. GNUInstallDirs picks lib64 on RHEL/Fedora/
+      # SUSE, and the imported-target path below is resolved at CONFIGURE time,
+      # before ExternalProject has downloaded anything -- so it cannot see where
+      # NLopt will land and falls back to lib/. Pinning the libdir removes the
+      # race instead of trying to predict it.
+      -DCMAKE_INSTALL_LIBDIR=lib
     BUILD_BYPRODUCTS
       "${NLOPT_LIB_DIR}/libnlopt.a"
       "${NLOPT_LIB64_DIR}/libnlopt.a"
@@ -103,7 +109,15 @@ if(EXISTS "${NLOPT_LIB64_DIR}/libnlopt.a")
 elseif(EXISTS "${NLOPT_LIB_DIR}/libnlopt.a")
   set(_NLOPT_LIB "${NLOPT_LIB_DIR}/libnlopt.a")
 else()
-  # Default fallback — lib/ is most common; lib64/ is handled above
+  # Neither exists yet: the normal case on a clean checkout, because
+  # ExternalProject downloads and builds NLopt during `make`, long after this
+  # runs. We pin -DCMAKE_INSTALL_LIBDIR=lib above precisely so that this
+  # fallback is guaranteed right rather than merely usual.
+  #
+  # It used to be only usual: on RHEL/Fedora/SUSE NLopt installed to lib64/,
+  # this line pointed at lib/, and a clean `./build.sh` failed with
+  # "No rule to make target .../LIBS/NLOPT/lib/libnlopt.a". CI never caught it
+  # because ubuntu-latest is a lib/ distro.
   set(_NLOPT_LIB "${NLOPT_LIB_DIR}/libnlopt.a")
 endif()
 set_target_properties(NLOPT::NLOPT PROPERTIES
