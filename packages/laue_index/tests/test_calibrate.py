@@ -100,19 +100,56 @@ def test_recovers_the_truth_from_a_crude_start():
                        rodrigues_to_matrix(R_TRUE), atol=1e-8)
 
 
-def test_three_spots_are_enough_and_two_are_not():
+def _anchor_kw(U):
+    return dict(recip=U * (2 * math.pi / SI[0]), lattice=SI, spec=SPEC,
+                frame_provenance="synthetic truth",
+                initial_guess=(0.004, 0.004, 0.106,
+                               R_TRUE[0] + 0.02, R_TRUE[1], R_TRUE[2] - 0.02))
+
+
+def test_four_spots_are_enough_and_three_are_refused():
+    """Four is the minimum for a UNIQUE fit; three is refused, not merely fewer.
+
+    Three anchors give 6 equations for 6 unknowns -- exactly determined, which
+    permits more than one root, and this system has one. See MIN_ANCHORS for the
+    measurement: 7% of perturbed starts converge to a second (P, R) that
+    reproduces all three spots to ~1e-13 px, indistinguishable from truth by
+    residual. Which root you get depends on the CPU, which is how this surfaced
+    -- reproducibly right here, reproducibly wrong on a GitHub Linux runner.
+    """
     U, hkl, obs, _ = synth()
     mk = lambda n: [Anchor(tuple(int(x) for x in h), tuple(o))
                     for h, o in zip(hkl[:n], obs[:n])]
-    kw = dict(recip=U * (2 * math.pi / SI[0]), lattice=SI, spec=SPEC,
-              frame_provenance="synthetic truth",
-              initial_guess=(0.004, 0.004, 0.106,
-                             R_TRUE[0] + 0.02, R_TRUE[1], R_TRUE[2] - 0.02))
-    res = calibrate(mk(3), **kw)
+    kw = _anchor_kw(U)
+
+    res = calibrate(mk(4), **kw)
     assert np.allclose(res.p_array, P_TRUE, atol=1e-8)
 
-    with pytest.raises(ValueError, match="at least 3"):
-        calibrate(mk(2), **kw)
+    for n in (3, 2):
+        with pytest.raises(ValueError, match="at least 4"):
+            calibrate(mk(n), **kw)
+
+
+def test_four_anchors_are_robust_to_the_starting_guess():
+    """The degeneracy is gone at 4, not merely unlikely.
+
+    Guards the floor against being lowered back to 3: at 3 anchors this loop
+    lands on the second solution for ~7% of starts. Kept small enough to stay
+    fast; the full characterisation was 200 trials per anchor count.
+    """
+    U, hkl, obs, _ = synth()
+    mk = lambda n: [Anchor(tuple(int(x) for x in h), tuple(o))
+                    for h, o in zip(hkl[:n], obs[:n])]
+    kw = _anchor_kw(U)
+    g0 = kw.pop("initial_guess")
+    rng = np.random.default_rng(7)
+
+    for _ in range(25):
+        g = tuple(v + rng.normal(0, 1e-6 * abs(v) if v else 1e-6) for v in g0)
+        res = calibrate(mk(4), initial_guess=g, **kw)
+        assert np.allclose(res.p_array, P_TRUE, atol=1e-8), (
+            f"4-anchor fit missed truth from a 1e-6-perturbed start: "
+            f"{res.p_array} (rms {res.rms_px:.3e})")
 
 
 def test_frame_provenance_is_mandatory():

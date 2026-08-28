@@ -58,9 +58,30 @@ __all__ = [
     "project",
     "orientation_candidates",
     "calibrate",
+    "MIN_ANCHORS",
 ]
 
 HC_KEV_NM = 1.2398419739
+
+#: Minimum labelled spots for a UNIQUE calibration.
+#:
+#: Not 3. Three anchors give 6 equations for 6 unknowns -- exactly determined,
+#: which permits more than one root, and this system has one. Measured on the
+#: synthetic Si case (400 starts perturbed by 1e-6 relative, chiltepin, Linux
+#: x86_64 / py3.11.15 / scipy 1.17.1):
+#:
+#:   3 anchors  186/200 reach the true geometry, 14/200 (7%) converge instead to
+#:              p=(0.076342, 0.077947, 0.045833) at rms 6e-14..1.7e-13 -- an
+#:              exact alternative solution, not a convergence failure (0 of 17
+#:              failures had rms >= 1e-6)
+#:   4 anchors  200/200
+#:   5, 6       200/200
+#:
+#: Which root the optimiser finds turns on last-bit floating-point differences,
+#: so a 3-anchor fit is CPU-dependent: it was reproducibly correct on macOS
+#: arm64 and on chiltepin, and reproducibly wrong on GitHub's Linux py3.11
+#: runner. A caller cannot tell the two apart from the residual.
+MIN_ANCHORS = 4
 
 
 # --------------------------------------------------------------------------
@@ -463,10 +484,16 @@ def calibrate(anchors: Iterable[Anchor],
             "from the pattern. Record where that orientation came from.")
 
     anchors = list(anchors)
-    if len(anchors) < 3:
+    if len(anchors) < MIN_ANCHORS:
         raise ValueError(
-            f"need at least 3 labelled spots (6 equations for 6 unknowns), "
-            f"got {len(anchors)}")
+            f"need at least {MIN_ANCHORS} labelled spots, got {len(anchors)}. "
+            f"Three gives 6 equations for 6 unknowns and is exactly determined, "
+            f"which admits MORE THAN ONE exact solution: measured on the "
+            f"synthetic Si case, 7% of starting guesses converge to a second "
+            f"(P, R) that reproduces all three spots to ~1e-13 px -- fitting as "
+            f"well as the true geometry. Which root you land on depends on "
+            f"last-bit floating-point differences, so it varies by CPU. Four "
+            f"anchors resolved it in 200/200 trials.")
 
     hkl = np.array([a.hkl for a in anchors], dtype=float)
     obs = np.array([a.pixel for a in anchors], dtype=float)

@@ -169,7 +169,10 @@ def main(argv: list[str] | None = None) -> int:
         "calibrate",
         help="detector pose from labelled spots and a SUPPLIED orientation")
     pc.add_argument("--anchors", required=True,
-                    help="text file, one spot per line: 'h k l px py [E_keV]'")
+                    help="text file, one spot per line: 'h k l px py [E_keV]'. "
+                         "At least 4 are required: 3 is exactly determined and "
+                         "admits a second exact solution the residual cannot "
+                         "distinguish from the true one.")
     pc.add_argument("--recip", required=True,
                     help="3x3 reciprocal matrix (text). Both row and column "
                          "readings are tried; the projection decides.")
