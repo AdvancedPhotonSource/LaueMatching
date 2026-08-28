@@ -20,22 +20,41 @@ def rodrigues_to_matrix(rvec: Tensor) -> Tensor:
 
     rvec shape (..., 3). The vector direction is the axis; magnitude is
     the angle in radians (matches the existing R_Array convention).
+
+    Smooth at zero, deliberately. The obvious implementation normalises the
+    axis and then patches the singularity with
+    ``torch.where(theta < eps, I, R)`` -- but ``torch.where`` is a hard switch
+    and autograd propagates only through the SELECTED branch, so at rvec = 0 it
+    returns a gradient of 0 instead of the analytic Rodrigues limit
+    ``dR[0,1]/d(rvec[2]) = -1``.
+
+    That is not a corner case: refining an orientation by composing a delta onto
+    a seed, ``rodrigues_to_matrix(dr) @ U0``, starts at exactly ``dr = 0``. The
+    first gradient is zero, so the optimiser never takes a step and the fit
+    silently returns its input. Measured before this fix: the gradient was 0 for
+    |rvec| < 1e-12 and correct above it.
+
+    This version instead evaluates ``sin(θ)/θ`` and ``(1-cos θ)/θ²`` directly,
+    carrying θ through the ratios so no normalisation by a vanishing quantity is
+    needed. Both are analytic at θ = 0 and autograd handles the limit. Same
+    approach as ``midas_pf_odf.inversion._aa_to_R``, which exists because
+    ``midas_grain_odf.odf.axis_angle_to_matrix`` has the ``torch.where`` bug.
     """
-    theta = torch.linalg.norm(rvec, dim=-1, keepdim=True)
-    safe = theta.clamp_min(1e-30)
-    axis = rvec / safe
-    x, y, z = axis.unbind(-1)
-    c = torch.cos(theta).squeeze(-1)
-    s = torch.sin(theta).squeeze(-1)
-    C = 1.0 - c
-    R = torch.stack([
-        c + x * x * C,         x * y * C - z * s,     x * z * C + y * s,
-        y * x * C + z * s,     c + y * y * C,         y * z * C - x * s,
-        z * x * C - y * s,     z * y * C + x * s,     c + z * z * C,
-    ], dim=-1).reshape(*rvec.shape[:-1], 3, 3)
-    eye = torch.eye(3, dtype=rvec.dtype, device=rvec.device).expand_as(R)
-    near_zero = (theta.squeeze(-1) < 1e-12).unsqueeze(-1).unsqueeze(-1)
-    return torch.where(near_zero, eye, R)
+    eps = 1e-12
+    theta_sq = (rvec ** 2).sum(dim=-1, keepdim=True)
+    theta = (theta_sq + eps).sqrt()
+    sinc = torch.sin(theta) / theta                       # sin(θ)/θ
+    cosc = (1.0 - torch.cos(theta)) / (theta * theta)     # (1-cos θ)/θ²
+
+    zero = torch.zeros_like(rvec[..., 0])
+    K = torch.stack([
+        torch.stack([zero,          -rvec[..., 2],  rvec[..., 1]], dim=-1),
+        torch.stack([rvec[..., 2],   zero,         -rvec[..., 0]], dim=-1),
+        torch.stack([-rvec[..., 1],  rvec[..., 0],  zero        ], dim=-1),
+    ], dim=-2)
+
+    eye = torch.eye(3, dtype=rvec.dtype, device=rvec.device)
+    return eye + sinc.unsqueeze(-1) * K + cosc.unsqueeze(-1) * (K @ K)
 
 
 def quat_to_matrix(q: Tensor) -> Tensor:

@@ -144,10 +144,16 @@ class OrientationLoader:
                 lines = f.readlines()
                 
             if lines[0].startswith('%GrainNr'):
-                orientations = np.genfromtxt(self.orientation_file, skip_header=1)[:, 22:31]
+                orientations = np.atleast_2d(
+                    np.genfromtxt(self.orientation_file, skip_header=1))[:, 22:31]
             else:
                 orientations = np.genfromtxt(self.orientation_file)
-                
+
+            # A ONE-orientation file loads as shape (9,), not (1, 9), and the
+            # caller iterates rows -- so it would iterate nine scalars and fail
+            # with "cannot reshape array of size 1 into shape (3,3)". Simulating
+            # a single grain is a perfectly ordinary thing to ask for.
+            orientations = np.atleast_2d(orientations)
             return orientations
         except FileNotFoundError:
             logger.error(f"Orientation file {self.orientation_file} not found.")

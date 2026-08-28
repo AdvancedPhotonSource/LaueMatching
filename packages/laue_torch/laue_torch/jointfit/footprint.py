@@ -49,16 +49,20 @@ StrainedProjectFn = Callable[[Tensor, Tensor], Tensor]
 def tangent_rotation(omega: Tensor) -> Tensor:
     """Rotation matrix from a tangent (axis-angle) vector, via ``matrix_exp``.
 
-    We deliberately do NOT use :func:`geometry.rodrigues_to_matrix` here.  That
-    function ends in ``torch.where(near_zero, eye, R)``, and at ``rvec = 0`` the
-    selected branch is the CONSTANT identity -- so its derivative at the origin
-    is identically zero.  Every Jacobian in this module is evaluated exactly at
-    omega = 0, which is precisely where that branch bites: the streaks would come
-    out perfectly round and the anisotropy would silently vanish.
+    Every Jacobian in this module is evaluated exactly at ``omega = 0``, so this
+    must be differentiable at the origin: otherwise the streaks come out
+    perfectly round and the anisotropy silently vanishes.
 
-    ``matrix_exp`` of the skew-symmetric generator is analytic at the origin and
-    differentiates correctly there.  It agrees with ``rodrigues_to_matrix``
-    elsewhere (asserted in the tests).
+    This used to be a deliberate LOCAL WORKAROUND, because
+    :func:`geometry.rodrigues_to_matrix` ended in
+    ``torch.where(near_zero, eye, R)`` and returned a zero gradient at the
+    origin. That has since been fixed upstream (the smooth sin(t)/t formulation),
+    so the two now agree in value AND in derivative at zero -- asserted in
+    ``test_tangent_rotation_has_nonzero_gradient_at_zero``.
+
+    ``matrix_exp`` is kept here rather than delegating: it is analytic at the
+    origin by construction, and this module's correctness depends on that
+    property directly rather than on a property of another module.
     """
     zero = torch.zeros_like(omega[..., 0])
     wx, wy, wz = omega[..., 0], omega[..., 1], omega[..., 2]

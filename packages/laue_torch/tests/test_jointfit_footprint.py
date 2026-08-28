@@ -84,28 +84,32 @@ def test_tangent_rotation_is_identity_at_zero():
 
 
 def test_tangent_rotation_has_nonzero_gradient_at_zero():
-    """REGRESSION: the whole point of not using rodrigues_to_matrix here.
+    """REGRESSION: every Jacobian here is evaluated at exactly omega = 0.
 
-    ``rodrigues_to_matrix`` ends in ``torch.where(near_zero, eye, R)``; at the
-    origin that returns a CONSTANT, so d/domega is identically zero and every
-    footprint would come out perfectly round with the anisotropy silently gone.
-    The derivative of R at the origin is the skew generator, so
-    dR/domega_z should contain +-1 entries, not zeros.
+    If the rotation is not differentiable at the origin, d/domega is identically
+    zero, every footprint comes out perfectly round, and the anisotropy silently
+    vanishes. The derivative of R at the origin is the skew generator, so
+    dR[1,0]/domega_z must be +1, not 0.
     """
     omega = torch.zeros(3, dtype=torch.float64, requires_grad=True)
-    # d(R[1,0])/d(omega_z) = +1 for the skew generator.
     g = torch.autograd.grad(tangent_rotation(omega)[1, 0], omega)[0]
     assert abs(float(g[2]) - 1.0) < 1e-10, f"expected d/dwz = 1, got {g}"
 
-    # And confirm the shared helper really does have the defect, so this test
-    # documents a live difference rather than a hypothetical one.
+    # geometry.rodrigues_to_matrix used to return a ZERO gradient here, via a
+    # torch.where(near_zero, eye, R) that autograd cannot see through. It was
+    # fixed to the smooth sin(t)/t formulation; this asserts the fix stays put,
+    # because anyone composing a delta onto a seed orientation
+    # (rodrigues_to_matrix(dr) @ U0, starting at dr = 0) gets a dead optimiser
+    # otherwise -- the fit returns its input and reports success.
     omega2 = torch.zeros(3, dtype=torch.float64, requires_grad=True)
-    g2 = torch.autograd.grad(rodrigues_to_matrix(omega2)[1, 0], omega2,
-                             allow_unused=True)[0]
-    assert g2 is None or float(g2.abs().sum()) == 0.0, (
-        "geometry.rodrigues_to_matrix now has a gradient at the origin -- if it "
-        "was fixed upstream, tangent_rotation can be simplified to use it"
+    g2 = torch.autograd.grad(rodrigues_to_matrix(omega2)[1, 0], omega2)[0]
+    assert abs(float(g2[2]) - 1.0) < 1e-10, (
+        f"rodrigues_to_matrix lost its gradient at the origin again: {g2}"
     )
+
+    # The two agree in value and derivative at the origin.
+    assert torch.allclose(tangent_rotation(torch.zeros(3, dtype=torch.float64)),
+                          rodrigues_to_matrix(torch.zeros(3, dtype=torch.float64)))
 
 
 # ── Jacobian ───────────────────────────────────────────────────────────────
