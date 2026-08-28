@@ -23,13 +23,49 @@ on:
   workflow_dispatch:
 
 jobs:
+  # Which packages does this event test? On a TAG, only the one being released:
+  # gating laue-torch's upload on laue_index's suite couples unrelated releases,
+  # and did -- laue-torch 0.1.1 was blocked with its own tests fully green. On a
+  # PR or manual run, everything.
+  select:
+    name: select packages
+    runs-on: ubuntu-latest
+    outputs:
+      packages: ${{ steps.pick.outputs.packages }}
+      package: ${{ steps.pick.outputs.package }}
+      pypi_name: ${{ steps.pick.outputs.pypi_name }}
+    steps:
+      - id: pick
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          case "$GITHUB_REF" in
+            refs/tags/laue-torch-v*)
+              echo 'packages=["laue_torch"]' >> "$GITHUB_OUTPUT"
+              echo "package=laue_torch"      >> "$GITHUB_OUTPUT"
+              echo "pypi_name=laue-torch"    >> "$GITHUB_OUTPUT" ;;
+            refs/tags/laue-jax-v*)
+              echo 'packages=["laue_jax"]'   >> "$GITHUB_OUTPUT"
+              echo "package=laue_jax"        >> "$GITHUB_OUTPUT"
+              echo "pypi_name=laue-jax"      >> "$GITHUB_OUTPUT" ;;
+            refs/tags/laue-index-v*)
+              echo 'packages=["laue_index"]' >> "$GITHUB_OUTPUT"
+              echo "package=laue_index"      >> "$GITHUB_OUTPUT"
+              echo "pypi_name=laue-index"    >> "$GITHUB_OUTPUT" ;;
+            refs/tags/*)
+              echo "::error::Tag '$TAG' matches no package. Nothing would be published."
+              exit 1 ;;
+            *)
+              echo 'packages=["laue_torch","laue_jax","laue_index"]' >> "$GITHUB_OUTPUT" ;;
+          esac
+
   test:
     name: test ${{ matrix.package }} (py${{ matrix.python-version }})
+    needs: select
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        package: [laue_torch, laue_jax, laue_index]
+        package: ${{ fromJSON(needs.select.outputs.packages) }}
         python-version: ['3.11', '3.12']
     steps:
       - uses: actions/checkout@v4
@@ -61,15 +97,14 @@ jobs:
 
   build:
     name: build sdist + wheel
-    # GATE THE UPLOAD ON THE TESTS. Without `needs: test`, build and publish run
-    # in parallel with the matrix and a red suite does not stop the release --
-    # laue-torch 0.1.0 published while two of its own tests were failing.
-    needs: test
+    # `needs: [select, test]` gates the upload on the tests -- without it,
+    # build and publish run in parallel with the matrix and a red suite does not
+    # stop the release. laue-torch 0.1.0 published with two of its own tests
+    # failing. The matrix `test` gates on is now scoped to this package (see
+    # `select`), so a sibling's failure no longer blocks an unrelated release.
+    needs: [select, test]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
-    outputs:
-      package: ${{ steps.identify.outputs.package }}
-      pypi_name: ${{ steps.identify.outputs.pypi_name }}
     steps:
       - uses: actions/checkout@v4
 
@@ -77,33 +112,14 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Identify package from tag
-        id: identify
-        run: |
-          TAG="${GITHUB_REF#refs/tags/}"
-          echo "Tag: $TAG"
-          if [[ "$TAG" == laue-torch-v* ]]; then
-            echo "package=laue_torch" >> "$GITHUB_OUTPUT"
-            echo "pypi_name=laue-torch" >> "$GITHUB_OUTPUT"
-          elif [[ "$TAG" == laue-jax-v* ]]; then
-            echo "package=laue_jax" >> "$GITHUB_OUTPUT"
-            echo "pypi_name=laue-jax" >> "$GITHUB_OUTPUT"
-          elif [[ "$TAG" == laue-index-v* ]]; then
-            echo "package=laue_index" >> "$GITHUB_OUTPUT"
-            echo "pypi_name=laue-index" >> "$GITHUB_OUTPUT"
-          else
-            echo "::error::Tag '$TAG' matches no package. Nothing would be published."
-            exit 1
-          fi
-
       - name: Build
-        working-directory: packages/${{ steps.identify.outputs.package }}
+        working-directory: packages/${{ needs.select.outputs.package }}
         run: |
           python -m pip install --upgrade pip build
           python -m build
 
       - name: Verify the sdist carries no unpublished research
-        working-directory: packages/${{ steps.identify.outputs.package }}
+        working-directory: packages/${{ needs.select.outputs.package }}
         run: |
           SDIST=$(ls dist/*.tar.gz | head -1)
           echo "Inspecting $SDIST"
@@ -121,7 +137,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: dist
-          path: packages/${{ steps.identify.outputs.package }}/dist/
+          path: packages/${{ needs.select.outputs.package }}/dist/
 
   publish:
     name: publish to PyPI
