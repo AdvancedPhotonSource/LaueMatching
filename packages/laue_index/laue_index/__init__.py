@@ -13,7 +13,7 @@ so extracting a shared leaf is no longer blocked on publication.
 Public API grows as modules land.  Today: typed solution records (§6.1).
 """
 
-__version__ = "0.3.1"
+__version__ = "0.3.2"
 
 from .records import Solution, SolutionFormat, SOLUTION_FORMATS, parse_solutions
 from .postprocess import PostProcessor, PostProcessResult

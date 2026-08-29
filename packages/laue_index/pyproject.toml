@@ -7,7 +7,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "laue-index"
-version = "0.3.1"
+version = "0.3.2"
 description = "LaueMatching Python orchestration: typed pipeline stages for white-beam Laue indexing"
 readme = "laue_index/README.md"
 requires-python = ">=3.9"
