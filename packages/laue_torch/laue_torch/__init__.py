@@ -1,6 +1,6 @@
 """Differentiable PyTorch forward projection for LaueMatching."""
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 
 from .geometry import (
     HC_KEV_NM,
