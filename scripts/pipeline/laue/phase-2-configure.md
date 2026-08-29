@@ -30,6 +30,13 @@ cp params_alpha.template.txt  $WORK/params/params_<mat>_<phase>.txt
 python ../GenerateOrientations.py            # -> db/100MilOrients.bin      (once, ever)
 python ../GenerateHKLs.py       <params>     # -> params/valid_hkls_<phase>.csv
 python ../GenerateSimulation.py <params>     # -> db/forward_<phase>.bin
+
+> Spot intensities: `GenerateSimulation.py` gives every spot the same intensity unless the
+> parameter file declares a `PhaseAtom`/`PhaseCIF` basis, in which case it uses |F(hkl)|²
+> from `midas_hkls` (`-intensityModel`, `-spectrumFile` for I0(E)). Before 2026-08-29 it
+> assigned a *uniform random* intensity per spot and floored every spot to an integer
+> pixel — a mean 0.42 px displacement that put a 0.0077° floor under any sub-pixel fit
+> made against those images. Regenerate anything synthetic produced earlier than that.
 ```
 
 Then point `run_laue.sh`'s CONFIG block at `WORK`, `PY`, and the two param files.

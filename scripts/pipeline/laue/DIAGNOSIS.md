@@ -6,9 +6,41 @@ to a symptom the generic diagnostics detect.
 **Every entry carries a test that can come back the other way.** An entry that cannot
 exonerate the cause it names does not belong here.
 
-Three entries — a working start. Provenance is the campaign notebooks, cited per entry.
+Four entries — a working start. Provenance is the campaign notebooks, cited per entry.
 
 ---
+
+## An indexing run that finishes cleanly and finds nothing
+
+symptom: run.completed_zero_grains
+
+**Test.** Run the **CPU** binary on the same frame with the same parameter file. If the
+CPU finds grains where the GPU found none, the data is not the problem and no amount of
+threshold tuning will help. Then ask the binary and the card whether they agree:
+
+```bash
+cuobjdump --list-elf $(python -c "from laue_index import indexer; print(indexer.binary_path('GPU'))") | grep -oE 'sm_[0-9]+'
+nvidia-smi --query-gpu=compute_cap --format=csv,noheader
+cuobjdump -all --list-ptx <binary> | head -3      # -all is REQUIRED or it reports none
+```
+
+A card whose compute capability has no matching cubin, and no PTX at or below it, cannot
+run the kernel. The entry exonerates itself: if the architectures cover the card, this is
+not your problem.
+
+**Cause.** `cudaErrorNoKernelImageForDevice` is reported by the kernel **launch**, and only
+the following `cudaDeviceSynchronize` was checked — so the kernel never ran, nothing
+complained, and zero matches is a perfectly ordinary outcome for a frame with no grains.
+Measured: an sm_120-only build on an sm_90 card printed `Initial solutions: 0 Unique
+Orientations: 0` and **exited 0**. PTX JIT rescues the older→newer direction and never the
+reverse, so a binary built on a newer GPU than it runs on fails this way — and
+`/home/beams` being shared, binaries travel between hosts constantly.
+
+**Lever.** Fixed in `3b2abcb`: the launch result is now checked, so this fails loudly
+(`GPUassert: named symbol not found`, exit 244) instead of returning an empty map. Do not
+narrow `CMAKE_CUDA_ARCHITECTURES` for a binary you will move — the default builds every
+architecture the toolkit supports plus PTX for the newest. A `laue-index` older than 0.3.1
+has neither the check nor the multi-architecture default.
 
 ## Detector artefact reproducing as a persistent signal
 

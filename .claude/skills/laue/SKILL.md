@@ -42,6 +42,10 @@ Never confirm the binary by listing `bin/` — a Mach-O arm64 binary once sat th
 Linux host, looking present and ready. Ask instead:
 `python -c "from laue_index import indexer; print(indexer.available(), indexer.binary_path())"`
 
+**Use 0.3.1 or newer.** Earlier versions built CUDA for the build machine's own card and
+did not check the kernel launch, so a binary moved between hosts could index nothing and
+report success. `laue-index --version`.
+
 ## Which geometry?
 
 The spine opens with a scope table. Establish this before anything else, because it changes
@@ -81,7 +85,9 @@ The forward model is identical for both. Everything built *around* it is not.
 
 4. **Suspect success.** Most bugs here reported success: a daemon killed while healthy, a
    batch flag silently ignored, a shard driver logging "all 7 launched" with three
-   running. A status check that only greps for the success marker cannot see a dead run.
+   running, and a GPU binary with no cubin for the card printing `Unique Orientations: 0`
+   and **exiting 0**. A status check that only greps for the success marker cannot see a
+   dead run. `DIAGNOSIS.md` has the discriminating test for the last one.
 
 ## When something looks wrong
 
