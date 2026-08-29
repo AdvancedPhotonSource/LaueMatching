@@ -12,6 +12,11 @@ name: Python packages
 
 on:
   push:
+    # main as well as tags: the suites ran on pull requests and releases only,
+    # so a push straight to main tested nothing -- including the seven test
+    # files that moved in from scripts/tests/, which had never run in CI at all.
+    # The build/publish jobs stay tag-gated below.
+    branches: [ "main" ]
     tags:
       - 'laue-torch-v*'
       - 'laue-jax-v*'
