@@ -849,12 +849,20 @@ int main(int argc, char *argv[]) {
   free(imageF);
   free(image);
   free(hkls);
+  // `orients` is either mmap'd or malloc'd -- release it the matching way.
+  // These two lines were an if/else pair until the outArr munmap below was
+  // inserted BETWEEN them, silently re-parenting the else. Every run that
+  // WROTE the forward cache (outArr NULL, so the else fired) then called
+  // free() on a pointer munmap'd one line earlier, and glibc read the chunk
+  // header in unmapped memory: SIGSEGV at exit, after complete and correct
+  // output, on every first run. Runs that READ the cache took the other
+  // branch and exited cleanly, which is why it survived so long.
   if (orientsMapped)
-    munmap(orients, szFile); // FIX: was never munmap'd
-  if (outArr != NULL && outArr != MAP_FAILED && outArrMapLen > 0)
-    munmap(outArr, outArrMapLen); // cached-forward mmap (was leaked)
+    munmap(orients, szFile);
   else
     free(orients);
+  if (outArr != NULL && outArr != MAP_FAILED && outArrMapLen > 0)
+    munmap(outArr, outArrMapLen); // cached-forward mmap
   if (pxImgAll)
     free(pxImgAll);
 
