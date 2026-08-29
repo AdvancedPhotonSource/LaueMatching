@@ -34,10 +34,17 @@ function(laue_cuda_default_architectures out_var)
   # Find nvcc ourselves when CMAKE_CUDA_ARCHITECTURES has to be decided BEFORE
   # project(... CUDA) -- which is the repo-root build's situation, where
   # CMAKE_CUDA_COMPILER is not set yet.
+  # NOTE the two different names. find_program writes a CACHE entry, and a
+  # normal variable of the same name shadows it -- so reusing `_nvcc` here left
+  # the result invisible and silently took the fallback in exactly the build
+  # that needed the lookup (the repo root, where CMAKE_CUDA_COMPILER is unset).
   set(_nvcc "${CMAKE_CUDA_COMPILER}")
   if(NOT _nvcc)
-    find_program(_nvcc NAMES nvcc HINTS ENV CUDACXX ENV CUDA_PATH
+    find_program(LAUE_NVCC_EXECUTABLE NAMES nvcc HINTS ENV CUDACXX ENV CUDA_PATH
                  PATH_SUFFIXES bin PATHS /usr/local/cuda /opt/cuda)
+    if(LAUE_NVCC_EXECUTABLE)
+      set(_nvcc "${LAUE_NVCC_EXECUTABLE}")
+    endif()
   endif()
 
   if(_nvcc)
