@@ -161,6 +161,8 @@ jobs:
     permissions:
       # Required for PyPI trusted publishing (OIDC). No API token is stored.
       id-token: write
+      # Required to attach the same artifact to the GitHub release.
+      contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -169,3 +171,14 @@ jobs:
 
       - name: Publish
         uses: pypa/gh-action-pypi-publish@release/v1
+
+      - name: Attach the SAME artifact to the GitHub release
+        # release.sh used to upload its own locally-built sdist here while this
+        # job published a separately-built one to PyPI. The two then differed:
+        # laue-index 0.2.0's GitHub asset carried a stray 32 MB median.bin that
+        # happened to be sitting in the working tree, and PyPI's did not. One
+        # build, from a clean checkout, reaches both.
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

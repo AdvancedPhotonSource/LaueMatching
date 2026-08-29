@@ -192,18 +192,17 @@ echo "[6/6] Tagging as ${TAG}..."
 git tag -a "$TAG" -m "${PKG_NAME} v${NEW_VERSION}"
 
 if [ "$MODE" = "--publish" ]; then
-    if ! command -v gh >/dev/null 2>&1; then
-        echo "ERROR: 'gh' (GitHub CLI) not installed. Install: brew install gh"
-        exit 1
-    fi
-
     echo "Pushing to GitHub..."
     git push origin "${MAIN_BRANCH}" --follow-tags
 
-    echo "Creating GitHub release..."
-    gh release create "$TAG" dist/* \
-        --title "${PKG_NAME} v${NEW_VERSION}" \
-        --generate-notes
+    # The GitHub release is created by the workflow, which attaches the SAME
+    # artifacts it publishes to PyPI. This script used to upload its own local
+    # build here, so the two were built on different machines and could differ
+    # -- laue-index 0.2.0's GitHub sdist carried a stray 32 MB median.bin from
+    # the working tree that PyPI's did not. The local build above stays as a
+    # pre-flight: it is what the leak and size checks inspect before a tag
+    # exists to regret.
+    echo "The workflow will publish to PyPI and attach those same files to the release."
 
     echo
     echo "=== Release prepared ==="
@@ -221,6 +220,9 @@ ls -1 dist/
 echo
 echo "To publish:"
 echo "  git push origin ${MAIN_BRANCH} --follow-tags"
-echo "  gh release create ${TAG} dist/* --title '${PKG_NAME} v${NEW_VERSION}' --generate-notes"
+echo
+echo "That is the whole of it: the workflow builds from the tagged checkout,"
+echo "publishes to PyPI, and attaches THOSE files to the release. Do not upload"
+echo "dist/ by hand -- that is how a GitHub asset and a PyPI artifact drift."
 echo
 echo "Or re-run with --publish to do all of this automatically."
