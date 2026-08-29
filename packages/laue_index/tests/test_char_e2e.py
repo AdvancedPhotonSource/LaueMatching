@@ -6,10 +6,34 @@ stable summary of ``/entry/results/filtered_orientations``.  This is the guard
 that makes the §6.5 RunImage split (and the §6.2/§6.4 inline edits) provably
 behaviour-preserving across the whole stack, not just the unit functions.
 
+RE-ANCHORED 2026-08-29, and the reason is a warning about this test. The golden
+had stood since 654957a (2026-06-21) while five commits changed indexing
+behaviour, because the test skipped itself on every machine for want of a
+binary and a cache -- a green suite that was not running its own anchor. An A/B
+holding the Python fixed and swapping only the C binary attributes the drift:
+
+  * the OLD C reproduces the golden's solution set and match counts exactly
+    (2 orientations, rows 76986273 / 95915314, matches 19 / 18), so the Python
+    stages did not change WHICH grains are found;
+  * the NEW C adds a third, weak solution (row 12940638, 7 matches) and takes
+    one from 18 to 20 matches -- coarse-to-fine (fa26cdf) and many-grain
+    density (70e5da2) were written to find more;
+  * quality differs even under the OLD C at identical match counts, and
+    quality is NMatches*sqrt(Intensity), so that residual is INTENSITY, i.e.
+    preprocessing. Quality is the summary's preprocessing-sensitive field.
+
+So this anchor pins current behaviour, not correctness: the third solution is
+weak and nobody has adjudicated whether it should be kept.
+
 Heavy and machine-specific, so it is double-gated:
   * env ``LAUE_E2E=1`` must be set, and
   * the binary, orientation DB, HKL file, frame, and a *prebuilt* forward-sim
     cache must all be present.
+
+Building that cache takes ~10 min and 12.2 GB, and it MUST be built with the
+same config as below: the C validates only the cache's SIZE
+(nrOrients x (1+2*MaxNrLaueSpots) uint16), so a cache built with other geometry
+or a different HKL list is silently accepted and quietly wrong.
 The cache (~12 GB) is built once with a DoFwd=1 run; this test then runs DoFwd=0
 against it (fast) so it can be re-run cheaply during the refactor.
 
@@ -123,6 +147,11 @@ def test_char_e2e_runimage_1040():
         env["PYTHONPATH"] = os.pathsep.join(
             [str(Path(__file__).resolve().parents[1])] +
             ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else []))
+        # Run the binary this test checked for. Without this, LAUE_BIN only
+        # gates the skip and the subprocess resolves its own binary through the
+        # normal search -- so a run pinned to one binary silently exercised
+        # another, and an A/B of two binaries compared one binary twice.
+        env[_indexer.BINARY_ENV] = str(_BIN)
         proc = subprocess.run(
             [sys.executable, "-m", "laue_index.cli", "run", "process",
              "-c", str(cfg), "-i", str(local_fixture(_FRAME)), "-n", "8",
