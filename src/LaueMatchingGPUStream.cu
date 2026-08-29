@@ -1253,6 +1253,11 @@ int main(int argc, char *argv[]) {
           nrPxX, thisChunk, maxNrSpots, minIntensity, minNrSpots, d_chunkPtr,
           ctx->d_image, ctx->d_matchCount, ctx->d_matchIdx,
           ctx->d_matchScore, offset);
+      // The LAUNCH result is reported here, not by the event/sync that
+      // follows. A binary with no cubin for this card fails at launch with
+      // cudaErrorNoKernelImageForDevice, the kernel never runs, and the daemon
+      // would serve zero matches for every frame while reporting success.
+      gpuErrchk(cudaGetLastError());
     }
 
     gpuErrchk(cudaEventRecord(ctx->ev_kern_done, ctx->stream));

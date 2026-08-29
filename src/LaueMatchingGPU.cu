@@ -753,6 +753,14 @@ int main(int argc, char *argv[]) {
                                 minIntensity, minNrSpots, d_outChunk, d_image,
                                 d_matchCount, d_matchIdx, d_matchScore,
                                 offset);
+      // The LAUNCH result is reported here, not by the synchronize below. A
+      // binary with no cubin for this card fails with
+      // cudaErrorNoKernelImageForDevice at launch; the kernel never runs,
+      // cudaDeviceSynchronize returns success, and the run reports
+      // "Initial solutions: 0 Unique Orientations: 0" and exit 0. Measured: an
+      // sm_120-only build on an sm_90 card indexed nothing and called it a
+      // clean run.
+      gpuErrchk(cudaGetLastError());
       gpuErrchk(cudaDeviceSynchronize());
       double kern_time = omp_get_wtime() - wt_kern;
 
