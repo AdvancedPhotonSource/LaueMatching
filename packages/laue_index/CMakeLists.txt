@@ -88,50 +88,6 @@ if(NOT LAUE_CUDA)
   return()
 endif()
 
-# NEVER hardcode an architecture list. The repo-root build did (70;80;86;90) and
-# CUDA 13 -- which dropped Volta -- refuses it outright, before compiling a line:
-#     nvcc fatal : Unsupported gpu architecture 'compute_70'
-# Ask the machine what it has; failing that, ask the toolkit what it supports.
-# This must happen BEFORE enable_language(CUDA), which compiles a test program
-# with these architectures.
-if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
-  set(_laue_archs "")
-  find_program(_laue_nvidia_smi nvidia-smi)
-  if(_laue_nvidia_smi)
-    execute_process(
-      COMMAND "${_laue_nvidia_smi}" --query-gpu=compute_cap --format=csv,noheader
-      OUTPUT_VARIABLE _laue_caps RESULT_VARIABLE _laue_caps_rc
-      ERROR_QUIET OUTPUT_STRIP_TRAILING_WHITESPACE)
-    if(_laue_caps_rc EQUAL 0 AND _laue_caps)
-      string(REPLACE "\n" ";" _laue_caps "${_laue_caps}")
-      foreach(_cap IN LISTS _laue_caps)
-        string(STRIP "${_cap}" _cap)
-        string(REPLACE "." "" _cap "${_cap}")   # 9.0 -> 90, 12.0 -> 120
-        if(_cap MATCHES "^[0-9]+$")
-          list(APPEND _laue_archs "${_cap}")
-        endif()
-      endforeach()
-      list(REMOVE_DUPLICATES _laue_archs)
-    endif()
-  endif()
-
-  if(_laue_archs)
-    set(CMAKE_CUDA_ARCHITECTURES "${_laue_archs}")
-    message(STATUS "laue_index: building for the GPUs in this machine: ${CMAKE_CUDA_ARCHITECTURES}")
-  elseif(NOT CMAKE_VERSION VERSION_LESS 3.23)
-    # No GPU visible (a login node, a container build). `all-major` asks the
-    # toolkit itself, so it can never name an architecture that toolkit dropped.
-    set(CMAKE_CUDA_ARCHITECTURES "all-major")
-    message(STATUS "laue_index: no GPU visible; building for all-major")
-  else()
-    message(WARNING
-      "LAUEMATCHING_CUDA is set, but no GPU is visible and CMake ${CMAKE_VERSION} "
-      "is too old for `all-major` (needs 3.23). Skipping the CUDA binaries. Pass "
-      "the architectures yourself, e.g. -Dcmake.define.CMAKE_CUDA_ARCHITECTURES=90.")
-    return()
-  endif()
-endif()
-
 include(CheckLanguage)
 check_language(CUDA)
 if(NOT CMAKE_CUDA_COMPILER)
@@ -141,6 +97,18 @@ if(NOT CMAKE_CUDA_COMPILER)
     "-Dcmake.define.CMAKE_CUDA_COMPILER=/path/to/nvcc. The CPU binary is unaffected.")
   return()
 endif()
+
+# Architectures BEFORE enable_language(CUDA), which compiles a test program with
+# them. Never a hardcoded list -- the repo-root build had `70;80;86;90` and CUDA
+# 13, which dropped Volta, refuses that outright before compiling a line:
+#     nvcc fatal : Unsupported gpu architecture 'compute_70'
+if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+  include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/LaueCudaArch.cmake")
+  laue_cuda_default_architectures(_laue_archs)
+  set(CMAKE_CUDA_ARCHITECTURES "${_laue_archs}")
+endif()
+message(STATUS "laue_index: CUDA architectures = ${CMAKE_CUDA_ARCHITECTURES}")
+
 enable_language(CUDA)
 
 # The .cu wrap LaueMatchingHeaders.h in extern "C", so the vendored simplex --
