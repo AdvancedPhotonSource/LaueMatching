@@ -299,10 +299,14 @@ toolkit that cannot compile these sources fails at *build* time, which would
 kill the whole install — including the CPU binary that would otherwise have
 worked. Without the variable you get exactly today's CPU-only install.
 
-Architectures are chosen for you: the build asks `nvidia-smi` what is in the
-machine and compiles for those, and falls back to the toolkit's own `all-major`
-when no GPU is visible (a login node, a container). Override with
-`--config-settings=cmake.define.CMAKE_CUDA_ARCHITECTURES=90`.
+**The binary runs on any card the toolkit knows.** The build asks
+`nvcc --list-gpu-arch` and compiles real code for every architecture it names,
+plus PTX for the newest as a JIT path for cards that do not exist yet. It does
+**not** build for the card in the build machine: PTX JIT works forward and never
+backward, so a binary built on a newer GPU than it runs on fails — and fails
+*silently*, indexing nothing and exiting 0. Override with
+`--config-settings=cmake.define.CMAKE_CUDA_ARCHITECTURES=native` for a fast
+local build you will not move.
 
 If `nvcc` is missing the install still succeeds, with a warning and no GPU
 binary. Check what you got:
@@ -322,9 +326,10 @@ without a compiler:
 | `LaueMatchingGPU` | CUDA 12.6, ubuntu 24.04 | single-image |
 | `LaueMatchingGPUStream` | CUDA 12.6, ubuntu 24.04 | streaming daemon |
 
-The CI runner has no GPU, so the CUDA assets are built `all-major` — one cubin
-per architecture family the 12.6 toolkit supports. Cards newer than that
-toolkit (Blackwell, sm_120) are not covered; build those yourself.
+The CUDA assets carry real code for every architecture the 12.6 toolkit knows,
+plus PTX for the newest — so a card newer than that toolkit JITs rather than
+failing. Building from source on a machine with a newer toolkit gives native
+code for newer cards.
 
 ```bash
 gh release download laue-index-v0.2.0 -p 'LaueMatching*'
@@ -349,24 +354,28 @@ cmake .. -DUSE_CUDA=ON -DCMAKE_BUILD_TYPE=Release
 make -j$(nproc)
 ```
 
-Default CUDA architectures: sm_70, sm_80, sm_86, sm_90.
+By default the build asks `nvcc --list-gpu-arch` and compiles for **every**
+architecture that toolkit supports, plus PTX for the newest. On CUDA 13.3 that
+is `sm_75 … sm_121` and `compute_121` PTX: ~1.3 MB, a few minutes, and it runs
+on any card the toolkit knows plus, via JIT, ones it does not.
+
+There was a hardcoded `70;80;86;90` here once. It failed to configure on CUDA 13
+(`nvcc fatal : Unsupported gpu architecture 'compute_70'` — Volta was dropped)
+and it covered nothing past Hopper.
 
 #### Custom CUDA Architectures
 
 ```bash
-CMAKE_CUDA_ARCHITECTURES="75;80" ./build.sh gpu
+CMAKE_CUDA_ARCHITECTURES="native" ./build.sh gpu     # this machine's cards only
+CMAKE_CUDA_ARCHITECTURES="90;120" ./build.sh gpu     # an explicit list
 ```
 
-> **CUDA 13 and newer:** the toolkit dropped Volta, so the default list fails to
-> configure with `nvcc fatal : Unsupported gpu architecture 'compute_70'`. Build
-> for what the machine actually has:
->
-> ```bash
-> CMAKE_CUDA_ARCHITECTURES=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader | tr -d '.' | sort -u | paste -sd';') ./build.sh gpu
-> ```
->
-> Architectures newer than the list are not covered either — a Blackwell card
-> (sm_120) needs `120` passed explicitly.
+> **Do not narrow this for a binary you will move.** PTX JIT works forward, not
+> backward, so a binary built for a newer card than it runs on has neither a
+> matching cubin nor usable PTX — and it does not crash. Measured: an
+> sm_120-only build on an sm_90 card exits **0** having found **zero**
+> orientations. The launch error is now checked, so that case fails loudly, but
+> the way not to meet it is to keep the default.
 
 #### Custom NVCC Path
 
@@ -600,10 +609,23 @@ H. Sharma, D. Sheyfer, R. Harder and J.Z. Tischler (2026). *J. Appl. Cryst.* **5
   0.0041° vs 0.0054°, p95 3.3× tighter, max 25× tighter) at identical
   wall-clock. With no external optimizer to fetch, the C compiles at
   `pip install` time and builds offline.
-- **CUDA architectures are no longer hardcoded.** `70;80;86;90` fails outright on
-  CUDA 13, which dropped Volta (`nvcc fatal : Unsupported gpu architecture
-  'compute_70'`), and covered nothing newer than Hopper. The build asks
-  `nvidia-smi` what the machine has and falls back to the toolkit's `all-major`.
+- **CUDA builds for every architecture the toolkit supports, plus PTX.** The old
+  hardcoded `70;80;86;90` failed outright on CUDA 13, which dropped Volta
+  (`nvcc fatal : Unsupported gpu architecture 'compute_70'`), and covered
+  nothing newer than Hopper. Building for the *local* card is not the fix
+  either: PTX JIT works forward, never backward, so a binary built on a newer
+  GPU than it runs on finds **zero** orientations and exits **0**. The build now
+  asks `nvcc --list-gpu-arch` and covers all of them, with PTX for the newest.
+- **Fixed: an arch mismatch was silent.** `cudaErrorNoKernelImageForDevice` is
+  reported by the kernel *launch*, and only the following synchronize was
+  checked — so the kernel never ran, nothing complained, and the run reported no
+  grains. Both CUDA binaries now check the launch; the streaming daemon would
+  otherwise have served zero matches for every frame of a scan.
+- **Fixed: the forward cache was validated only by the CPU binary.** The CUDA
+  binaries accepted any file that existed, so a 0-byte leftover — which the C
+  itself creates when a run is interrupted mid-write — was mapped as a 12.2 GB
+  cache and took SIGBUS on first touch. One check, in the shared header, called
+  by all three.
 - **Provenance tracking**: every generated artifact (HKL CSV, simulation HDF5,
   per-image indexing HDF5, orchestrator run directory) now carries a git
   commit, config snapshot, and weak fingerprints of its input files.

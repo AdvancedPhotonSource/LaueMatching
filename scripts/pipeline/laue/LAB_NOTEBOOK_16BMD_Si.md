@@ -52,10 +52,13 @@ was an **arm64 Mach-O binary** on a Linux x86-64 host, with a macOS `libnlopt.a`
 > foreign-architecture binary cannot be staged by copying a tree; check with
 > `python -c "from laue_index import indexer; print(indexer.binary_path())"`,
 > which reports the binary that will actually be used.
-> The `compute_70` request is gone too — CUDA 13 dropped Volta and the build now
-> asks `nvidia-smi` what the machine has, falling back to the toolkit's
-> `all-major`. `LAUEMATCHING_CUDA=1 pip install laue-index` builds the GPU
-> binaries the same way. NLopt is no longer a dependency at all.
+> The `compute_70` request is gone too — CUDA 13 dropped Volta. The build now
+> asks `nvcc --list-gpu-arch` and covers **every** architecture that toolkit
+> supports plus PTX for the newest, rather than the card in the build machine:
+> PTX JIT works forward and never backward, so a binary built on a newer GPU
+> than it runs on finds zero grains and exits 0 — the same silent-success class
+> as this section's arm64-binary trap. `LAUEMATCHING_CUDA=1 pip install
+> laue-index` builds the GPU binaries the same way. NLopt is gone entirely.
 
 ## 3. Method findings — the transmission-specific ones
 
