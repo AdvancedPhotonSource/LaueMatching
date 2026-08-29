@@ -1,0 +1,24 @@
+# Keep the build context small and, more importantly, keep unpublished work and
+# multi-GB data out of image layers. Podman reads .containerignore (and falls
+# back to .dockerignore, which this file replaced).
+research/
+BEAMTIME_KEY.md
+.scrub_patterns
+_seed_test_local/
+
+# The orientation database is 6.7 GB and is MOUNTED, never baked in.
+100MilOrients.bin
+*.h5
+*.tif
+*.bin
+
+.git/
+build/
+build_*/
+bin/
+LIBS/
+dist/
+*.egg-info/
+__pycache__/
+.pytest_cache/
+.DS_Store

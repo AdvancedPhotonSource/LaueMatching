@@ -263,6 +263,50 @@ pip install -e packages/laue_index      # or laue_torch / laue_jax
 pip install -r requirements.txt         # script dependencies only
 ```
 
+### Containers (Podman)
+
+APS runs [Podman, not Docker](https://git.aps.anl.gov/groups/bdp-public/-/wikis/Software-Containers) —
+the two cannot coexist on a host — so the image definition is a
+[`Containerfile`](Containerfile) and every command below is the Podman one. It
+is plain OCI, so `docker build` works too where Docker is what you have.
+
+```bash
+podman build --target cpu  -t laue:cpu  .
+podman build --target cuda -t laue:cuda .
+```
+
+The orientation database is **not** baked in (6.7 GB); mount it. GPUs arrive
+through the NVIDIA Container Toolkit's CDI interface — `--device`, not Docker's
+`--gpus`:
+
+```bash
+podman run --rm -v /local/$USER/data:/data:Z laue:cpu \
+    LaueMatchingCPU params.txt /data/100MilOrients.bin hkls.csv img.bin 8
+
+podman run --rm --device nvidia.com/gpu=all -v /local/$USER/data:/data:Z \
+    laue:cuda LaueMatchingGPU params.txt /data/100MilOrients.bin hkls.csv img.bin 8
+```
+
+Verified on an APS host: one `laue:cuda` image, built with no GPU present,
+indexed the same 2302 orientations on an **H200 (sm_90)** and an **RTX PRO 6000
+Blackwell (sm_120)** — 85.1 s and 85.0 s, matching the bare-metal run. That is
+the architecture default earning its keep: a container build has no local card
+to ask about, so a binary built "for this machine" would have been built for
+nothing.
+
+Two APS-specific notes. Image storage needs no setup — the site-wide
+`/etc/containers/storage.conf` already puts the graphroot on local (non-NFS)
+`/local`. But if a build fails with "no space left on device" while `/local` has
+room, it is `/var/tmp` filling up, since Podman extracts layers through it:
+
+```bash
+mkdir -p /local/$USER/tmp && export TMPDIR=/local/$USER/tmp
+```
+
+For a daemon that should survive a reboot, wrap `LaueMatchingGPUStream` in a
+Quadlet `.container` unit rather than a shell loop. The registry is APS GitLab,
+which reaches the beamline private subnets.
+
 ### Getting the indexer binary
 
 The Python wrapper searches these locations **in order** and uses the first that
