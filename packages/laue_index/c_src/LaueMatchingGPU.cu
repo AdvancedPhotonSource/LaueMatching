@@ -1,0 +1,910 @@
+//
+// Copyright (c) 2024, UChicago Argonne, LLC
+// See LICENSE file.
+// Hemant Sharma, hsharma@anl.gov
+//
+// LaueMatching on the GPU (CUDA).
+// The CUDA kernel handles the forward-simulation comparison step.
+// All shared math/utility code lives in LaueMatchingHeaders.h.
+//
+
+#define _XOPEN_SOURCE 500
+#include <cuda.h>
+#include <unistd.h>
+extern "C" {
+#include "LaueMatchingHeaders.h"
+}
+
+// ── Global variable definitions (declared extern in header) ─────────────
+double tol_LatC[6];
+double tol_c_over_a;
+double c_over_a_orig;
+int sg_num;
+double cellVol;
+double phiVol;
+int nSym;
+double Symm[24][4];
+int useBobyqa = 1; // default: BOBYQA
+
+#define gpuErrchk(ans)                                                         \
+  {                                                                            \
+    gpuAssert((ans), __FILE__, __LINE__);                                      \
+  }
+inline void gpuAssert(cudaError_t code, const char *file, int line,
+                      bool abort = true) {
+  if (code != cudaSuccess) {
+    fprintf(stderr, "GPUassert: %s %s %d\n", cudaGetErrorString(code), file,
+            line);
+    if (abort)
+      exit(code);
+  }
+}
+
+#define MAX_MATCHES 4000000 // max matched orientations per image.
+// Sized for DENSE (many-grain, streaky) frames: the kernel appends in
+// arrival order, so an overflow here discards candidates ARBITRARILY --
+// true grains included -- before the top-score merge can rank them.
+// 4M entries x 12 B x MAX_STREAMS is < 200 MB on device and pinned host.
+
+__global__ void compare(size_t nrPxX, size_t nrPxY, size_t nOr,
+                        size_t nrMaxSpots, float minInt, size_t minSps,
+                        uint16_t *oA, float *im,
+                        int *matchCount, size_t *matchIdx, float *matchScore,
+                        size_t chunkOffset) {
+  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < nOr) {
+    size_t loc = i * (1 + 2 * nrMaxSpots);
+    size_t nrSpots = (size_t)oA[loc];
+    if (nrSpots > nrMaxSpots)
+      nrSpots = nrMaxSpots;
+    size_t hklnr;
+    size_t px, py;
+    float thisInt, totInt = 0;
+    size_t nSps = 0;
+    for (hklnr = 0; hklnr < nrSpots; hklnr++) {
+      loc++;
+      px = (size_t)oA[loc];
+      loc++;
+      py = (size_t)oA[loc];
+      if (px < nrPxX && py < nrPxY) {
+        float raw = __ldg(&im[py * nrPxX + px]);
+        if (raw > 0) {
+          totInt += raw;
+          nSps++;
+        }
+      }
+    }
+    if (nSps >= minSps && totInt >= minInt) {
+      int pos = atomicAdd(matchCount, 1);
+      if (pos < MAX_MATCHES) {
+        matchIdx[pos] = i + chunkOffset;
+        matchScore[pos] = totInt * sqrtf((float)nSps);
+      }
+    }
+  }
+}
+
+// ── Usage ───────────────────────────────────────────────────────────────
+static void usageGPU() {
+  puts("LaueMatching on the GPU\n"
+       "Contact hsharma@anl.gov\n"
+       "Arguments: \n"
+       "* \tparameterFile (text)\n"
+       "* \tbinary files for candidate orientation list [double]\n"
+       "* \ttext of valid_hkls (preferably sorted on f2), space separated\n"
+       "* \tbinary file for image [double]\n"
+       "* \tnumber of CPU cores to use: \n"
+       "* NOTE: some computers cannot read the full candidate orientation "
+       "list, \n"
+       "* must use multiple cores to distribute in that case\n\n"
+       "Parameter file with the following parameters: \n"
+       "\t\t* LatticeParameter (in nm and degrees),\n"
+       "\t\t* tol_latC (in %%, 6 values),\n"
+       "\t\t* tol_c_over_a (in %%, 1 value),\n"
+       "\t\t* SpaceGroup,\n"
+       "\t\t* P_Array, R_Array, PxX, PxY, NrPxX, NrPxY,\n"
+       "\t\t* Elo, Ehi, MaxNrLaueSpots, ForwardFile, DoFwd,\n"
+       "\t\t* MinNrSpots, MinIntensity, MaxAngle.\n");
+}
+
+// ── Main ────────────────────────────────────────────────────────────────
+int main(int argc, char *argv[]) {
+  if (argc != 6) {
+    usageGPU();
+    return (0);
+  }
+  char *paramFN = argv[1];
+  FILE *fileParam;
+  fileParam = fopen(paramFN, "r");
+  if (fileParam == NULL) {
+    printf("Could not open parameter file %s.\n", paramFN);
+    return 1;
+  }
+  char aline[1000], *str, dummy[1000], outfn[1000];
+  int LowNr, nrPxX = 0, nrPxY = 0, maxNrSpots = 500, minNrSpots = 5, doFwd = 1;
+  sg_num = 225;
+  double pArr[3] = {0, 0, 0}, rArr[3] = {0, 0, 0}, pxX = 0, pxY = 0, Elo = 5,
+         Ehi = 30;
+  int iter;
+  for (iter = 0; iter < 6; iter++)
+    tol_LatC[iter] = 0;
+  double minIntensity = 1000.0, maxAngle = 2.0;
+  double LatticeParameter[6] = {0, 0, 0, 0, 0, 0};
+  puts("Reading parameter file");
+  fflush(stdout);
+  tol_c_over_a = 0;
+  while (fgets(aline, 1000, fileParam) != NULL) {
+    str = "LatticeParameter";
+    LowNr = strncmp(aline, str, strlen(str));
+    if (LowNr == 0) {
+      sscanf(aline, "%s %lf %lf %lf %lf %lf %lf", dummy, &LatticeParameter[0],
+             &LatticeParameter[1], &LatticeParameter[2], &LatticeParameter[3],
+             &LatticeParameter[4], &LatticeParameter[5]);
+      calcV(LatticeParameter);
+      continue;
+    }
+    str = "P_Array";
+    LowNr = strncmp(aline, str, strlen(str));
+    if (LowNr == 0) {
+      sscanf(aline, "%s %lf %lf %lf", dummy, &pArr[0], &pArr[1], &pArr[2]);
+      continue;
+    }
+    str = "R_Array";
+    LowNr = strncmp(aline, str, strlen(str));
+    if (LowNr == 0) {
+      sscanf(aline, "%s %lf %lf %lf", dummy, &rArr[0], &rArr[1], &rArr[2]);
+      continue;
+    }
+    str = "tol_c_over_a";
+    LowNr = strncmp(aline, str, strlen(str));
+    if (LowNr == 0) {
+      sscanf(aline, "%s %lf", dummy, &tol_c_over_a);
+      continue;
+    }
+    str = "PxX";
+    LowNr = strncmp(aline, str, strlen(str));
+    if (LowNr == 0) {
+      sscanf(aline, "%s %lf", dummy, &pxX);
+      continue;
+    }
+    str = "PxY";
+    LowNr = strncmp(aline, str, strlen(str));
+    if (LowNr == 0) {
+      sscanf(aline, "%s %lf", dummy, &pxY);
+      continue;
+    }
+    str = "Elo";
+    LowNr = strncmp(aline, str, strlen(str));
+    if (LowNr == 0) {
+      sscanf(aline, "%s %lf", dummy, &Elo);
+      continue;
+    }
+    str = "Ehi";
+    LowNr = strncmp(aline, str, strlen(str));
+    if (LowNr == 0) {
+      sscanf(aline, "%s %lf", dummy, &Ehi);
+      continue;
+    }
+    str = "DoFwd";
+    LowNr = strncmp(aline, str, strlen(str));
+    if (LowNr == 0) {
+      sscanf(aline, "%s %d", dummy, &doFwd);
+      continue;
+    }
+    str = "NrPxX";
+    LowNr = strncmp(aline, str, strlen(str));
+    if (LowNr == 0) {
+      sscanf(aline, "%s %d", dummy, &nrPxX);
+      continue;
+    }
+    str = "NrPxY";
+    LowNr = strncmp(aline, str, strlen(str));
+    if (LowNr == 0) {
+      sscanf(aline, "%s %d", dummy, &nrPxY);
+      continue;
+    }
+    str = "MaxNrLaueSpots";
+    LowNr = strncmp(aline, str, strlen(str));
+    if (LowNr == 0) {
+      sscanf(aline, "%s %d", dummy, &maxNrSpots);
+      continue;
+    }
+    str = "MinNrSpots";
+    LowNr = strncmp(aline, str, strlen(str));
+    if (LowNr == 0) {
+      sscanf(aline, "%s %d", dummy, &minNrSpots);
+      continue;
+    }
+    str = "SpaceGroup";
+    LowNr = strncmp(aline, str, strlen(str));
+    if (LowNr == 0) {
+      sscanf(aline, "%s %d", dummy, &sg_num);
+      continue;
+    }
+    str = "MinIntensity";
+    LowNr = strncmp(aline, str, strlen(str));
+    if (LowNr == 0) {
+      sscanf(aline, "%s %lf", dummy, &minIntensity);
+      continue;
+    }
+    str = "MaxAngle";
+    LowNr = strncmp(aline, str, strlen(str));
+    if (LowNr == 0) {
+      sscanf(aline, "%s %lf", dummy, &maxAngle);
+      continue;
+    }
+    str = "ForwardFile";
+    LowNr = strncmp(aline, str, strlen(str));
+    if (LowNr == 0) {
+      sscanf(aline, "%s %s", dummy, outfn); // FIX: was &outfn
+      continue;
+    }
+    str = "tol_LatC";
+    LowNr = strncmp(aline, str, strlen(str));
+    if (LowNr == 0) {
+      sscanf(aline, "%s %lf %lf %lf %lf %lf %lf", dummy, &tol_LatC[0],
+             &tol_LatC[1], &tol_LatC[2], &tol_LatC[3], &tol_LatC[4],
+             &tol_LatC[5]);
+      continue;
+    }
+    str = "Optimizer";
+    LowNr = strncmp(aline, str, strlen(str));
+    if (LowNr == 0) {
+      sscanf(aline, "%s %s", dummy, dummy);
+      useBobyqa = 0; /* Nelder-Mead always; see LaueMatchingHeaders.h */
+      if (strncmp(dummy, "BOBYQA", 6) == 0)
+        printf("NOTE: Optimizer BOBYQA requested, but BOBYQA has been "
+               "removed. Using Nelder-Mead, which measured better on "
+               "this objective (median 0.0041 vs 0.0054 deg, p95 3.3x "
+               "tighter) at the same cost.\n");
+      continue;
+    }
+  }
+  if (tol_c_over_a != 0) {
+    for (iter = 0; iter < 6; iter++)
+      tol_LatC[iter] = 0;
+  }
+  c_over_a_orig = LatticeParameter[2] / LatticeParameter[0];
+  fclose(fileParam);
+  if (nrPxX <= 0 || nrPxY <= 0) {
+    fprintf(stderr,
+            "FATAL: Invalid detector dimensions (NrPxX=%d, NrPxY=%d). Check "
+            "parameter file.\n",
+            nrPxX, nrPxY);
+    return 1;
+  }
+  if (LatticeParameter[0] == 0) {
+    fprintf(stderr, "FATAL: LatticeParameter not set in parameter file.\n");
+    return 1;
+  }
+  puts("Parameters read");
+
+  // Rotation matrix
+  double rotang = CalcLength(rArr[0], rArr[1], rArr[2]);
+  double rotvect[3] = {rArr[0] / rotang, rArr[1] / rotang, rArr[2] / rotang};
+  double rot[3][3] = {
+      {cos(rotang) + (1 - cos(rotang)) * (rotvect[0] * rotvect[0]),
+       (1 - cos(rotang)) * rotvect[0] * rotvect[1] - sin(rotang) * rotvect[2],
+       (1 - cos(rotang)) * rotvect[0] * rotvect[2] + sin(rotang) * rotvect[1]},
+      {(1 - cos(rotang)) * rotvect[1] * rotvect[0] + sin(rotang) * rotvect[2],
+       cos(rotang) + (1 - cos(rotang)) * (rotvect[1] * rotvect[1]),
+       (1 - cos(rotang)) * rotvect[1] * rotvect[2] - sin(rotang) * rotvect[0]},
+      {(1 - cos(rotang)) * rotvect[2] * rotvect[0] - sin(rotang) * rotvect[1],
+       (1 - cos(rotang)) * rotvect[2] * rotvect[1] + sin(rotang) * rotvect[0],
+       cos(rotang) + (1 - cos(rotang)) * (rotvect[2] * rotvect[2])}};
+  double rotTranspose[3][3] = {{rot[0][0], rot[1][0], rot[2][0]},
+                               {rot[0][1], rot[1][1], rot[2][1]},
+                               {rot[0][2], rot[1][2], rot[2][2]}};
+
+  // Read orientations
+  puts("Reading orientations");
+  double st_tm = omp_get_wtime();
+  fflush(stdout);
+  char *orientFN = argv[2];
+  FILE *orientF = fopen(orientFN, "rb");
+  if (orientF == NULL) {
+    puts("Could not read orientation file, exiting.");
+    return (1);
+  }
+  fseek(orientF, 0L, SEEK_END);
+  size_t szFile = ftell(orientF);
+  rewind(orientF);
+  size_t nrOrients = (size_t)((double)szFile / (double)(9 * sizeof(double)));
+  double *orients;
+  int orientsMapped = 0;
+  str = "/dev/shm";
+  LowNr = strncmp(orientFN, str, strlen(str));
+  if (LowNr == 0) {
+    fclose(orientF);
+    int fd = open(orientFN, O_RDONLY);
+    orients = (double *)mmap(0, szFile, PROT_READ, MAP_SHARED, fd, 0);
+    close(fd);
+    orientsMapped = 1;
+    printf("%zu Orientations mapped into memory, took %lf seconds, now reading "
+           "hkls\n",
+           nrOrients, omp_get_wtime() - st_tm);
+    fflush(stdout);
+  } else {
+    orients = (double *)malloc(szFile);
+    if (orients == NULL) {
+      fprintf(stderr, "FATAL: Could not allocate orientations (%zu bytes).\n",
+              szFile);
+      fclose(orientF);
+      return 1;
+    }
+    size_t rc = fread(orients, 1, szFile, orientF);
+    if (rc != szFile) {
+      printf(
+          "Error: Failed to read orientations. Expected %zu bytes, got %zu.\n",
+          szFile, rc);
+      if (ferror(orientF))
+        perror("Error details");
+      fclose(orientF);
+      free(orients);
+      return 1;
+    }
+    fclose(orientF);
+    printf("%zu Orientations read, took %lf seconds, now reading hkls\n",
+           nrOrients, omp_get_wtime() - st_tm);
+    fflush(stdout);
+  }
+
+  // Read HKLs
+  char *hklfn = argv[3];
+  FILE *hklf = fopen(hklfn, "r");
+  if (hklf == NULL) {
+    printf("Could not read hkl file %s.\n", hklfn);
+    return 1;
+  }
+  int *hkls = (int *)calloc(MaxNHKLS * 3, sizeof(*hkls));
+  int nhkls = 0;
+  while (fgets(aline, 1000, hklf) != NULL) {
+    if (nhkls >= MaxNHKLS) { // FIX: bounds check
+      printf("Warning: more than %d HKLs in file, truncating.\n", MaxNHKLS);
+      break;
+    }
+    sscanf(aline, "%d %d %d", &hkls[nhkls * 3 + 0], &hkls[nhkls * 3 + 1],
+           &hkls[nhkls * 3 + 2]);
+    nhkls++;
+  }
+  fclose(hklf);
+
+  // Read image
+  printf("%d hkls read. \nNow reading image file %s, number of pixels %d. "
+         "\nminNrSpots: %d, MinIntensity: %d\n",
+         nhkls, argv[4], nrPxX * nrPxY, minNrSpots, (int)minIntensity);
+  char *imageFN = argv[4];
+  FILE *imageFile = fopen(imageFN, "rb");
+  if (imageFile == NULL) {
+    printf("Could not read image file %s.\n", imageFN);
+    return 1;
+  }
+  double *image = (double *)malloc(nrPxX * nrPxY * sizeof(*image));
+  if (image == NULL) {
+    fprintf(stderr, "FATAL: Could not allocate image (%zu bytes).\n",
+            (size_t)nrPxX * nrPxY * sizeof(*image));
+    fclose(imageFile);
+    return 1;
+  }
+  size_t read_cts = fread(image, nrPxX * nrPxY * sizeof(*image), 1, imageFile);
+  if (read_cts != 1) {
+    if (ferror(imageFile)) {
+      perror("Error reading image file");
+    } else if (feof(imageFile)) {
+      printf("Error: Unexpected end of file while reading image.\n");
+    } else {
+      printf("Error: Failed to read full image data.\n");
+    }
+    free(image);
+    fclose(imageFile);
+    return 1;
+  }
+  int pxNr, nonZeroPx = 0;
+  for (pxNr = 0; pxNr < nrPxX * nrPxY; pxNr++) {
+    if (image[pxNr] > 0)
+      nonZeroPx++;
+  }
+  fclose(imageFile);
+  printf("Pixels with intensity: %d\n", nonZeroPx);
+
+  // Create float image for CPU fitting (halves cache pressure vs double)
+  size_t nPixels = (size_t)nrPxX * nrPxY;
+  float *imageF = (float *)malloc(nPixels * sizeof(float));
+  if (imageF == NULL) {
+    fprintf(stderr, "FATAL: Could not allocate imageF (%zu bytes).\n",
+            nPixels * sizeof(float));
+    return 1;
+  }
+  for (pxNr = 0; pxNr < (int)nPixels; pxNr++)
+    imageF[pxNr] = (float)image[pxNr];
+
+  // Forward simulation & matching
+  // Warm up CUDA context (lazy init happens on first API call — ~2 s)
+  double wt_cuda_init = omp_get_wtime();
+  gpuErrchk(cudaFree(0));
+  printf("CUDA context init: %lf s\n", omp_get_wtime() - wt_cuda_init);
+  fflush(stdout);
+
+  double *matchedArr = (double *)calloc(nrOrients, sizeof(*matchedArr));
+  if (matchedArr == NULL) {
+    printf("Could not allocate matchedArr (%zu bytes).\n",
+           nrOrients * sizeof(*matchedArr));
+    return 1;
+  }
+  int numProcs = atoi(argv[5]);
+  if (numProcs < 1) {
+    fprintf(stderr, "FATAL: Invalid number of CPU cores (%d). Must be >= 1.\n",
+            numProcs);
+    return 1;
+  }
+  printf("Now running using %d threads.\n", numProcs);
+  fflush(stdout);
+  double ki[3] = {0, 0, 1.0};
+  double start_time = omp_get_wtime();
+  int global_iterator, k, l, m;
+  size_t nrResults = 0;
+  double recip[3][3];
+  calcRecipArray(LatticeParameter, sg_num, recip);
+
+  // Compact match results from GPU path (NULL if forward sim path)
+  size_t *h_matchIdx = NULL;
+  float *h_matchScore = NULL;
+  int h_matchCount = 0;
+
+  if (doFwd == 0) {
+    printf("Trying to see if the forward simulation exists. Looking for %s "
+           "file.\n",
+           outfn);
+    int result = open(outfn, O_RDONLY, S_IRUSR | S_IWUSR);
+    if (result < 0) {
+      printf("Could not read the forward simulation file. Running in "
+             "simulation mode!\n");
+      doFwd = 1;
+    } else {
+      printf("%s file was found. Will not do forward simulation.\n",
+             outfn); // FIX: missing arg
+      close(result);
+    }
+  } else
+    printf("Forward simulation was requested, will be saved to %s.\n", outfn);
+
+  if (doFwd == 1) {
+    // Forward simulation using OpenMP on CPUs, then save to file
+    bool *pxImgAll =
+        (bool *)calloc((size_t)nrPxX * nrPxY * numProcs, sizeof(*pxImgAll));
+    if (pxImgAll == NULL) {
+      fprintf(stderr, "FATAL: Could not allocate pxImgAll (%zu bytes).\n",
+              (size_t)nrPxX * nrPxY * numProcs * sizeof(*pxImgAll));
+      return 1;
+    }
+    int fwdFd = open(outfn, O_CREAT | O_WRONLY,
+                     S_IRUSR | S_IWUSR); // FIX: open once
+    if (fwdFd < 0) {
+      printf("Could not open forward output file %s.\n", outfn);
+      return 1;
+    }
+#pragma omp parallel num_threads(numProcs)
+    {
+      int procNr = omp_get_thread_num();
+      int nrOrientsThread = (int)ceil((double)nrOrients / (double)numProcs);
+      uint16_t *outArrThis;
+      size_t szArr = nrOrientsThread * (1 + 2 * maxNrSpots);
+      size_t OffsetHere;
+      OffsetHere = procNr;
+      OffsetHere *= szArr;
+      OffsetHere *= sizeof(*outArrThis);
+      int startOrientNr = procNr * nrOrientsThread;
+      int endOrientNr = startOrientNr + nrOrientsThread;
+      if (endOrientNr > (int)nrOrients)
+        endOrientNr = nrOrients;
+      nrOrientsThread = endOrientNr - startOrientNr;
+      szArr = nrOrientsThread * (1 + 2 * maxNrSpots);
+      outArrThis = (uint16_t *)calloc(szArr, sizeof(*outArrThis));
+      if (outArrThis == NULL) {
+        printf("Could not allocate outArr per thread, needed %lldMB of RAM. "
+               "Behavior unexpected now.\n",
+               (long long int)nrOrientsThread * (10 + 5 * maxNrSpots) *
+                   sizeof(double) / (1024 * 1024));
+      }
+      int orientNr;
+      double *qhatarr = (double *)calloc(maxNrSpots * 3, sizeof(*qhatarr));
+      int ipx, ipy; // FIX: int instead of uint16_t
+      double thisInt;
+      double tO[3][3], thisOrient[3][3];
+      int i, j;
+      int hklnr, badSpot;
+      double hkl[3], qvec[3], qlen, qhat[3], dot, kf[3], xyz[3], xp, yp,
+          sinTheta, E;
+      int spotNr, iterNr;
+      int nSpots;
+      double totInt;
+      bool *pxImg;
+      size_t offstBoolImg;
+      offstBoolImg = nrPxX;
+      offstBoolImg *= nrPxY;
+      offstBoolImg *= procNr;
+      pxImg = &pxImgAll[offstBoolImg];
+      for (orientNr = startOrientNr; orientNr < endOrientNr; orientNr++) {
+        nSpots = 0;
+        totInt = 0;
+        spotNr = 0;
+        for (i = 0; i < 3; i++)
+          for (j = 0; j < 3; j++)
+            tO[i][j] = orients[orientNr * 9 + i * 3 + j];
+        MatrixMultF33(tO, recip, thisOrient);
+        for (hklnr = 0; hklnr < nhkls; hklnr++) {
+          hkl[0] = hkls[hklnr * 3 + 0];
+          hkl[1] = hkls[hklnr * 3 + 1];
+          hkl[2] = hkls[hklnr * 3 + 2];
+          MatrixMultF(thisOrient, hkl, qvec);
+          qlen = CalcLength(qvec[0], qvec[1], qvec[2]);
+          if (qlen == 0)
+            continue;
+          qhat[0] = qvec[0] / qlen;
+          qhat[1] = qvec[1] / qlen;
+          qhat[2] = qvec[2] / qlen;
+          dot = qhat[2];
+          kf[0] = ki[0] - 2 * dot * qhat[0];
+          kf[1] = ki[1] - 2 * dot * qhat[1];
+          kf[2] = ki[2] - 2 * dot * qhat[2];
+          MatrixMultF(rotTranspose, kf, xyz);
+          if (xyz[2] <= 0)
+            continue;
+          xyz[0] = xyz[0] * pArr[2] / xyz[2];
+          xyz[1] = xyz[1] * pArr[2] / xyz[2];
+          xyz[2] = pArr[2];
+          xp = xyz[0] - pArr[0];
+          yp = xyz[1] - pArr[1];
+          ipx = (int)((xp / pxX) + (0.5 * (nrPxX - 1)));
+          if (ipx < 0 || ipx > (nrPxX - 1))
+            continue;
+          ipy = (int)((yp / pxY) + (0.5 * (nrPxY - 1)));
+          if (ipy < 0 || ipy > (nrPxY - 1))
+            continue;
+          sinTheta = -qhat[2];
+          E = hc_keVnm * qlen / (4 * M_PI * sinTheta);
+          if (E < Elo || E > Ehi)
+            continue;
+          badSpot = 0;
+          if (pxImg[ipx * nrPxY + ipy])
+            badSpot = 1;
+          if (badSpot == 0) {
+            pxImg[ipx * nrPxY + ipy] = true;
+            qhatarr[3 * spotNr + 0] = qhat[0];
+            qhatarr[3 * spotNr + 1] = qhat[1];
+            qhatarr[3 * spotNr + 2] = qhat[2];
+            outArrThis[(orientNr - startOrientNr) * (1 + 2 * maxNrSpots) + 1 +
+                       2 * spotNr + 0] = (uint16_t)ipx;
+            outArrThis[(orientNr - startOrientNr) * (1 + 2 * maxNrSpots) + 1 +
+                       2 * spotNr + 1] = (uint16_t)ipy;
+            thisInt = image[ipy * nrPxX + ipx];
+            if (thisInt > 0) {
+              totInt += thisInt;
+              nSpots++;
+            }
+            spotNr++;
+            if (spotNr == maxNrSpots)
+              break;
+          }
+        }
+        for (iterNr = 0; iterNr < spotNr; iterNr++) {
+          pxImg[outArrThis[(orientNr - startOrientNr) * (1 + 2 * maxNrSpots) +
+                           1 + 2 * iterNr + 0] *
+                    nrPxY +
+                outArrThis[(orientNr - startOrientNr) * (1 + 2 * maxNrSpots) +
+                           1 + 2 * iterNr + 1]] = false;
+        }
+        outArrThis[(orientNr - startOrientNr) * (1 + 2 * maxNrSpots) + 0] =
+            (uint16_t)spotNr;
+        if (nSpots >= minNrSpots && totInt >= minIntensity) {
+#pragma omp critical
+          {
+            nrResults++;
+          }
+          matchedArr[orientNr] = totInt * sqrt((double)nSpots);
+        }
+      }
+      ssize_t rc =
+          pwrite(fwdFd, outArrThis, szArr * sizeof(*outArrThis), OffsetHere);
+      if (rc < 0)
+        printf("Could not write to output file\n");
+      else if (rc != (ssize_t)(szArr * sizeof(*outArrThis))) {
+        size_t off2 = OffsetHere + rc;
+        size_t offset_arr = rc / sizeof(*outArrThis);
+        size_t bytesRemaining = szArr * sizeof(*outArrThis) - rc;
+        rc = pwrite(fwdFd, outArrThis + offset_arr, bytesRemaining, off2);
+        if (rc != (ssize_t)bytesRemaining)
+          printf(
+              "Second try didn't work either. Too big array. Update code.\n");
+      }
+      free(outArrThis);
+      free(qhatarr);
+    }
+    fsync(fwdFd);
+    close(fwdFd);
+    free(pxImgAll);
+  } else {
+    // ── Read forward simulation ────────────────────────────────────────
+    double wt0 = omp_get_wtime();
+    size_t stride = (size_t)(1 + 2 * maxNrSpots);
+    size_t szArr = nrOrients * stride;
+    uint16_t *outArr;
+    int outArrMapped = 0;
+    str = "/dev/shm";
+    LowNr = strncmp(outfn, str, strlen(str));
+    if (LowNr == 0) {
+      int fd = open(outfn, O_RDONLY);
+      outArr = (uint16_t *)mmap(0, szArr * sizeof(uint16_t), PROT_READ,
+                                MAP_SHARED, fd, 0);
+      close(fd);
+      outArrMapped = 1;
+    } else {
+      outArr = (uint16_t *)calloc(szArr, sizeof(uint16_t));
+      if (outArr == NULL) {
+        printf("Could not allocate outArr.\n");
+        fflush(stdout);
+        return 1;
+      }
+      FILE *fwdFN = fopen(outfn, "rb");
+      if (fwdFN == NULL) {
+        printf("Could not open forward file %s.\n", outfn);
+        free(outArr);
+        return 1;
+      }
+      size_t read_cts = fread(outArr, szArr * sizeof(uint16_t), 1, fwdFN);
+      if (read_cts != 1) {
+        printf("Error: Failed to read forward simulation file.\n");
+        if (ferror(fwdFN))
+          perror("Error details");
+        free(outArr);
+        fclose(fwdFN);
+        return 1;
+      }
+      fclose(fwdFN);
+    }
+    double wt_read = omp_get_wtime() - wt0;
+    printf("Time elapsed to read the forward simulation: %lf s\n", wt_read);
+
+    // ── Chunked CUDA matching ─────────────────────────────────────────
+    // Process orientations in chunks that fit in GPU memory.
+    // Synchronous transfers avoid the massive cost of cudaMallocHost
+    // page-locking (>10 s for large pinned regions on this system).
+    wt0 = omp_get_wtime();
+    size_t freeMem = 0, totalMem = 0;
+    gpuErrchk(cudaMemGetInfo(&freeMem, &totalMem));
+    size_t imageBytes = (size_t)nrPxX * nrPxY * sizeof(float);
+    // Use up to 80% of free GPU memory for the outArr chunk buffer,
+    // but cap at 4 GB to keep cudaMalloc + H2D fast.
+    size_t usable = (freeMem > imageBytes + (freeMem / 5))
+                        ? freeMem - imageBytes - (freeMem / 5)
+                        : freeMem / 2;
+    const size_t DEVICE_CAP = 4ULL * 1024 * 1024 * 1024; // 4 GB
+    if (usable > DEVICE_CAP)
+      usable = DEVICE_CAP;
+    size_t chunkSize = usable / (stride * sizeof(uint16_t));
+    if (chunkSize < 1024)
+      chunkSize = 1024;
+    if (chunkSize > nrOrients)
+      chunkSize = nrOrients;
+    size_t nChunks = (nrOrients + chunkSize - 1) / chunkSize;
+    size_t chunkOutBytes = chunkSize * stride * sizeof(uint16_t);
+    printf("GPU chunked matching: %zu orientations in %zu chunks of %zu "
+           "(stride=%zu, chunk=%.1f GB, GPU mem: %.1f/%.1f GB free)\n",
+           nrOrients, nChunks, chunkSize, stride, chunkOutBytes / 1e9,
+           freeMem / 1e9, totalMem / 1e9);
+    fflush(stdout);
+
+    // Allocate device buffers
+    double wt_alloc = omp_get_wtime();
+    uint16_t *d_outChunk;
+    float *d_image;
+    int *d_matchCount;
+    size_t *d_matchIdx;
+    float *d_matchScore;
+    gpuErrchk(cudaMalloc(&d_outChunk, chunkOutBytes));
+    gpuErrchk(cudaMalloc(&d_image, imageBytes));
+    gpuErrchk(cudaMalloc(&d_matchCount, sizeof(int)));
+    gpuErrchk(cudaMalloc(&d_matchIdx, MAX_MATCHES * sizeof(size_t)));
+    gpuErrchk(cudaMalloc(&d_matchScore, MAX_MATCHES * sizeof(float)));
+    printf("  cudaMalloc (%.1f GB + %.1f MB): %lf s\n", chunkOutBytes / 1e9,
+           imageBytes / 1e6, omp_get_wtime() - wt_alloc);
+
+    // Convert image double→float (full precision) and upload
+    float *imF = (float *)malloc((size_t)nrPxX * nrPxY * sizeof(float));
+    if (imF == NULL) {
+      fprintf(stderr, "FATAL: Could not allocate imF (%zu bytes).\n",
+              imageBytes);
+      return 1;
+    }
+    for (size_t p = 0; p < (size_t)nrPxX * nrPxY; p++)
+      imF[p] = (float)image[p];
+    double wt_img = omp_get_wtime();
+    gpuErrchk(cudaMemcpy(d_image, imF, imageBytes, cudaMemcpyHostToDevice));
+    free(imF);
+    printf("  image H2D (%.1f MB): %lf s\n", imageBytes / 1e6,
+           omp_get_wtime() - wt_img);
+
+    printf("Time elapsed to prepare the GPU: %lf s\n", omp_get_wtime() - wt0);
+    wt0 = omp_get_wtime();
+
+    // ── Chunk loop (compact output accumulates across chunks) ────────
+    gpuErrchk(cudaMemset(d_matchCount, 0, sizeof(int)));
+    for (size_t c = 0; c < nChunks; c++) {
+      size_t offset = c * chunkSize;
+      size_t thisChunk = chunkSize;
+      if (offset + thisChunk > nrOrients)
+        thisChunk = nrOrients - offset;
+      size_t thisOutBytes = thisChunk * stride * sizeof(uint16_t);
+
+      // Synchronous H2D directly from outArr (mmap'd or malloc'd)
+      double wt_h2d = omp_get_wtime();
+      gpuErrchk(cudaMemcpy(d_outChunk, outArr + offset * stride, thisOutBytes,
+                           cudaMemcpyHostToDevice));
+      double h2d_time = omp_get_wtime() - wt_h2d;
+
+      // Launch kernel
+      double wt_kern = omp_get_wtime();
+      int blocks = (int)((thisChunk + 1023) / 1024);
+      compare<<<blocks, 1024>>>(nrPxX, nrPxY, thisChunk, maxNrSpots,
+                                minIntensity, minNrSpots, d_outChunk, d_image,
+                                d_matchCount, d_matchIdx, d_matchScore,
+                                offset);
+      gpuErrchk(cudaDeviceSynchronize());
+      double kern_time = omp_get_wtime() - wt_kern;
+
+      printf("  chunk %zu/%zu: H2D=%.3fs  kernel=%.3fs\n", c + 1, nChunks,
+             h2d_time, kern_time);
+    }
+
+    // D2H: compact results only
+    gpuErrchk(cudaMemcpy(&h_matchCount, d_matchCount, sizeof(int),
+                         cudaMemcpyDeviceToHost));
+    if (h_matchCount > MAX_MATCHES) {
+      fprintf(stderr,
+              "WARNING: match count %d exceeded MAX_MATCHES (%d); results "
+              "truncated.\n",
+              h_matchCount, MAX_MATCHES);
+      h_matchCount = MAX_MATCHES;
+    }
+    size_t *h_matchIdx_dev = (size_t *)malloc(h_matchCount * sizeof(size_t));
+    float *h_matchScore_dev = (float *)malloc(h_matchCount * sizeof(float));
+    if (h_matchIdx_dev == NULL || h_matchScore_dev == NULL) {
+      fprintf(stderr, "FATAL: Could not allocate host match buffers.\n");
+      return 1;
+    }
+    gpuErrchk(cudaMemcpy(h_matchIdx_dev, d_matchIdx,
+                         h_matchCount * sizeof(size_t),
+                         cudaMemcpyDeviceToHost));
+    gpuErrchk(cudaMemcpy(h_matchScore_dev, d_matchScore,
+                         h_matchCount * sizeof(float), cudaMemcpyDeviceToHost));
+
+    // Transfer to outer-scope pointers
+    h_matchIdx = h_matchIdx_dev;
+    h_matchScore = h_matchScore_dev;
+
+    printf("Time elapsed to match on the GPU: %lf s\n", omp_get_wtime() - wt0);
+
+    // Cleanup GPU
+    cudaFree(d_outChunk);
+    cudaFree(d_image);
+    cudaFree(d_matchCount);
+    cudaFree(d_matchIdx);
+    cudaFree(d_matchScore);
+    if (outArrMapped)
+      munmap(outArr, szArr * sizeof(uint16_t));
+    else
+      free(outArr);
+
+    nrResults = h_matchCount;
+    printf("NrMatches: %zu\n", nrResults);
+  }
+
+  double time2 = omp_get_wtime() - start_time;
+  printf("Finished comparing, time elapsed after comparing with forward "
+         "simulation: %lf seconds.\n"
+         "Searching for unique solutions.\n",
+         time2);
+  fflush(stdout);
+
+  // Unique solutions
+  nSym = MakeSymmetries(sg_num, Symm);
+
+  double tol = 3 * deg2rad;
+  maxNrSpots *= 3;
+  char outFN[1000];
+  sprintf(outFN, "%s.solutions.txt", imageFN);
+  FILE *outF = fopen(outFN, "w");
+  if (outF == NULL) {
+    printf("Could not open file for writing solutions. Exiting.\n");
+    return (1);
+  }
+  sprintf(outFN, "%s.spots.txt", imageFN);
+  FILE *ExtraInfo = fopen(outFN, "w");
+  fprintf(ExtraInfo, "%%GrainNr\tSpotNr\th\tk\tl\tX\tY\tQhat[0]\tQhat[1]\tQhat["
+                     "2]\tIntensity\n");
+  fprintf(
+      outF,
+      "%%GrainNr\tNumberOfSolutions\tIntensity\tNMatches*Intensity\tNMatches*"
+      "sqrt(Intensity)\t"
+      "NMatches\tNSpotsCalc\t"
+      "Recip1\tRecip2\tRecip3\tRecip4\tRecip5\tRecip6\tRecip7\tRecip8\tRecip9\t"
+      "LatticeParameterFit[a]\tLatticeParameterFit[b]\tLatticeParameterFit[c]\t"
+      "LatticeParameterFit[alpha]\tLatticeParameterFit[beta]"
+      "\tLatticeParameterFit[gamma]\t"
+      "OrientMatrix0\tOrientMatrix1\tOrientMatrix2\tOrientMatrix3\tOrientMatrix"
+      "4\tOrientMatrix5\t"
+      "OrientMatrix6\tOrientMatrix7\tOrientMatrix8\t"
+      "CoarseNMatches*sqrt(Intensity)\t"
+      "misOrientationPostRefinement[degrees]\torientationRowNr\n");
+
+  // Collect results
+  double *mA = (double *)calloc(nrResults, sizeof(*mA));
+  size_t *rowNrs = (size_t *)calloc(nrResults, sizeof(*rowNrs));
+  int resultNr = 0;
+  if (h_matchIdx != NULL) {
+    // GPU path: use compact arrays directly
+    for (int ci = 0; ci < (int)nrResults; ci++) {
+      mA[ci] = (double)h_matchScore[ci];
+      rowNrs[ci] = h_matchIdx[ci];
+    }
+    resultNr = (int)nrResults;
+  } else {
+    // Forward sim path: scan matchedArr
+    for (global_iterator = 0; global_iterator < (int)nrOrients;
+         global_iterator++) {
+      if (matchedArr[global_iterator] != 0) {
+        mA[resultNr] = matchedArr[global_iterator];
+        rowNrs[resultNr] = global_iterator;
+        resultNr++;
+      }
+    }
+  }
+
+  double *FinOrientArr = (double *)calloc(nrResults * 9, sizeof(*FinOrientArr));
+  int *dArr = (int *)calloc(nrResults, sizeof(*dArr));
+  int *bsArr = (int *)calloc(nrResults, sizeof(*bsArr));
+  double *bsScoreArr = (double *)calloc(nrResults, sizeof(*bsScoreArr));
+  int totalSols = mergeDuplicateOrientations(orients, rowNrs, mA, nrResults,
+                                             maxAngle, numProcs, FinOrientArr,
+                                             dArr, bsArr, bsScoreArr);
+  double time3 = omp_get_wtime() - start_time;
+  printf("Finished finding unique solutions, took: %lf seconds.\n",
+         time3 - time2);
+  fitAndWriteOrientations(
+      imageF, FinOrientArr, dArr, bsArr, bsScoreArr, totalSols, hkls, nhkls,
+      nrPxX, nrPxY, recip, rotTranspose, pArr, pxX, pxY, Elo, Ehi, tol,
+      LatticeParameter, maxNrSpots, minNrSpots, numProcs, outF, ExtraInfo, 0,
+      0.0 /* auto geometry-scaled coarse-fit sigma */);
+  fclose(ExtraInfo);
+  fclose(outF);
+
+  // Cleanup
+  free(matchedArr);
+  if (h_matchIdx)
+    free(h_matchIdx);
+  if (h_matchScore)
+    free(h_matchScore);
+  free(mA);
+  free(rowNrs);
+  free(FinOrientArr);
+  free(dArr);
+  free(bsArr);
+  free(bsScoreArr);
+  free(hkls);
+  free(imageF);
+  free(image);
+  if (orientsMapped)
+    munmap(orients, szFile);
+  else
+    free(orients);
+
+  double timef = omp_get_wtime() - start_time - time3;
+  printf("Finished, time elapsed in fitting: %lf seconds.\n"
+         "Initial solutions: %zu Unique Orientations: %d\n"
+         "Total time: %lf seconds.\n",
+         timef, nrResults, totalSols, omp_get_wtime() - start_time);
+  double wt_exit = omp_get_wtime();
+  // CUDA context teardown happens at exit — print timing above before it.
+  fflush(stdout);
+  return 0;
+}

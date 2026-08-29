@@ -19,9 +19,44 @@ endif()
 option(USE_CUDA  "Build LaueMatchingGPU (requires CUDA toolkit)" OFF)
 option(BUILD_OMP "Build with OpenMP support"                      ON)
 
-# Set default CUDA architectures if using CUDA
+# Default CUDA architectures.
+#
+# This used to be a hardcoded `70 80 86 90`, which CUDA 13 refuses outright --
+# it dropped Volta, so configuring fails before a line is compiled:
+#     nvcc fatal : Unsupported gpu architecture 'compute_70'
+# and it silently covered no card newer than Hopper (a Blackwell needs 120).
+# Ask the machine what it has; failing that, ask the toolkit what it supports.
+# Set CMAKE_CUDA_ARCHITECTURES yourself to override either.
 if(USE_CUDA AND NOT CMAKE_CUDA_ARCHITECTURES)
-  set(CMAKE_CUDA_ARCHITECTURES 70 80 86 90)
+  set(_laue_archs "")
+  find_program(_laue_nvidia_smi nvidia-smi)
+  if(_laue_nvidia_smi)
+    execute_process(
+      COMMAND "${_laue_nvidia_smi}" --query-gpu=compute_cap --format=csv,noheader
+      OUTPUT_VARIABLE _laue_caps RESULT_VARIABLE _laue_caps_rc
+      ERROR_QUIET OUTPUT_STRIP_TRAILING_WHITESPACE)
+    if(_laue_caps_rc EQUAL 0 AND _laue_caps)
+      string(REPLACE "\n" ";" _laue_caps "${_laue_caps}")
+      foreach(_cap IN LISTS _laue_caps)
+        string(STRIP "${_cap}" _cap)
+        string(REPLACE "." "" _cap "${_cap}")   # 9.0 -> 90, 12.0 -> 120
+        if(_cap MATCHES "^[0-9]+$")
+          list(APPEND _laue_archs "${_cap}")
+        endif()
+      endforeach()
+      list(REMOVE_DUPLICATES _laue_archs)
+    endif()
+  endif()
+  if(_laue_archs)
+    set(CMAKE_CUDA_ARCHITECTURES "${_laue_archs}")
+  elseif(NOT CMAKE_VERSION VERSION_LESS 3.23)
+    # No GPU visible (a login node, a container image being built). `all-major`
+    # asks the toolkit, so it can never name an architecture it has dropped.
+    set(CMAKE_CUDA_ARCHITECTURES "all-major")
+  else()
+    set(CMAKE_CUDA_ARCHITECTURES 80 86 90)
+  endif()
+  message(STATUS "CUDA architectures (auto): ${CMAKE_CUDA_ARCHITECTURES}")
 endif()
 
 # Project definition

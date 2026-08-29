@@ -73,7 +73,7 @@ python ../scripts/RunImage.py process \
 ```
 
 > [!NOTE]
-> Even when using a GPU build, use multiple CPU cores (`-n <nCPUs>`) because the final refinement step (BOBYQA or Nelder-Mead) runs on the CPU.
+> Even when using a GPU build, use multiple CPU cores (`-n <nCPUs>`) because the final Nelder–Mead refinement step runs on the CPU.
 
 **Results:**
 Output files will be saved in `results_simulation/` (configured by `ResultDir` in `params_sim.txt`).
@@ -107,7 +107,7 @@ Output files will be saved in `results_simulation/` (configured by `ResultDir` i
 | `HKLFile` | `valid_hkls.csv` | Valid HKL list (auto-generated if missing) |
 | `DoFwd` | `0` | Force forward simulation (auto-set to 1 if `ForwardFile` missing) |
 | **Optimization** | | |
-| `Optimizer` | `NelderMead` | Optimizer choice: omit for BOBYQA (default, faster) or `NelderMead` |
+| `Optimizer` | `NelderMead` | Accepted but ignored — refinement is always Nelder–Mead. `BOBYQA` prints a notice and proceeds |
 | **Simulation-only** | | |
 | `AStar` | `17.83` | Reciprocal lattice constant [nm⁻¹] (only for `GenerateSimulation.py`) |
 | `Symmetry` | `F` | Centering symbol: F, I, C, A, R (only for `GenerateSimulation.py`) |

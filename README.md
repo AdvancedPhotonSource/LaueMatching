@@ -20,7 +20,7 @@ Developed at the [Advanced Photon Source](https://www.aps.anl.gov/) at Argonne N
 - **CPU & GPU** — parallel implementations via OpenMP (CPU) and CUDA (GPU)
 - **Streaming Pipeline** — persistent GPU daemon processes multiple H5 images over TCP without reloading the orientation database
 - **Crystal Symmetry** — supports all crystal systems (cubic through triclinic, including trigonal)
-- **Lattice Parameter Refinement** — optional c/a ratio fitting via NLopt optimization
+- **Lattice Parameter Refinement** — optional c/a ratio fitting, via a vendored Nelder–Mead simplex (no external optimizer dependency)
 - **End-to-End Pipeline** — Python wrappers for image preprocessing, indexing, and forward simulation validation
 - **Differentiable Forward Model** — `laue_torch` PyTorch package for gradient-based geometry calibration, orientation refinement, strain fitting, and ODF inference; see [docs/torch-forward-model.md](docs/torch-forward-model.md)
 
@@ -159,23 +159,24 @@ LaueMatching/
 │   │   ├── output.py                 #   HDF5 result writer
 │   │   ├── config_schema.py          #   one declarative table → config parse + write
 │   │   └── cli.py                    #   `laue-index` CLI (parse / filter)
+│   │   └── pipeline/                 #   the orchestrators, shipped with the package
+│   │       ├── RunImage.py           #     Single-image indexing pipeline (orchestrator)
+│   │       ├── laue_orchestrator.py  #     Streaming pipeline entry point
+│   │       ├── laue_image_server.py  #     H5 → preprocess → TCP sender
+│   │       ├── laue_postprocess.py   #     Streaming results filtering + per-image HDF5
+│   │       ├── laue_simulation.py    #     Diffraction-simulation step (GenerateSimulation wrapper)
+│   │       ├── laue_config.py        #     Configuration dataclasses & manager (schema-driven)
+│   │       ├── laue_stream_utils.py  #     Back-compat re-export shim over laue_index
+│   │       ├── laue_visualization.py #     8 standalone visualization functions
+│   │       ├── GenerateHKLs.py       #     Generate valid HKL list
+│   │       ├── GenerateSimulation.py #     Create synthetic Laue patterns
+│   │       └── ImageCleanup.py       #     Pre-process raw detector images
 │   ├── laue_torch/                   # Differentiable PyTorch forward + ODF/SDF recovery
 │   └── laue_jax/                     # JAX port of the forward model (JAX-CPFEM bridge)
-├── scripts/                          # Orchestration + utilities (see scripts/README.md)
-│   ├── RunImage.py                   # Single-image indexing pipeline (orchestrator)
-│   ├── laue_orchestrator.py          # Streaming pipeline entry point
-│   ├── laue_image_server.py          # H5 → preprocess → TCP sender
-│   ├── laue_postprocess.py           # Streaming results filtering + per-image HDF5
-│   ├── laue_simulation.py            # Diffraction-simulation step (GenerateSimulation.py wrapper)
-│   ├── laue_config.py                # Configuration dataclasses & manager (schema-driven)
-│   ├── laue_stream_utils.py          # Back-compat re-export shim over laue_index
-│   ├── laue_visualization.py         # 8 standalone visualization functions
-│   ├── GenerateHKLs.py               # Generate valid HKL list
-│   ├── GenerateSimulation.py         # Create synthetic Laue patterns
-│   └── ImageCleanup.py               # Pre-process raw detector images
-├── bin/                              # Compiled binaries (created by build)
+├── scripts/                          # Thin shims onto laue_index/pipeline/ (see scripts/README.md)
+│   └── pipeline/                     # Shell drivers + the doc set for a full campaign
+├── bin/                              # Compiled binaries (created by ./build.sh)
 ├── logos/                            # Project logo
-├── LIBS/NLOPT/                       # NLopt dependency (auto-downloaded)
 ├── simulation/                       # Example data and parameter files
 ├── CMakeLists.txt                    # CMake build system (C/CUDA)
 ├── build.sh                          # Convenience build script
@@ -185,9 +186,12 @@ LaueMatching/
 
 The Python side is a small package of **typed pipeline stages** (`laue_index`)
 with **strategy objects** for the two things that vary (thresholding,
-orientation filtering) and one declarative config schema.  `scripts/` holds the
-orchestrators (`RunImage.py`, the streaming pipeline) and utilities;
-`laue_stream_utils.py` is a thin re-export shim so existing imports keep working.
+orientation filtering) and one declarative config schema.  The orchestrators
+(`RunImage.py`, the streaming pipeline) live in `laue_index/pipeline/` so they
+ship with the package — `pip install laue-index` gives you the library, the C
+binaries **and** something that can run a frame through them.  `scripts/` keeps
+a one-line shim for each, so `python scripts/RunImage.py …` and the shell
+pipeline work unchanged from a checkout.
 See [scripts/README.md](scripts/README.md) and
 [packages/laue_index/laue_index/README.md](packages/laue_index/laue_index/README.md).
 
@@ -200,14 +204,47 @@ See [scripts/README.md](scripts/README.md) and
 | **C compiler** | C99 support (GCC recommended) |
 | **CMake** | ≥ 3.18 |
 | **OpenMP** | Bundled with GCC; on macOS use `brew install gcc` |
-| **CUDA toolkit** | Optional, only for GPU build |
-| **Python 3** | With packages in `requirements.txt` |
+| **CUDA toolkit** | Optional — for `./build.sh gpu`, or `LAUEMATCHING_CUDA=1 pip install laue-index` |
+| **Python 3** | ≥ 3.9. `pip install 'laue-index[run]'` covers the full pipeline |
 
 ---
 
 ## Installation
 
-### Quick Start (CPU Only)
+### From PyPI
+
+```bash
+pip install 'laue-index[run]'          # the full pipeline + the CPU indexer
+pip install laue-index                 # library + indexer only (numpy)
+pip install laue-torch                 # differentiable forward model (PyTorch)
+pip install laue-jax                   # JAX port
+
+LAUEMATCHING_CUDA=1 pip install 'laue-index[run]'   # + the CUDA binaries (see below)
+```
+
+That is enough to index without cloning anything:
+
+```bash
+laue-index fetch-db --dest ~/laue                 # the 6.7 GB orientation database
+export LAUEMATCHING_ORIENT_DB=~/laue/100MilOrients.bin
+laue-index run process -c params.txt -i frame.h5 -n 8
+```
+
+`laue-index` ships as an **sdist**: the C indexer is compiled on your machine at
+install time, so a C compiler and OpenMP must be present. If they are not, the
+install still succeeds and the Python side works — only the indexing binary is
+missing, and `laue_index.indexer.available()` reports `False`. See
+[Getting the indexer binary](#getting-the-indexer-binary).
+
+The orientation database is **not** part of the package — it is 6.7 GB.
+`laue-index fetch-db` downloads and reassembles it from the
+[v1.0-data release](https://github.com/AdvancedPhotonSource/LaueMatching/releases/tag/v1.0-data);
+`./build.sh` fetches it too, in a checkout. Point runs at it with
+`LAUEMATCHING_ORIENT_DB`, or name it as `OrientationFile` in the config. Copy it
+to `/dev/shm` first if you can spare the RAM: the indexer mmaps it from there
+instead of reading it.
+
+### From Source (CPU)
 
 ```bash
 git clone https://github.com/AdvancedPhotonSource/LaueMatching.git
@@ -215,22 +252,88 @@ cd LaueMatching
 ./build.sh
 ```
 
-> **Note:** The first build automatically downloads (~6.7 GB) and reassembles the orientation database (`100MilOrients.bin`).
+Binaries land in `bin/`. The first build also downloads and reassembles the
+orientation database (`100MilOrients.bin`, ~6.7 GB); set `SKIP_DOWNLOAD=1` to
+skip that.
 
-### Python Dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-Or install the Python package itself (exposes the `laue-index` CLI and lets you
-`import laue_index`):
+For the Python side from a checkout:
 
 ```bash
-pip install -e .                 # core (numpy)
-pip install -e '.[pipeline]'     # + opencv / scipy / h5py for the full pipeline
-pip install -e '.[dev]'          # + pytest
+pip install -e packages/laue_index      # or laue_torch / laue_jax
+pip install -r requirements.txt         # script dependencies only
 ```
+
+### Getting the indexer binary
+
+The Python wrapper searches these locations **in order** and uses the first that
+exists:
+
+| # | Location | Typical case |
+|---|----------|--------------|
+| 1 | `$LAUEMATCHING_BIN` | explicit override — a file, or a directory holding the binaries |
+| 2 | `<site-packages>/laue_index/bin/` | compiled by `pip install laue-index` |
+| 3 | `$PATH` | a release tarball unpacked somewhere |
+| 4 | `<repo>/bin/` | a source checkout |
+
+`LAUEMATCHING_BIN` is the escape hatch for everything the build cannot do for
+you — a binary from a release, one built elsewhere, one shared across a beamline:
+
+```bash
+export LAUEMATCHING_BIN=/path/to/LaueMatching/bin     # directory, or
+export LAUEMATCHING_BIN=/path/to/LaueMatchingGPU      # a single executable
+```
+
+#### CUDA from pip
+
+The GPU binaries are built at install time too, but **only when asked**:
+
+```bash
+LAUEMATCHING_CUDA=1 pip install laue-index
+# or, equivalently:
+pip install laue-index --config-settings=cmake.define.LAUE_CUDA=ON
+```
+
+This needs the CUDA toolkit (`nvcc`), not merely a driver, and costs a few
+seconds of extra compile. It is opt-in rather than automatic on purpose: a
+toolkit that cannot compile these sources fails at *build* time, which would
+kill the whole install — including the CPU binary that would otherwise have
+worked. Without the variable you get exactly today's CPU-only install.
+
+Architectures are chosen for you: the build asks `nvidia-smi` what is in the
+machine and compiles for those, and falls back to the toolkit's own `all-major`
+when no GPU is visible (a login node, a container). Override with
+`--config-settings=cmake.define.CMAKE_CUDA_ARCHITECTURES=90`.
+
+If `nvcc` is missing the install still succeeds, with a warning and no GPU
+binary. Check what you got:
+
+```python
+from laue_index import indexer
+indexer.available("GPU")        # True if LaueMatchingGPU is usable
+indexer.binary_path("GPU")      # where it came from
+```
+
+**Prebuilt binaries** are attached to every release, built by CI and usable
+without a compiler:
+
+| Asset | Built on | Notes |
+|-------|----------|-------|
+| `LaueMatchingCPU` | ubuntu-latest, glibc 2.39 | OpenMP |
+| `LaueMatchingGPU` | CUDA 12.6, ubuntu 24.04 | single-image |
+| `LaueMatchingGPUStream` | CUDA 12.6, ubuntu 24.04 | streaming daemon |
+
+The CI runner has no GPU, so the CUDA assets are built `all-major` — one cubin
+per architecture family the 12.6 toolkit supports. Cards newer than that
+toolkit (Blackwell, sm_120) are not covered; build those yourself.
+
+```bash
+gh release download laue-index-v0.2.0 -p 'LaueMatching*'
+chmod +x LaueMatching*
+export LAUEMATCHING_BIN="$PWD"
+```
+
+If nothing is found, the error names every path it tried and points at
+`LAUEMATCHING_BIN` — it is never a silent failure.
 
 ### GPU Build (Requires CUDA)
 
@@ -253,6 +356,17 @@ Default CUDA architectures: sm_70, sm_80, sm_86, sm_90.
 ```bash
 CMAKE_CUDA_ARCHITECTURES="75;80" ./build.sh gpu
 ```
+
+> **CUDA 13 and newer:** the toolkit dropped Volta, so the default list fails to
+> configure with `nvcc fatal : Unsupported gpu architecture 'compute_70'`. Build
+> for what the machine actually has:
+>
+> ```bash
+> CMAKE_CUDA_ARCHITECTURES=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader | tr -d '.' | sort -u | paste -sd';') ./build.sh gpu
+> ```
+>
+> Architectures newer than the list are not covered either — a Blackwell card
+> (sm_120) needs `120` passed explicitly.
 
 #### Custom NVCC Path
 
@@ -283,7 +397,9 @@ cmake .. -DUSE_CUDA=OFF -DCMAKE_BUILD_TYPE=Release
 make -j$(nproc)
 ```
 
-NLOPT is automatically downloaded and built into `LIBS/NLOPT/` if not already present.
+There is nothing to download and no external library to find: the optimizer
+(`src/nelder_mead.c`) is vendored into the tree, so the build is offline and
+self-contained.
 
 ---
 
@@ -416,6 +532,12 @@ Without `LAUE_E2E=1` it skips, so CI stays green with `SKIP_DOWNLOAD=1` (the
 the binary or DB. To regenerate a golden after an *intentional* behaviour change:
 `UPDATE_GOLDEN=1 pytest`.
 
+`tests/test_cold_forward_cache.py` runs the real binary on the path no other
+test took — the run that *writes* the forward cache — with a few-thousand-orientation
+database it builds itself, so it costs seconds rather than the ~16 minutes a
+real cold run does. It needs `/dev/shm` (the C only mmaps the database from
+there, and the bug it guards existed only on that path) and skips elsewhere.
+
 **`laue_torch`** and **`laue_jax`** are tested the same way:
 
 ```bash
@@ -454,6 +576,34 @@ H. Sharma, D. Sheyfer, R. Harder and J.Z. Tischler (2026). *J. Appl. Cryst.* **5
 
 ### v2.2 (unreleased)
 
+- **Fixed: SIGSEGV at the end of every cold-cache run.** A run that *wrote* the
+  forward-simulation cache — the first run on any machine, with the orientation
+  database under `/dev/shm` — exited with a segmentation fault **after** writing
+  complete and correct output, and the pipeline reported the image as failed.
+  The cleanup's `if (orientsMapped) munmap(…) else free(orients)` pair had a
+  second `if` inserted between its halves (by the C hardening below, ironically),
+  re-parenting the `else`: writing the cache leaves `outArr` NULL, so `free()`
+  ran on memory `munmap`'d one line earlier. Runs that *read* an existing cache
+  took the other branch, which is why every test stayed green — they all
+  supplied a prebuilt cache. Now covered by `test_cold_forward_cache.py`, which
+  fails against the unfixed binary.
+- **`pip install laue-index` is now the whole thing.** The orchestrators moved
+  into the package (`laue_index/pipeline/`), so `laue-index run process -c … -i …`
+  indexes a frame with no checkout; `laue-index fetch-db` downloads the 6.7 GB
+  orientation database; `scripts/` keeps a shim for each entry point so existing
+  invocations are unchanged. `LAUEMATCHING_CUDA=1 pip install laue-index` also
+  compiles `LaueMatchingGPU` and `LaueMatchingGPUStream` — opt-in, because a
+  toolkit that cannot build them would otherwise fail the whole install.
+- **Optimizer: BOBYQA and NLopt removed.** Refinement is a vendored Nelder–Mead
+  simplex; `Optimizer BOBYQA` in a config is accepted, noted, and ignored. On
+  198 paired synthetic seeds Nelder–Mead was better on every statistic (median
+  0.0041° vs 0.0054°, p95 3.3× tighter, max 25× tighter) at identical
+  wall-clock. With no external optimizer to fetch, the C compiles at
+  `pip install` time and builds offline.
+- **CUDA architectures are no longer hardcoded.** `70;80;86;90` fails outright on
+  CUDA 13, which dropped Volta (`nvcc fatal : Unsupported gpu architecture
+  'compute_70'`), and covered nothing newer than Hopper. The build asks
+  `nvidia-smi` what the machine has and falls back to the toolkit's `all-major`.
 - **Provenance tracking**: every generated artifact (HKL CSV, simulation HDF5,
   per-image indexing HDF5, orchestrator run directory) now carries a git
   commit, config snapshot, and weak fingerprints of its input files.
@@ -476,10 +626,11 @@ H. Sharma, D. Sheyfer, R. Harder and J.Z. Tischler (2026). *J. Appl. Cryst.* **5
   "magic numbers" are replaced by a typed `Solution` record; the orientation
   filter (incl. the twin/CSL-aware variant) lives in one place; thresholding is
   pluggable; one declarative schema drives config parse **and** write.
-  `scripts/laue_stream_utils.py` is now a thin re-export shim and `RunImage.py`
-  is a thin orchestrator over the stages.  pip-installable (`pip install -e .`,
-  `laue-index` CLI).  Behaviour-preserving, guarded by a golden-anchored
-  characterization test suite under `packages/laue_index/tests/`.
+  `laue_stream_utils.py` is now a thin re-export shim and `RunImage.py` is a
+  thin orchestrator over the stages.  pip-installable
+  (`pip install -e packages/laue_index`, `laue-index` CLI).  Behaviour-preserving,
+  guarded by a golden-anchored characterization test suite under
+  `packages/laue_index/tests/`.
 - **C / CUDA hardening**: `size_t` indexing (large-DB overflow safety), full
   malloc/`mmap`/`fread` checks, single end-of-run `fsync` (was per-write
   `O_SYNC`), `snprintf` bounds, kernel pixel-bounds + spot-count clamps, and a

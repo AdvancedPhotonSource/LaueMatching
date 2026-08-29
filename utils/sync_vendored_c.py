@@ -27,12 +27,16 @@ ROOT = Path(__file__).resolve().parents[1]
 CANONICAL = ROOT / "src"
 VENDORED = ROOT / "packages" / "laue_index" / "c_src"
 
-#: Everything LaueMatchingCPU.c needs to compile standalone.
+#: Everything the three binaries need to compile standalone. The CUDA sources
+#: are vendored too: `LAUEMATCHING_CUDA=1 pip install laue-index` builds them
+#: from the sdist, and the sdist has no repo-root src/ to reach for.
 FILES = [
     "LaueMatchingCPU.c",
     "LaueMatchingHeaders.h",
     "nelder_mead.c",
     "nelder_mead.h",
+    "LaueMatchingGPU.cu",
+    "LaueMatchingGPUStream.cu",
 ]
 
 

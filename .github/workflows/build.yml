@@ -98,3 +98,83 @@ jobs:
         files: |
           bin/LaueMatchingGPU
           bin/LaueMatchingGPUStream
+
+  # `LAUEMATCHING_CUDA=1 pip install laue-index` must produce the GPU binaries,
+  # and a plain install must NOT. Both halves are checked here because both can
+  # break invisibly: the sdist can ship without the .cu, and the opt-in can
+  # quietly become an opt-out. The equivalent gap for the CPU binary (a
+  # CMakeLists reaching up to the repo-root src/, which works in a checkout and
+  # produces nothing from an sdist) shipped once already.
+  pip-cuda:
+    name: pip install --with CUDA
+    runs-on: ubuntu-latest
+    container: nvidia/cuda:12.6.3-devel-ubuntu24.04
+    timeout-minutes: 20
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install prerequisites
+      run: |
+        apt-get update
+        apt-get install -y cmake build-essential git python3 python3-pip python3-venv
+
+    - name: Build the sdist
+      # Install the SDIST, never the directory: a directory install lets CMake
+      # see files the published artifact does not carry.
+      run: |
+        python3 -m venv /tmp/venv
+        . /tmp/venv/bin/activate
+        pip install --upgrade pip build
+        python -m build --sdist packages/laue_index --outdir /tmp/dist
+        tar -tzf /tmp/dist/*.tar.gz | grep -E 'c_src/.*\.cu$' || {
+          echo "::error::the sdist carries no CUDA sources"; exit 1; }
+
+    - name: Opt-in build produces the GPU binaries
+      # No GPU in the runner, so the architecture probe finds nothing and falls
+      # back to `all-major` -- which is the point: it must not need a card, and
+      # it must not name an architecture this toolkit dropped.
+      run: |
+        . /tmp/venv/bin/activate
+        LAUEMATCHING_CUDA=1 pip install /tmp/dist/*.tar.gz
+        BIN=$(python -c "import laue_index, os; print(os.path.join(os.path.dirname(laue_index.__file__), 'bin'))")
+        ls -l "$BIN"
+        for b in LaueMatchingCPU LaueMatchingGPU LaueMatchingGPUStream; do
+          test -x "$BIN/$b" || { echo "::error::$b missing from the installed package"; exit 1; }
+        done
+        python - <<'PY'
+        from laue_index import indexer
+        assert indexer.available(), "CPU binary not discoverable"
+        assert indexer.available("GPU"), "GPU binary not discoverable"
+        print("GPU binary at", indexer.binary_path("GPU"))
+        PY
+
+    - name: A plain install stays CPU-only
+      run: |
+        python3 -m venv /tmp/venv_plain
+        . /tmp/venv_plain/bin/activate
+        pip install --upgrade pip
+        pip install /tmp/dist/*.tar.gz
+        BIN=$(python -c "import laue_index, os; print(os.path.join(os.path.dirname(laue_index.__file__), 'bin'))")
+        test -x "$BIN/LaueMatchingCPU" || { echo "::error::CPU binary missing"; exit 1; }
+        if [ -e "$BIN/LaueMatchingGPU" ]; then
+          echo "::error::a plain install built the GPU binary -- the opt-in has become an opt-out"
+          exit 1
+        fi
+
+    - name: The installed package can actually run something
+      # Binaries without an orchestrator index nothing. The pipeline modules
+      # must be in the wheel, and the CLI must expose them.
+      run: |
+        . /tmp/venv_plain/bin/activate
+        python - <<'PY'
+        from laue_index.pipeline import PIPELINE_DIR, SCRIPTS
+        missing = [n for n in SCRIPTS if not (PIPELINE_DIR / f"{n}.py").is_file()]
+        assert not missing, f"not shipped: {missing}"
+        for helper in ("laue_config", "laue_stream_utils", "laue_visualization",
+                       "laue_simulation", "laue_provenance", "laue_indexfile"):
+            assert (PIPELINE_DIR / f"{helper}.py").is_file(), f"not shipped: {helper}"
+        print(f"pipeline ships {len(list(PIPELINE_DIR.glob('*.py')))} modules")
+        PY
+        laue-index --help | grep -q 'run ' || { echo "::error::laue-index run is missing"; exit 1; }
+        laue-index --help | grep -q 'fetch-db' || { echo "::error::laue-index fetch-db is missing"; exit 1; }

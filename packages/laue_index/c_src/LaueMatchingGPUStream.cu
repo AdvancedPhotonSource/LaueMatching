@@ -1,0 +1,1358 @@
+//
+// Copyright (c) 2024, UChicago Argonne, LLC
+// See LICENSE file.
+// Hemant Sharma, hsharma@anl.gov
+//
+// LaueMatchingGPUStream — Persistent GPU daemon.
+// Initializes CUDA context, forward simulation, and device buffers once,
+// then accepts raw binary images over TCP and processes each one.
+// Multiple CUDA streams overlap GPU matching with CPU fitting.
+//
+
+#define _XOPEN_SOURCE 500
+#include <arpa/inet.h>
+#include <cuda.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <pthread.h>
+#include <signal.h>
+#include <stdint.h>
+#include <sys/mman.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/time.h>
+#include <time.h>
+#include <unistd.h>
+extern "C" {
+#include "LaueMatchingHeaders.h"
+}
+
+// ── Global variable definitions (declared extern in header) ─────────────
+double tol_LatC[6];
+double tol_c_over_a;
+double c_over_a_orig;
+int sg_num;
+double cellVol;
+double phiVol;
+int nSym;
+double Symm[24][4];
+int useBobyqa = 1;
+
+// ── Constants ───────────────────────────────────────────────────────────
+// Default TCP port; override with env LAUE_STREAM_PORT (lets two daemons —
+// e.g. Ti alpha + beta phases — run on one host on different GPUs).
+#define DEFAULT_PORT 60517
+static int PORT = DEFAULT_PORT;
+#define MAX_CONNECTIONS 10
+#define MAX_QUEUE_SIZE 32
+#define MAX_STREAMS 4
+#define HEADER_SIZE 2 // uint16_t image_num
+
+volatile sig_atomic_t keep_running = 1;
+static int g_server_fd = -1; // for signal handler to unblock accept()
+
+// ── CUDA error handling ────────────────────────────────────────────────
+#define gpuErrchk(ans)                                                         \
+  {                                                                            \
+    gpuAssert((ans), __FILE__, __LINE__, true);                                \
+  }
+inline void gpuAssert(cudaError_t code, const char *file, int line,
+                      bool abort = true) {
+  if (code != cudaSuccess) {
+    fprintf(stderr, "GPUassert: %s %s %d\n", cudaGetErrorString(code), file,
+            line);
+    if (abort)
+      exit(code);
+  }
+}
+
+// ── CUDA kernel (same as LaueMatchingGPU.cu) ───────────────────────────
+#define MAX_MATCHES 4000000 // max matched orientations per image.
+// Sized for DENSE (many-grain, streaky) frames: the kernel appends in
+// arrival order, so an overflow here discards candidates ARBITRARILY --
+// true grains included -- before the top-score merge can rank them.
+// 4M entries x 12 B x MAX_STREAMS is < 200 MB on device and pinned host.
+
+__global__ void compare(size_t nrPxX, size_t nOr, size_t nrMaxSpots,
+                        float minInt, size_t minSps, uint16_t *oA, float *im,
+                        int *matchCount, size_t *matchIdx,
+                        float *matchScore, size_t chunkOffset) {
+  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < nOr) {
+    size_t loc = i * (1 + 2 * nrMaxSpots);
+    size_t nrSpots = (size_t)oA[loc];
+    size_t hklnr;
+    size_t px, py;
+    float thisInt, totInt = 0;
+    size_t nSps = 0;
+    for (hklnr = 0; hklnr < nrSpots; hklnr++) {
+      loc++;
+      px = (size_t)oA[loc];
+      loc++;
+      py = (size_t)oA[loc];
+      float raw = __ldg(&im[py * nrPxX + px]);
+      if (raw > 0) {
+        totInt += raw;
+        nSps++;
+      }
+    }
+    if (nSps >= minSps && totInt >= minInt) {
+      int pos = atomicAdd(matchCount, 1);
+      if (pos < MAX_MATCHES) {
+        matchIdx[pos] = i + chunkOffset;
+        matchScore[pos] = totInt * sqrtf((float)nSps);
+      }
+    }
+  }
+}
+
+// ── Data structures ────────────────────────────────────────────────────
+typedef struct {
+  uint16_t image_num;
+  float *data; // raw image pixels (float32)
+} ImageChunk;
+
+typedef struct {
+  ImageChunk chunks[MAX_QUEUE_SIZE];
+  int front;
+  int rear;
+  int count;
+  pthread_mutex_t mutex;
+  pthread_cond_t not_empty;
+  pthread_cond_t not_full;
+} ProcessQueue;
+
+// Per-stream GPU context
+typedef struct {
+  cudaStream_t stream;
+  float *d_image; // device image buffer (full-precision float)
+  // Compact match output (device)
+  int *d_matchCount;    // atomic counter on device
+  size_t *d_matchIdx;   // matched orientation indices
+  float *d_matchScore;  // matched orientation scores
+  // Compact match output (host, pinned)
+  int *h_matchCount;
+  size_t *h_matchIdx;
+  float *h_matchScore;
+  // Async pipeline state
+  int hasPendingWork; // 1 if GPU work submitted but not finalized
+  uint16_t pending_image_num;
+  float *pending_image; // raw image ptr (freed after finalization)
+  double wt_submission; // wall time when GPU work was submitted
+  // GPU timing events
+  cudaEvent_t ev_start;     // before H2D
+  cudaEvent_t ev_h2d_done;  // after H2D, before kernel
+  cudaEvent_t ev_kern_done; // after kernel, before D2H
+  cudaEvent_t ev_end;       // after D2H
+} StreamContext;
+
+// ── Globals ────────────────────────────────────────────────────────────
+static ProcessQueue process_queue;
+static size_t g_imagePixels; // nrPxX * nrPxY
+
+// ── Client handler thread tracking ──────────────────────────────────────
+// Detached handler threads can be holding the queue mutex at shutdown.
+// Track their ids so they can be joined before queue/mutex destruction.
+#define MAX_HANDLERS MAX_CONNECTIONS
+static pthread_t g_handler_tids[MAX_HANDLERS];
+static int g_handler_count = 0;
+static pthread_mutex_t g_handlers_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+// Register a freshly-spawned handler thread. Returns 0 if tracked, -1 if the
+// tracking table is full (caller should fall back to detaching it).
+static int register_handler(pthread_t tid) {
+  pthread_mutex_lock(&g_handlers_mutex);
+  int ok = -1;
+  if (g_handler_count < MAX_HANDLERS) {
+    g_handler_tids[g_handler_count++] = tid;
+    ok = 0;
+  }
+  pthread_mutex_unlock(&g_handlers_mutex);
+  return ok;
+}
+
+// Join all tracked handler threads. Call after the listening socket has been
+// shut down (so handlers' recv() calls return) and before queue_destroy().
+static void join_handlers(void) {
+  pthread_mutex_lock(&g_handlers_mutex);
+  int n = g_handler_count;
+  pthread_t local[MAX_HANDLERS];
+  for (int i = 0; i < n; i++)
+    local[i] = g_handler_tids[i];
+  g_handler_count = 0;
+  pthread_mutex_unlock(&g_handlers_mutex);
+  for (int i = 0; i < n; i++)
+    pthread_join(local[i], NULL);
+}
+
+// ── Signal handler ─────────────────────────────────────────────────────
+void sigint_handler(int signum) {
+  if (keep_running) {
+    // First signal: graceful shutdown
+    printf("\nCaught signal %d, requesting shutdown...\n", signum);
+    keep_running = 0;
+    // Unblock accept() by shutting down the listening socket
+    if (g_server_fd >= 0)
+      shutdown(g_server_fd, SHUT_RDWR);
+  } else {
+    // Second signal: force exit immediately
+    const char msg[] = "\nForced exit.\n";
+    write(STDOUT_FILENO, msg, sizeof(msg) - 1);
+    _exit(1);
+  }
+}
+
+// ── Queue functions ────────────────────────────────────────────────────
+void queue_init(ProcessQueue *q) {
+  q->front = 0;
+  q->rear = -1;
+  q->count = 0;
+  pthread_mutex_init(&q->mutex, NULL);
+  pthread_cond_init(&q->not_empty, NULL);
+  pthread_cond_init(&q->not_full, NULL);
+}
+
+static int g_queue_full_count = 0; // suppress queue-full spam
+
+int queue_push(ProcessQueue *q, uint16_t image_num, float *data) {
+  pthread_mutex_lock(&q->mutex);
+  while (q->count >= MAX_QUEUE_SIZE && keep_running) {
+    g_queue_full_count++;
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    ts.tv_sec += 1;
+    pthread_cond_timedwait(&q->not_full, &q->mutex, &ts);
+  }
+  if (!keep_running) {
+    pthread_mutex_unlock(&q->mutex);
+    return -1;
+  }
+  q->rear = (q->rear + 1) % MAX_QUEUE_SIZE;
+  q->chunks[q->rear].image_num = image_num;
+  q->chunks[q->rear].data = data;
+  q->count++;
+  pthread_cond_signal(&q->not_empty);
+  pthread_mutex_unlock(&q->mutex);
+  return 0;
+}
+
+int queue_pop(ProcessQueue *q, ImageChunk *chunk) {
+  pthread_mutex_lock(&q->mutex);
+  while (q->count == 0 && keep_running) {
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    ts.tv_sec += 1;
+    pthread_cond_timedwait(&q->not_empty, &q->mutex, &ts);
+  }
+  if (q->count == 0 && !keep_running) {
+    pthread_mutex_unlock(&q->mutex);
+    return -1;
+  }
+  *chunk = q->chunks[q->front];
+  q->front = (q->front + 1) % MAX_QUEUE_SIZE;
+  q->count--;
+  pthread_cond_signal(&q->not_full);
+  pthread_mutex_unlock(&q->mutex);
+  return 0;
+}
+
+// Timeout variant: returns 0=success, 1=timeout, -1=shutdown
+int queue_pop_timeout(ProcessQueue *q, ImageChunk *chunk, int timeout_ms) {
+  pthread_mutex_lock(&q->mutex);
+  struct timespec ts;
+  clock_gettime(CLOCK_REALTIME, &ts);
+  ts.tv_sec += timeout_ms / 1000;
+  ts.tv_nsec += (timeout_ms % 1000) * 1000000L;
+  if (ts.tv_nsec >= 1000000000L) {
+    ts.tv_sec++;
+    ts.tv_nsec -= 1000000000L;
+  }
+  while (q->count == 0 && keep_running) {
+    int rc = pthread_cond_timedwait(&q->not_empty, &q->mutex, &ts);
+    if (rc == ETIMEDOUT && q->count == 0) {
+      pthread_mutex_unlock(&q->mutex);
+      return 1; // timeout
+    }
+  }
+  if (q->count == 0 && !keep_running) {
+    pthread_mutex_unlock(&q->mutex);
+    return -1;
+  }
+  *chunk = q->chunks[q->front];
+  q->front = (q->front + 1) % MAX_QUEUE_SIZE;
+  q->count--;
+  pthread_cond_signal(&q->not_full);
+  pthread_mutex_unlock(&q->mutex);
+  return 0;
+}
+
+void queue_destroy(ProcessQueue *q) {
+  pthread_mutex_destroy(&q->mutex);
+  pthread_cond_destroy(&q->not_empty);
+  pthread_cond_destroy(&q->not_full);
+  while (q->count > 0) {
+    float *d = q->chunks[q->front].data;
+    q->front = (q->front + 1) % MAX_QUEUE_SIZE;
+    q->count--;
+    free(d);
+  }
+}
+
+// ── Socket handling ────────────────────────────────────────────────────
+void *handle_client(void *arg) {
+  int client_socket = *((int *)arg);
+  free(arg);
+  uint8_t header_buf[HEADER_SIZE];
+  // Wire protocol: float pixels (4 bytes each), not double
+  size_t wire_payload_size = g_imagePixels * sizeof(float);
+
+  // Bound recv() so a stalled client cannot pin this handler thread forever.
+  // On timeout recv() returns -1/EAGAIN; we loop back and re-check keep_running.
+  struct timeval recv_to;
+  recv_to.tv_sec = 5;
+  recv_to.tv_usec = 0;
+  setsockopt(client_socket, SOL_SOCKET, SO_RCVTIMEO, &recv_to, sizeof(recv_to));
+  printf("Client handler started (socket %d), wire_payload=%zu bytes\n",
+         client_socket, wire_payload_size);
+
+  // Reusable receive buffer for float data
+  float *recv_buf = (float *)malloc(wire_payload_size);
+  if (!recv_buf) {
+    perror("malloc recv_buf");
+    close(client_socket);
+    return NULL;
+  }
+
+  while (keep_running) {
+    // Read header: 2 bytes (uint16_t image_num)
+    int total_read = 0;
+    while (total_read < HEADER_SIZE) {
+      int n = recv(client_socket, header_buf + total_read,
+                   HEADER_SIZE - total_read, 0);
+      if (n < 0) {
+        if (errno == EINTR)
+          continue; // interrupted by signal, retry
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+          if (!keep_running)
+            goto done; // shutting down
+          continue;    // recv timeout, re-check and retry
+        }
+        goto done; // real error
+      }
+      if (n == 0)
+        goto done; // peer closed
+      total_read += n;
+    }
+    uint16_t image_num;
+    memcpy(&image_num, header_buf, 2);
+
+    // Read payload: float image data
+    size_t total_payload = 0;
+    while (total_payload < wire_payload_size) {
+      int n = recv(client_socket, (char *)recv_buf + total_payload,
+                   wire_payload_size - total_payload, 0);
+      if (n < 0) {
+        if (errno == EINTR)
+          continue; // interrupted by signal, retry
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+          if (!keep_running)
+            goto done; // shutting down
+          continue;    // recv timeout, re-check and retry
+        }
+        goto done; // real error
+      }
+      if (n == 0)
+        goto done; // peer closed
+      total_payload += n;
+    }
+
+    // Use float data directly (no conversion needed)
+    float *data = (float *)malloc(g_imagePixels * sizeof(float));
+    if (!data) {
+      perror("malloc image float");
+      goto done;
+    }
+    memcpy(data, recv_buf, g_imagePixels * sizeof(float));
+
+    printf("Received image %u (%zu bytes wire, %zu pixels)\n", image_num,
+           wire_payload_size, g_imagePixels);
+    if (queue_push(&process_queue, image_num, data) < 0) {
+      printf("Queue push failed for image %u\n", image_num);
+      free(data);
+      goto done;
+    }
+  }
+done:
+  free(recv_buf);
+  close(client_socket);
+  printf("Client handler finished (socket %d)\n", client_socket);
+  return NULL;
+}
+
+void *accept_connections(void *server_fd_ptr) {
+  int server_fd = *((int *)server_fd_ptr);
+  struct sockaddr_in client_addr;
+  socklen_t client_len = sizeof(client_addr);
+  printf("Accept thread started, listening on port %d\n", PORT);
+  while (keep_running) {
+    int *csock = (int *)malloc(sizeof(int));
+    *csock = accept(server_fd, (struct sockaddr *)&client_addr, &client_len);
+    if (!keep_running) {
+      if (*csock >= 0)
+        close(*csock);
+      free(csock);
+      break;
+    }
+    if (*csock < 0) {
+      if (errno == EINTR)
+        continue;
+      perror("accept");
+      free(csock);
+      sleep(1);
+      continue;
+    }
+    printf("Connection accepted from %s:%d\n", inet_ntoa(client_addr.sin_addr),
+           ntohs(client_addr.sin_port));
+    pthread_t tid;
+    if (pthread_create(&tid, NULL, handle_client, (void *)csock) != 0) {
+      perror("pthread_create");
+      close(*csock);
+      free(csock);
+    } else if (register_handler(tid) != 0) {
+      // Tracking table full: detach so the thread cleans up on its own.
+      pthread_detach(tid);
+    }
+  }
+  printf("Accept thread exiting.\n");
+  return NULL;
+}
+
+// ── Usage ──────────────────────────────────────────────────────────────
+static void usage(const char *prog) {
+  printf("LaueMatchingGPUStream — persistent GPU daemon\n"
+         "Contact hsharma@anl.gov\n\n"
+         "Usage: %s parameterFile orientationFile hklFile nCPUs\n\n"
+         "Listens on TCP port %d for binary images.\n"
+         "Wire protocol: uint16_t image_num + float[NrPxX*NrPxY]\n",
+         prog, PORT);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Helper: finalize a stream's pending GPU work (sync + CPU fitting)
+// ═══════════════════════════════════════════════════════════════════
+static void finalize_stream(StreamContext *fc, double *orients, int *hkls,
+                            int nhkls, int nrPxX, int nrPxY, double recip[3][3],
+                            double rotTranspose[3][3], double pArr[3],
+                            double pxX, double pxY, double Elo, double Ehi,
+                            double tol, double *LatticeParameter,
+                            double maxAngle, int maxNrSpots, int minGoodSpots,
+                            int numProcs, FILE *outF, FILE *ExtraInfo) {
+  if (!fc->hasPendingWork)
+    return;
+  gpuErrchk(cudaStreamSynchronize(fc->stream));
+  double wt_cpu_start = omp_get_wtime();
+  // GPU phase timings (ms)
+  float t_h2d = 0, t_kern = 0, t_d2h = 0;
+  gpuErrchk(cudaEventElapsedTime(&t_h2d, fc->ev_start, fc->ev_h2d_done));
+  gpuErrchk(cudaEventElapsedTime(&t_kern, fc->ev_h2d_done, fc->ev_kern_done));
+  gpuErrchk(cudaEventElapsedTime(&t_d2h, fc->ev_kern_done, fc->ev_end));
+  uint16_t img_num = fc->pending_image_num;
+  float *image = fc->pending_image;
+  // Read compact match count
+  int nrResults = *(fc->h_matchCount);
+  if (nrResults > MAX_MATCHES) {
+    fprintf(stderr,
+            "WARNING: match count %d exceeded MAX_MATCHES (%d); truncated.\n",
+            nrResults, MAX_MATCHES);
+    nrResults = MAX_MATCHES;
+  }
+  printf("[Image %u] GPU: %.0f ms (H2D:%.0f Kern:%.0f D2H:%.0f), "
+         "%d matches\n",
+         img_num, t_h2d + t_kern + t_d2h, t_h2d, t_kern, t_d2h, nrResults);
+  if (nrResults == 0) {
+    printf("[Image %u] No matches, skipping fitting.\n", img_num);
+    free(image);
+    fc->hasPendingWork = 0;
+    return;
+  }
+  // Build match arrays from compact GPU results
+  size_t *matchIdx = fc->h_matchIdx;
+  float *matchScore = fc->h_matchScore;
+  double *mA = (double *)calloc(nrResults, sizeof(double));
+  size_t *rowNrs = (size_t *)calloc(nrResults, sizeof(size_t));
+  if (!mA || !rowNrs) {
+    fprintf(stderr, "FATAL: calloc failed for match arrays (%d results)\n",
+            nrResults);
+    exit(EXIT_FAILURE);
+  }
+  for (int ci = 0; ci < nrResults; ci++) {
+    mA[ci] = matchScore[ci];
+    rowNrs[ci] = matchIdx[ci];
+  }
+  // Merge duplicate orientations
+  double *FinOrientArr = (double *)calloc(nrResults * 9, sizeof(double));
+  int *dArr = (int *)calloc(nrResults, sizeof(int));
+  int *bsArr = (int *)calloc(nrResults, sizeof(int));
+  double *bsScoreArr = (double *)calloc(nrResults, sizeof(double));
+  if (!FinOrientArr || !dArr || !bsArr || !bsScoreArr) {
+    fprintf(stderr, "FATAL: calloc failed for merge arrays (%d results)\n",
+            nrResults);
+    exit(EXIT_FAILURE);
+  }
+  double wt_merge = omp_get_wtime();
+  int totalSols = mergeDuplicateOrientations(orients, rowNrs, mA, nrResults,
+                                             maxAngle, numProcs, FinOrientArr,
+                                             dArr, bsArr, bsScoreArr);
+  double wt_merge_done = omp_get_wtime();
+  printf("[Image %u] %d unique orientations found\n", img_num, totalSols);
+  printf("[Image %u]   merge: %.0f ms\n", img_num,
+         (wt_merge_done - wt_merge) * 1000);
+  // Parallel fitting
+  double wt_fit_start = omp_get_wtime();
+  fitAndWriteOrientations(image, FinOrientArr, dArr, bsArr, bsScoreArr,
+                          totalSols, hkls, nhkls, nrPxX, nrPxY, recip,
+                          rotTranspose, pArr, pxX, pxY, Elo, Ehi, tol,
+                          LatticeParameter, maxNrSpots, minGoodSpots, numProcs,
+                          outF, ExtraInfo, (int)img_num,
+                          0.0 /* auto geometry-scaled coarse-fit sigma */);
+  double wt_flush_start = omp_get_wtime();
+  fflush(outF);
+  fflush(ExtraInfo);
+  double wt_flush_ms = (omp_get_wtime() - wt_flush_start) * 1000;
+  double wt_total = omp_get_wtime() - fc->wt_submission;
+  float t_gpu_total = t_h2d + t_kern + t_d2h;
+  double wt_fit_ms = (wt_flush_start - wt_fit_start) * 1000;
+  double wt_setup_ms = (wt_merge - wt_cpu_start) * 1000;
+  printf("[Image %u]   setup: %.0f ms, flush: %.0f ms\n", img_num, wt_setup_ms,
+         wt_flush_ms);
+  printf("[Image %u]   fitting: %.0f ms (%d orientations, %d threads)\n",
+         img_num, wt_fit_ms, totalSols, numProcs);
+  printf("[Image %u] Total: %.3f s (GPU: %.0f ms, CPU: %.0f ms)\n", img_num,
+         wt_total, t_gpu_total, (omp_get_wtime() - wt_cpu_start) * 1000);
+  fflush(stdout);
+  free(mA);
+  free(rowNrs);
+  free(FinOrientArr);
+  free(dArr);
+  free(bsArr);
+  free(bsScoreArr);
+  free(image);
+  fc->hasPendingWork = 0;
+}
+
+// ── Main ───────────────────────────────────────────────────────────────
+int main(int argc, char *argv[]) {
+  if (argc != 5) {
+    usage(argv[0]);
+    return 0;
+  }
+
+  // Optional port override (run multiple daemons on one host)
+  const char *portEnv = getenv("LAUE_STREAM_PORT");
+  if (portEnv) {
+    int p = atoi(portEnv);
+    if (p > 0 && p < 65536) {
+      PORT = p;
+    } else {
+      printf("Invalid LAUE_STREAM_PORT '%s', using default %d\n", portEnv,
+             DEFAULT_PORT);
+    }
+  }
+
+  // Use sigaction (not signal) and clear SA_RESTART so that accept()/recv()
+  // return with EINTR on signal rather than auto-restarting, letting threads
+  // observe keep_running == 0 and shut down cleanly.
+  struct sigaction sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sa_handler = sigint_handler;
+  sigemptyset(&sa.sa_mask);
+  sa.sa_flags = 0; // explicitly no SA_RESTART
+  sigaction(SIGINT, &sa, NULL);
+  sigaction(SIGTERM, &sa, NULL);
+
+  double st_tm = omp_get_wtime();
+
+  // ── Parse parameters ──────────────────────────────────────────────
+  char *paramFN = argv[1];
+  FILE *fileParam = fopen(paramFN, "r");
+  if (!fileParam) {
+    printf("Could not open parameter file %s.\n", paramFN);
+    return 1;
+  }
+  char aline[1000], *str, dummy[1000], outfn[1000];
+  int LowNr, nrPxX, nrPxY, maxNrSpots = 500, minNrSpots = 5, doFwd = 1;
+  sg_num = 225;
+  double pArr[3], rArr[3], pxX, pxY, Elo = 5, Ehi = 30;
+  int iter;
+  for (iter = 0; iter < 6; iter++)
+    tol_LatC[iter] = 0;
+  double minIntensity = 1000.0, maxAngle = 2.0;
+  double LatticeParameter[6];
+  tol_c_over_a = 0;
+  char resultDir[1000] = "results_stream";
+  int minGoodSpots = 5;
+  puts("Reading parameter file");
+  fflush(stdout);
+  while (fgets(aline, 1000, fileParam) != NULL) {
+    str = "LatticeParameter";
+    LowNr = strncmp(aline, str, strlen(str));
+    if (LowNr == 0) {
+      sscanf(aline, "%s %lf %lf %lf %lf %lf %lf", dummy, &LatticeParameter[0],
+             &LatticeParameter[1], &LatticeParameter[2], &LatticeParameter[3],
+             &LatticeParameter[4], &LatticeParameter[5]);
+      calcV(LatticeParameter);
+      continue;
+    }
+    str = "P_Array";
+    LowNr = strncmp(aline, str, strlen(str));
+    if (LowNr == 0) {
+      sscanf(aline, "%s %lf %lf %lf", dummy, &pArr[0], &pArr[1], &pArr[2]);
+      continue;
+    }
+    str = "R_Array";
+    LowNr = strncmp(aline, str, strlen(str));
+    if (LowNr == 0) {
+      sscanf(aline, "%s %lf %lf %lf", dummy, &rArr[0], &rArr[1], &rArr[2]);
+      continue;
+    }
+    str = "tol_c_over_a";
+    LowNr = strncmp(aline, str, strlen(str));
+    if (LowNr == 0) {
+      sscanf(aline, "%s %lf", dummy, &tol_c_over_a);
+      continue;
+    }
+    str = "PxX";
+    LowNr = strncmp(aline, str, strlen(str));
+    if (LowNr == 0) {
+      sscanf(aline, "%s %lf", dummy, &pxX);
+      continue;
+    }
+    str = "PxY";
+    LowNr = strncmp(aline, str, strlen(str));
+    if (LowNr == 0) {
+      sscanf(aline, "%s %lf", dummy, &pxY);
+      continue;
+    }
+    str = "Elo";
+    LowNr = strncmp(aline, str, strlen(str));
+    if (LowNr == 0) {
+      sscanf(aline, "%s %lf", dummy, &Elo);
+      continue;
+    }
+    str = "Ehi";
+    LowNr = strncmp(aline, str, strlen(str));
+    if (LowNr == 0) {
+      sscanf(aline, "%s %lf", dummy, &Ehi);
+      continue;
+    }
+    str = "DoFwd";
+    LowNr = strncmp(aline, str, strlen(str));
+    if (LowNr == 0) {
+      sscanf(aline, "%s %d", dummy, &doFwd);
+      continue;
+    }
+    str = "NrPxX";
+    LowNr = strncmp(aline, str, strlen(str));
+    if (LowNr == 0) {
+      sscanf(aline, "%s %d", dummy, &nrPxX);
+      continue;
+    }
+    str = "NrPxY";
+    LowNr = strncmp(aline, str, strlen(str));
+    if (LowNr == 0) {
+      sscanf(aline, "%s %d", dummy, &nrPxY);
+      continue;
+    }
+    str = "MaxNrLaueSpots";
+    LowNr = strncmp(aline, str, strlen(str));
+    if (LowNr == 0) {
+      sscanf(aline, "%s %d", dummy, &maxNrSpots);
+      continue;
+    }
+    str = "MinNrSpots";
+    LowNr = strncmp(aline, str, strlen(str));
+    if (LowNr == 0) {
+      sscanf(aline, "%s %d", dummy, &minNrSpots);
+      continue;
+    }
+    str = "SpaceGroup";
+    LowNr = strncmp(aline, str, strlen(str));
+    if (LowNr == 0) {
+      sscanf(aline, "%s %d", dummy, &sg_num);
+      continue;
+    }
+    str = "MinIntensity";
+    LowNr = strncmp(aline, str, strlen(str));
+    if (LowNr == 0) {
+      sscanf(aline, "%s %lf", dummy, &minIntensity);
+      continue;
+    }
+    str = "MaxAngle";
+    LowNr = strncmp(aline, str, strlen(str));
+    if (LowNr == 0) {
+      sscanf(aline, "%s %lf", dummy, &maxAngle);
+      continue;
+    }
+    str = "ForwardFile";
+    LowNr = strncmp(aline, str, strlen(str));
+    if (LowNr == 0) {
+      sscanf(aline, "%s %s", dummy, outfn);
+      continue;
+    }
+    str = "tol_LatC";
+    LowNr = strncmp(aline, str, strlen(str));
+    if (LowNr == 0) {
+      sscanf(aline, "%s %lf %lf %lf %lf %lf %lf", dummy, &tol_LatC[0],
+             &tol_LatC[1], &tol_LatC[2], &tol_LatC[3], &tol_LatC[4],
+             &tol_LatC[5]);
+      continue;
+    }
+    str = "Optimizer";
+    LowNr = strncmp(aline, str, strlen(str));
+    if (LowNr == 0) {
+      sscanf(aline, "%s %s", dummy, dummy);
+      useBobyqa = 0; /* Nelder-Mead always; see LaueMatchingHeaders.h */
+      if (strncmp(dummy, "BOBYQA", 6) == 0)
+        printf("NOTE: Optimizer BOBYQA requested, but BOBYQA has been "
+               "removed. Using Nelder-Mead, which measured better on "
+               "this objective (median 0.0041 vs 0.0054 deg, p95 3.3x "
+               "tighter) at the same cost.\n");
+      continue;
+    }
+    str = "ResultDir";
+    LowNr = strncmp(aline, str, strlen(str));
+    if (LowNr == 0) {
+      sscanf(aline, "%s %s", dummy, resultDir);
+      continue;
+    }
+    str = "MinGoodSpots";
+    LowNr = strncmp(aline, str, strlen(str));
+    if (LowNr == 0) {
+      sscanf(aline, "%s %d", dummy, &minGoodSpots);
+      continue;
+    }
+  }
+  if (tol_c_over_a != 0) {
+    for (iter = 0; iter < 6; iter++)
+      tol_LatC[iter] = 0;
+  }
+  c_over_a_orig = LatticeParameter[2] / LatticeParameter[0];
+  fclose(fileParam);
+  puts("Parameters read");
+
+  // Rotation matrix
+  double rotang = CalcLength(rArr[0], rArr[1], rArr[2]);
+  double rotvect[3] = {rArr[0] / rotang, rArr[1] / rotang, rArr[2] / rotang};
+  double rot[3][3] = {
+      {cos(rotang) + (1 - cos(rotang)) * (rotvect[0] * rotvect[0]),
+       (1 - cos(rotang)) * rotvect[0] * rotvect[1] - sin(rotang) * rotvect[2],
+       (1 - cos(rotang)) * rotvect[0] * rotvect[2] + sin(rotang) * rotvect[1]},
+      {(1 - cos(rotang)) * rotvect[1] * rotvect[0] + sin(rotang) * rotvect[2],
+       cos(rotang) + (1 - cos(rotang)) * (rotvect[1] * rotvect[1]),
+       (1 - cos(rotang)) * rotvect[1] * rotvect[2] - sin(rotang) * rotvect[0]},
+      {(1 - cos(rotang)) * rotvect[2] * rotvect[0] - sin(rotang) * rotvect[1],
+       (1 - cos(rotang)) * rotvect[2] * rotvect[1] + sin(rotang) * rotvect[0],
+       cos(rotang) + (1 - cos(rotang)) * (rotvect[2] * rotvect[2])}};
+  double rotTranspose[3][3] = {{rot[0][0], rot[1][0], rot[2][0]},
+                               {rot[0][1], rot[1][1], rot[2][1]},
+                               {rot[0][2], rot[1][2], rot[2][2]}};
+
+  // ── Read orientations ─────────────────────────────────────────────
+  puts("Reading orientations");
+  fflush(stdout);
+  char *orientFN = argv[2];
+  FILE *orientF = fopen(orientFN, "rb");
+  if (!orientF) {
+    puts("Could not read orientation file, exiting.");
+    return 1;
+  }
+  fseek(orientF, 0L, SEEK_END);
+  size_t szFile = ftell(orientF);
+  rewind(orientF);
+  size_t nrOrients = szFile / (9 * sizeof(double));
+  double *orients;
+  int orientsMapped = 0;
+  str = "/dev/shm";
+  LowNr = strncmp(orientFN, str, strlen(str));
+  if (LowNr == 0) {
+    fclose(orientF);
+    int fd = open(orientFN, O_RDONLY);
+    if (fd < 0) {
+      fprintf(stderr, "FATAL: could not open orientation file %s for mmap.\n",
+              orientFN);
+      return 1;
+    }
+    orients = (double *)mmap(0, szFile, PROT_READ, MAP_SHARED, fd, 0);
+    close(fd);
+    if (orients == MAP_FAILED) {
+      fprintf(stderr, "FATAL: mmap of orientation file %s failed.\n", orientFN);
+      return 1;
+    }
+    orientsMapped = 1;
+    printf("%zu orientations mapped into memory\n", nrOrients);
+  } else {
+    orients = (double *)malloc(szFile);
+    size_t rc = fread(orients, 1, szFile, orientF);
+    if (rc != szFile) {
+      printf("Error reading orientations.\n");
+      fclose(orientF);
+      free(orients);
+      return 1;
+    }
+    fclose(orientF);
+    printf("%zu orientations read\n", nrOrients);
+  }
+  fflush(stdout);
+
+  // ── Read HKLs ────────────────────────────────────────────────────
+  char *hklfn = argv[3];
+  FILE *hklf = fopen(hklfn, "r");
+  if (!hklf) {
+    printf("Could not read hkl file %s.\n", hklfn);
+    return 1;
+  }
+  int *hkls = (int *)calloc(MaxNHKLS * 3, sizeof(*hkls));
+  int nhkls = 0;
+  while (fgets(aline, 1000, hklf) != NULL) {
+    if (nhkls >= MaxNHKLS)
+      break;
+    sscanf(aline, "%d %d %d", &hkls[nhkls * 3 + 0], &hkls[nhkls * 3 + 1],
+           &hkls[nhkls * 3 + 2]);
+    nhkls++;
+  }
+  fclose(hklf);
+  printf("%d hkls read\n", nhkls);
+
+  int numProcs = atoi(argv[4]);
+  printf("Will use %d CPU threads for fitting.\n", numProcs);
+  g_imagePixels = (size_t)nrPxX * nrPxY;
+
+  // ── Pre-compute ──────────────────────────────────────────────────
+  nSym = MakeSymmetries(sg_num, Symm);
+  double recip[3][3];
+  calcRecipArray(LatticeParameter, sg_num, recip);
+
+  // ── CUDA context + fwd sim ───────────────────────────────────────
+  printf("Initializing CUDA...\n");
+  fflush(stdout);
+  double wt_cuda_init = omp_get_wtime();
+  gpuErrchk(cudaFree(0));
+  printf("CUDA context init: %lf s\n", omp_get_wtime() - wt_cuda_init);
+
+  // Load or compute forward simulation (same logic as LaueMatchingGPU.cu)
+  size_t stride = (size_t)(1 + 2 * maxNrSpots);
+  size_t szArr = nrOrients * stride;
+  uint16_t *outArr = NULL;
+  int outArrMapped = 0;
+
+  if (doFwd == 0) {
+    int result = open(outfn, O_RDONLY, S_IRUSR | S_IWUSR);
+    if (result < 0) {
+      printf("Forward simulation file %s not found. Running fwd sim...\n",
+             outfn);
+      doFwd = 1;
+    } else {
+      printf("Forward simulation file %s found.\n", outfn);
+      close(result);
+    }
+  }
+
+  if (doFwd == 1) {
+    // Forward simulation on CPU (same as LaueMatchingGPU.cu)
+    printf("Running forward simulation (%zu orientations)...\n", nrOrients);
+    fflush(stdout);
+    double wt_fwd = omp_get_wtime();
+    double *matchedArrFwd = (double *)calloc(nrOrients, sizeof(double));
+    double ki[3] = {0, 0, 1.0};
+    bool *pxImgAll =
+        (bool *)calloc((size_t)nrPxX * nrPxY * numProcs, sizeof(bool));
+    if (!matchedArrFwd || !pxImgAll) {
+      fprintf(stderr, "FATAL: calloc failed for forward-sim buffers.\n");
+      return 1;
+    }
+    // No O_SYNC: on network filesystems synchronous writes serialize the
+    // 12 GB forward table against every pwrite and effectively stall. Write
+    // buffered and fsync once at the end (matches LaueMatchingCPU).
+    int fwdFd = open(outfn, O_CREAT | O_WRONLY, S_IRUSR | S_IWUSR);
+    if (fwdFd < 0) {
+      printf("Could not open forward output file %s.\n", outfn);
+      return 1;
+    }
+#pragma omp parallel num_threads(numProcs)
+    {
+      int procNr = omp_get_thread_num();
+      size_t nrOrientsThread =
+          (size_t)ceil((double)nrOrients / (double)numProcs);
+      size_t startOrientNr = (size_t)procNr * nrOrientsThread;
+      size_t endOrientNr = startOrientNr + nrOrientsThread;
+      if (endOrientNr > nrOrients)
+        endOrientNr = nrOrients;
+      nrOrientsThread =
+          (endOrientNr > startOrientNr) ? endOrientNr - startOrientNr : 0;
+      size_t szArrThread = nrOrientsThread * (1 + 2 * maxNrSpots);
+      size_t OffsetHere = (size_t)procNr;
+      OffsetHere *= (size_t)((int)ceil((double)nrOrients / (double)numProcs)) *
+                    (1 + 2 * maxNrSpots);
+      OffsetHere *= sizeof(uint16_t);
+      uint16_t *outArrThis = (uint16_t *)calloc(szArrThread, sizeof(uint16_t));
+      double *qhatarr = (double *)calloc(maxNrSpots * 3, sizeof(double));
+      if (!outArrThis || !qhatarr) {
+        fprintf(stderr,
+                "FATAL: calloc failed for per-thread forward-sim buffers.\n");
+        exit(EXIT_FAILURE);
+      }
+      bool *pxImg = &pxImgAll[(size_t)nrPxX * nrPxY * procNr];
+      size_t orientNr;
+      for (orientNr = startOrientNr; orientNr < endOrientNr; orientNr++) {
+        int nSpots = 0, spotNr = 0;
+        double totInt = 0;
+        double tO[3][3], thisOrient[3][3];
+        int i, j;
+        for (i = 0; i < 3; i++)
+          for (j = 0; j < 3; j++)
+            tO[i][j] = orients[orientNr * 9 + i * 3 + j];
+        MatrixMultF33(tO, recip, thisOrient);
+        for (int hklnr = 0; hklnr < nhkls; hklnr++) {
+          double hkl[3] = {(double)hkls[hklnr * 3], (double)hkls[hklnr * 3 + 1],
+                           (double)hkls[hklnr * 3 + 2]};
+          double qvec[3], qhat[3], kf[3], xyz[3];
+          MatrixMultF(thisOrient, hkl, qvec);
+          double qlen = CalcLength(qvec[0], qvec[1], qvec[2]);
+          if (qlen == 0)
+            continue;
+          qhat[0] = qvec[0] / qlen;
+          qhat[1] = qvec[1] / qlen;
+          qhat[2] = qvec[2] / qlen;
+          double dot = qhat[2];
+          kf[0] = ki[0] - 2 * dot * qhat[0];
+          kf[1] = ki[1] - 2 * dot * qhat[1];
+          kf[2] = ki[2] - 2 * dot * qhat[2];
+          MatrixMultF(rotTranspose, kf, xyz);
+          if (xyz[2] <= 0)
+            continue;
+          xyz[0] = xyz[0] * pArr[2] / xyz[2];
+          xyz[1] = xyz[1] * pArr[2] / xyz[2];
+          double xp = xyz[0] - pArr[0];
+          double yp = xyz[1] - pArr[1];
+          int ipx = (int)((xp / pxX) + (0.5 * (nrPxX - 1)));
+          if (ipx < 0 || ipx > (nrPxX - 1))
+            continue;
+          int ipy = (int)((yp / pxY) + (0.5 * (nrPxY - 1)));
+          if (ipy < 0 || ipy > (nrPxY - 1))
+            continue;
+          double sinTheta = -qhat[2];
+          double E = hc_keVnm * qlen / (4 * M_PI * sinTheta);
+          if (E < Elo || E > Ehi)
+            continue;
+          if (pxImg[ipx * nrPxY + ipy])
+            continue;
+          pxImg[ipx * nrPxY + ipy] = true;
+          qhatarr[3 * spotNr + 0] = qhat[0];
+          qhatarr[3 * spotNr + 1] = qhat[1];
+          qhatarr[3 * spotNr + 2] = qhat[2];
+          outArrThis[(orientNr - startOrientNr) * (1 + 2 * maxNrSpots) + 1 +
+                     2 * spotNr + 0] = (uint16_t)ipx;
+          outArrThis[(orientNr - startOrientNr) * (1 + 2 * maxNrSpots) + 1 +
+                     2 * spotNr + 1] = (uint16_t)ipy;
+          spotNr++;
+          if (spotNr == maxNrSpots)
+            break;
+        }
+        for (int it = 0; it < spotNr; it++)
+          pxImg[outArrThis[(orientNr - startOrientNr) * (1 + 2 * maxNrSpots) +
+                           1 + 2 * it + 0] *
+                    nrPxY +
+                outArrThis[(orientNr - startOrientNr) * (1 + 2 * maxNrSpots) +
+                           1 + 2 * it + 1]] = false;
+        outArrThis[(orientNr - startOrientNr) * (1 + 2 * maxNrSpots)] =
+            (uint16_t)spotNr;
+      }
+      pwrite(fwdFd, outArrThis, szArrThread * sizeof(uint16_t), OffsetHere);
+      free(outArrThis);
+      free(qhatarr);
+    }
+    if (fsync(fwdFd) < 0)
+      fprintf(stderr, "WARNING: fsync(forward file) failed: %s\n",
+              strerror(errno));
+    close(fwdFd);
+    free(pxImgAll);
+    free(matchedArrFwd);
+    printf("Forward simulation completed in %lf s\n", omp_get_wtime() - wt_fwd);
+  }
+
+  // ── Load forward simulation into host memory ─────────────────────
+  double wt_read = omp_get_wtime();
+  str = "/dev/shm";
+  LowNr = strncmp(outfn, str, strlen(str));
+  if (LowNr == 0) {
+    int fd = open(outfn, O_RDONLY);
+    if (fd < 0) {
+      fprintf(stderr, "FATAL: could not open forward file %s for mmap.\n",
+              outfn);
+      return 1;
+    }
+    outArr = (uint16_t *)mmap(0, szArr * sizeof(uint16_t), PROT_READ,
+                              MAP_SHARED, fd, 0);
+    close(fd);
+    if (outArr == MAP_FAILED) {
+      fprintf(stderr, "FATAL: mmap of forward file %s failed.\n", outfn);
+      return 1;
+    }
+    outArrMapped = 1;
+  } else {
+    outArr = (uint16_t *)calloc(szArr, sizeof(uint16_t));
+    if (!outArr) {
+      fprintf(stderr, "FATAL: calloc failed for forward array (%zu bytes)\n",
+              szArr * sizeof(uint16_t));
+      return 1;
+    }
+    FILE *fwdFN = fopen(outfn, "rb");
+    if (!fwdFN) {
+      printf("Could not open forward file %s.\n", outfn);
+      return 1;
+    }
+    if (fread(outArr, szArr * sizeof(uint16_t), 1, fwdFN) != 1) {
+      fprintf(stderr, "FATAL: short read of forward file %s.\n", outfn);
+      fclose(fwdFN);
+      return 1;
+    }
+    fclose(fwdFN);
+  }
+  printf("Forward simulation loaded: %lf s (%zu orientations, stride=%zu)\n",
+         omp_get_wtime() - wt_read, nrOrients, stride);
+  fflush(stdout);
+
+  // ── GPU memory allocation ────────────────────────────────────────
+  // Upload forward simulation to GPU once (shared, read-only)
+  size_t outArrBytes = szArr * sizeof(uint16_t);
+  size_t imageBytes = g_imagePixels * sizeof(float);
+
+  size_t freeMem = 0, totalMem = 0;
+  gpuErrchk(cudaMemGetInfo(&freeMem, &totalMem));
+  printf("GPU memory: %.1f / %.1f GB free\n", freeMem / 1e9, totalMem / 1e9);
+
+  // Check if entire outArr fits on GPU
+  uint16_t *d_outArr = NULL;
+  size_t usableForOutArr = freeMem * 8 / 10; // use 80% of free
+  int outArrOnGPU = 0;                       // flag: entire outArr on device?
+  size_t chunkSize = 0; // orientations per chunk (if chunking needed)
+
+  if (outArrBytes <= usableForOutArr) {
+    // Entire forward simulation fits on GPU — ideal case
+    gpuErrchk(cudaMalloc(&d_outArr, outArrBytes));
+    gpuErrchk(
+        cudaMemcpy(d_outArr, outArr, outArrBytes, cudaMemcpyHostToDevice));
+    outArrOnGPU = 1;
+    chunkSize = nrOrients;
+    printf("Forward simulation uploaded to GPU: %.1f GB\n", outArrBytes / 1e9);
+  } else {
+    // Need chunking — cap at 4 GB per chunk
+    size_t margin = freeMem / 5;
+    size_t usable = (freeMem > imageBytes * MAX_STREAMS + margin)
+                        ? freeMem - imageBytes * MAX_STREAMS - margin
+                        : freeMem / 2;
+    const size_t DEVICE_CAP = 4ULL * 1024 * 1024 * 1024;
+    if (usable > DEVICE_CAP)
+      usable = DEVICE_CAP;
+    chunkSize = usable / (stride * sizeof(uint16_t));
+    if (chunkSize < 1024)
+      chunkSize = 1024;
+    if (chunkSize > nrOrients)
+      chunkSize = nrOrients;
+    gpuErrchk(cudaMalloc(&d_outArr, chunkSize * stride * sizeof(uint16_t)));
+    printf("Chunked mode: %zu orientations per chunk (%.1f GB), outArr too "
+           "large for GPU (%.1f GB)\n",
+           chunkSize, chunkSize * stride * sizeof(uint16_t) / 1e9,
+           outArrBytes / 1e9);
+  }
+
+  // Determine number of streams that fit
+  gpuErrchk(cudaMemGetInfo(&freeMem, &totalMem));
+  size_t perStreamCost =
+      imageBytes + // d_image
+      sizeof(int) +
+      MAX_MATCHES * (sizeof(size_t) + sizeof(float)); // compact output
+  int numStreams = (int)(freeMem / (perStreamCost + (1 << 20))); // +1MB margin
+  if (numStreams > MAX_STREAMS)
+    numStreams = MAX_STREAMS;
+  if (numStreams < 1)
+    numStreams = 1;
+  printf("Allocating %d CUDA streams (%.1f MB each)\n", numStreams,
+         perStreamCost / 1e6);
+
+  // Allocate per-stream contexts
+  StreamContext *streams =
+      (StreamContext *)calloc(numStreams, sizeof(StreamContext));
+  for (int s = 0; s < numStreams; s++) {
+    gpuErrchk(cudaStreamCreate(&streams[s].stream));
+    gpuErrchk(cudaMalloc(&streams[s].d_image, imageBytes));
+    // Compact output (device)
+    gpuErrchk(cudaMalloc(&streams[s].d_matchCount, sizeof(int)));
+    gpuErrchk(cudaMalloc(&streams[s].d_matchIdx, MAX_MATCHES * sizeof(size_t)));
+    gpuErrchk(
+        cudaMalloc(&streams[s].d_matchScore, MAX_MATCHES * sizeof(float)));
+    // Compact output (host, pinned)
+    gpuErrchk(cudaMallocHost((void **)&streams[s].h_matchCount, sizeof(int)));
+    gpuErrchk(cudaMallocHost((void **)&streams[s].h_matchIdx,
+                             MAX_MATCHES * sizeof(size_t)));
+    gpuErrchk(cudaMallocHost((void **)&streams[s].h_matchScore,
+                             MAX_MATCHES * sizeof(float)));
+    gpuErrchk(cudaEventCreate(&streams[s].ev_start));
+    gpuErrchk(cudaEventCreate(&streams[s].ev_h2d_done));
+    gpuErrchk(cudaEventCreate(&streams[s].ev_kern_done));
+    gpuErrchk(cudaEventCreate(&streams[s].ev_end));
+  }
+
+  // ── Open output files ────────────────────────────────────────────
+  // Create result directory
+  mkdir(resultDir, 0755);
+  char solFN[2048], spotFN[2048];
+  snprintf(solFN, sizeof(solFN), "%s/solutions.txt", resultDir);
+  snprintf(spotFN, sizeof(spotFN), "%s/spots.txt", resultDir);
+  FILE *outF = fopen(solFN, "w");
+  FILE *ExtraInfo = fopen(spotFN, "w");
+  if (!outF || !ExtraInfo) {
+    printf("Could not open output files in %s.\n", resultDir);
+    return 1;
+  }
+  fprintf(ExtraInfo, "%%ImageNr\tGrainNr\tSpotNr\th\tk\tl\tX\tY\tQhat[0]\t"
+                     "Qhat[1]\tQhat[2]\tIntensity\n");
+  fprintf(outF,
+          "%%ImageNr\tGrainNr\tNumberOfSolutions\tIntensity\tNMatches*"
+          "Intensity\t"
+          "NMatches*sqrt(Intensity)\tNMatches\tNSpotsCalc\t"
+          "Recip1\tRecip2\tRecip3\tRecip4\tRecip5\tRecip6\tRecip7\tRecip8\t"
+          "Recip9\t"
+          "LatticeParameterFit[a]\tLatticeParameterFit[b]\t"
+          "LatticeParameterFit[c]\t"
+          "LatticeParameterFit[alpha]\tLatticeParameterFit[beta]\t"
+          "LatticeParameterFit[gamma]\t"
+          "OrientMatrix0\tOrientMatrix1\tOrientMatrix2\tOrientMatrix3\t"
+          "OrientMatrix4\tOrientMatrix5\t"
+          "OrientMatrix6\tOrientMatrix7\tOrientMatrix8\t"
+          "CoarseNMatches*sqrt(Intensity)\t"
+          "misOrientationPostRefinement[degrees]\torientationRowNr\n");
+  fflush(outF);
+  fflush(ExtraInfo);
+
+  // ── Setup TCP server ─────────────────────────────────────────────
+  queue_init(&process_queue);
+  int server_fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (server_fd < 0) {
+    perror("socket");
+    return 1;
+  }
+  g_server_fd = server_fd; // expose to signal handler
+  int opt_val = 1;
+  setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt_val, sizeof(opt_val));
+  struct sockaddr_in server_addr;
+  memset(&server_addr, 0, sizeof(server_addr));
+  server_addr.sin_family = AF_INET;
+  server_addr.sin_addr.s_addr = INADDR_ANY;
+  server_addr.sin_port = htons(PORT);
+  if (bind(server_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) <
+      0) {
+    perror("bind");
+    return 1;
+  }
+  if (listen(server_fd, MAX_CONNECTIONS) < 0) {
+    perror("listen");
+    return 1;
+  }
+
+  pthread_t accept_tid;
+  pthread_create(&accept_tid, NULL, accept_connections, &server_fd);
+
+  double total_init = omp_get_wtime() - st_tm;
+  printf("\n=== LaueMatchingGPUStream ready ===\n"
+         "  Port:          %d\n"
+         "  Orientations:  %zu\n"
+         "  Image size:    %d x %d (%.1f MB)\n"
+         "  Streams:       %d\n"
+         "  Chunking:      %s (%zu orientations/chunk)\n"
+         "  Optimizer:     %s\n"
+         "  Init time:     %.2f s\n"
+         "  Waiting for images...\n\n",
+         PORT, nrOrients, nrPxX, nrPxY, imageBytes / 1e6, numStreams,
+         outArrOnGPU ? "OFF (full outArr on GPU)" : "ON", chunkSize,
+         "NelderMead", total_init);
+  fflush(stdout);
+
+  // Use maxNrSpots*3 for fitting (same as batch mode)
+  int maxNrSpotsFit = maxNrSpots * 3;
+  double tol = 3 * deg2rad;
+
+  int streamId = 0;
+  for (int s = 0; s < numStreams; s++)
+    streams[s].hasPendingWork = 0;
+
+  // GPU gate: ensures only 1 kernel runs at a time across all streams.
+  // Without this, concurrent kernels on different streams compete for
+  // the same SMs, making each kernel take N× longer (GPU-saturating
+  // workload).
+  cudaEvent_t gpu_gate;
+  gpuErrchk(cudaEventCreate(&gpu_gate));
+
+  while (keep_running) {
+    StreamContext *ctx = &streams[streamId];
+
+    // 1. FINALIZE previous work on this stream (if any)
+    finalize_stream(ctx, orients, hkls, nhkls, nrPxX, nrPxY, recip,
+                    rotTranspose, pArr, pxX, pxY, Elo, Ehi, tol,
+                    LatticeParameter, maxAngle, maxNrSpotsFit, minGoodSpots,
+                    numProcs, outF, ExtraInfo);
+
+    // 2. ACQUIRE new image (100ms timeout for drain support)
+    ImageChunk chunk;
+    int rc = queue_pop_timeout(&process_queue, &chunk, 100);
+    if (rc < 0)
+      break; // shutdown
+    if (rc == 1) {
+      // Timeout: no work available, advance to drain next stream
+      streamId = (streamId + 1) % numStreams;
+      continue;
+    }
+
+    // 3. SUBMIT async GPU work (no synchronize!)
+    uint16_t image_num = chunk.image_num;
+    float *image = chunk.data;
+
+    printf("[Image %u] Submitting on stream %d...\n", image_num, streamId);
+
+    // Wait for previous stream's GPU work to finish before launching new
+    // kernel. This serializes GPU kernels (only 1 at a time) while still
+    // allowing CPU fitting to overlap with GPU work on a different stream.
+    gpuErrchk(cudaEventSynchronize(gpu_gate));
+
+    // Reset match counter on device
+    gpuErrchk(cudaMemsetAsync(ctx->d_matchCount, 0, sizeof(int), ctx->stream));
+
+    // H2D: upload full-precision float image directly (no quantization).
+    // Scoring is now on raw intensities, matching the CPU score exactly.
+    gpuErrchk(cudaEventRecord(ctx->ev_start, ctx->stream));
+    gpuErrchk(cudaMemcpyAsync(ctx->d_image, image, imageBytes,
+                              cudaMemcpyHostToDevice, ctx->stream));
+    gpuErrchk(cudaEventRecord(ctx->ev_h2d_done, ctx->stream));
+
+    // GPU matching (chunked or full)
+    size_t nChunks = (nrOrients + chunkSize - 1) / chunkSize;
+    for (size_t c = 0; c < nChunks; c++) {
+      size_t offset = c * chunkSize;
+      size_t thisChunk = chunkSize;
+      if (offset + thisChunk > nrOrients)
+        thisChunk = nrOrients - offset;
+      size_t thisMatchBytes = thisChunk * sizeof(double);
+
+      if (!outArrOnGPU) {
+        size_t thisOutBytes = thisChunk * stride * sizeof(uint16_t);
+        gpuErrchk(cudaMemcpyAsync(d_outArr, outArr + offset * stride,
+                                  thisOutBytes, cudaMemcpyHostToDevice,
+                                  ctx->stream));
+      }
+
+      int blocks = (int)((thisChunk + 1023) / 1024);
+      uint16_t *d_chunkPtr =
+          outArrOnGPU ? d_outArr + offset * stride : d_outArr;
+      compare<<<blocks, 1024, 0, ctx->stream>>>(
+          nrPxX, thisChunk, maxNrSpots, minIntensity, minNrSpots, d_chunkPtr,
+          ctx->d_image, ctx->d_matchCount, ctx->d_matchIdx,
+          ctx->d_matchScore, offset);
+    }
+
+    gpuErrchk(cudaEventRecord(ctx->ev_kern_done, ctx->stream));
+
+    // D2H: compact match results only (count + idx + score)
+    gpuErrchk(cudaMemcpyAsync(ctx->h_matchCount, ctx->d_matchCount, sizeof(int),
+                              cudaMemcpyDeviceToHost, ctx->stream));
+    gpuErrchk(cudaMemcpyAsync(ctx->h_matchIdx, ctx->d_matchIdx,
+                              MAX_MATCHES * sizeof(size_t),
+                              cudaMemcpyDeviceToHost, ctx->stream));
+    gpuErrchk(cudaMemcpyAsync(ctx->h_matchScore, ctx->d_matchScore,
+                              MAX_MATCHES * sizeof(float),
+                              cudaMemcpyDeviceToHost, ctx->stream));
+
+    gpuErrchk(cudaEventRecord(ctx->ev_end, ctx->stream));
+
+    // Record GPU gate: next submission will wait for this kernel to finish
+    gpuErrchk(cudaEventRecord(gpu_gate, ctx->stream));
+
+    // Record state — NO cudaStreamSynchronize here!
+    ctx->hasPendingWork = 1;
+    ctx->pending_image_num = image_num;
+    ctx->pending_image = image;
+    ctx->wt_submission = omp_get_wtime();
+
+    streamId = (streamId + 1) % numStreams;
+  }
+
+  // ═══════════════════════════════════════════════════════════════════
+  // Drain: finalize any in-flight streams
+  // ═══════════════════════════════════════════════════════════════════
+  for (int s = 0; s < numStreams; s++) {
+    finalize_stream(&streams[s], orients, hkls, nhkls, nrPxX, nrPxY, recip,
+                    rotTranspose, pArr, pxX, pxY, Elo, Ehi, tol,
+                    LatticeParameter, maxAngle, maxNrSpotsFit, minGoodSpots,
+                    numProcs, outF, ExtraInfo);
+  }
+
+  if (g_queue_full_count > 0)
+    printf("Note: receive queue was full %d times (backpressure from "
+           "processing)\n",
+           g_queue_full_count);
+
+  // ═══════════════════════════════════════════════════════════════════
+  // Cleanup
+  // ═══════════════════════════════════════════════════════════════════
+  printf("\nShutting down...\n");
+  cudaEventDestroy(gpu_gate);
+
+  // Unblock accept() and join the accept thread
+  shutdown(server_fd, SHUT_RDWR);
+  close(server_fd);
+  g_server_fd = -1;
+  pthread_cancel(accept_tid);
+  pthread_join(accept_tid, NULL);
+  // Join all client handler threads before destroying the queue/mutex they may
+  // still be using. The listening socket is already shut down and keep_running
+  // is 0, so each handler's recv() returns (peer close or SO_RCVTIMEO timeout)
+  // and the handler exits.
+  join_handlers();
+  queue_destroy(&process_queue);
+
+  // Close output files
+  fclose(outF);
+  fclose(ExtraInfo);
+
+  // Free GPU
+  for (int s = 0; s < numStreams; s++) {
+    cudaEventDestroy(streams[s].ev_start);
+    cudaEventDestroy(streams[s].ev_h2d_done);
+    cudaEventDestroy(streams[s].ev_kern_done);
+    cudaEventDestroy(streams[s].ev_end);
+    cudaFree(streams[s].d_image);
+    cudaFree(streams[s].d_matchCount);
+    cudaFree(streams[s].d_matchIdx);
+    cudaFree(streams[s].d_matchScore);
+    cudaFreeHost(streams[s].h_matchCount);
+    cudaFreeHost(streams[s].h_matchIdx);
+    cudaFreeHost(streams[s].h_matchScore);
+    cudaStreamDestroy(streams[s].stream);
+  }
+  free(streams);
+  cudaFree(d_outArr);
+
+  // Free host
+  if (outArrMapped)
+    munmap(outArr, szArr * sizeof(uint16_t));
+  else
+    free(outArr);
+  free(hkls);
+  if (orientsMapped)
+    munmap(orients, szFile);
+  else
+    free(orients);
+
+  printf("LaueMatchingGPUStream exited cleanly.\n");
+  fflush(stdout);
+  return 0;
+}

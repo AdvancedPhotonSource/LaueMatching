@@ -40,4 +40,4 @@ DoFwd 0 # If you want to do forward simulation, put to 1. If the ForwardFile doe
 SimulationSmoothingWidth 2 # Only for generating a synthetic simulation image, it is the width of the Gaussian diffraction peaks.
 
 # Optimization
-#Optimizer NelderMead # Uncomment to use Nelder-Mead instead of BOBYQA (default). BOBYQA is typically 2-3x faster.
+#Optimizer NelderMead # Accepted but ignored: refinement is always Nelder-Mead (it measured better than BOBYQA on this objective at the same cost).
