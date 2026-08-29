@@ -146,8 +146,6 @@ enable_language(CUDA)
 # The .cu wrap LaueMatchingHeaders.h in extern "C", so the vendored simplex --
 # compiled here as C -- links into a translation unit nvcc compiles as C++.
 # Mirrors the repo-root build, which CI compiles on every push.
-find_library(LAUE_OMP_LIB NAMES gomp omp)
-
 foreach(_gpu_target LaueMatchingGPU LaueMatchingGPUStream)
   add_executable(${_gpu_target}
     "${LAUE_SRC}/${_gpu_target}.cu"
@@ -162,10 +160,23 @@ foreach(_gpu_target LaueMatchingGPU LaueMatchingGPUStream)
     $<$<COMPILE_LANGUAGE:CUDA>:-O3 -w -Xcompiler=${OpenMP_C_FLAGS}>
     $<$<COMPILE_LANGUAGE:C>:-fPIC -O3>
   )
-  target_link_libraries(${_gpu_target} PRIVATE m)
-  if(LAUE_OMP_LIB)
-    target_link_libraries(${_gpu_target} PRIVATE "${LAUE_OMP_LIB}")
+  # Link the OpenMP runtime BY NAME and let the compiler driver locate it.
+  # Two other spellings were tried and both failed, in opposite places:
+  #   find_library(NAMES gomp) resolves on RHEL (/usr/lib64) but not on Ubuntu,
+  #     where the linker symlink lives inside GCC's own directory -- the CUDA
+  #     link then died with undefined GOMP_* and omp_get_wtime;
+  #   -Xcompiler=-fopenmp as a link option also reaches the DEVICE link step,
+  #     which invokes the host compiler directly: "gcc: error: unrecognized
+  #     command-line option '-Xcompiler=-fopenmp'".
+  # A bare name survives both steps on both distributions, which is what the
+  # repo-root build has always done.
+  foreach(_omp_lib IN LISTS OpenMP_C_LIB_NAMES)
+    target_link_libraries(${_gpu_target} PRIVATE ${_omp_lib})
+  endforeach()
+  if(NOT OpenMP_C_LIB_NAMES)
+    target_link_libraries(${_gpu_target} PRIVATE gomp)
   endif()
+  target_link_libraries(${_gpu_target} PRIVATE m)
   install(TARGETS ${_gpu_target} RUNTIME DESTINATION laue_index/bin)
 endforeach()
 
