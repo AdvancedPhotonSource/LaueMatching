@@ -413,42 +413,8 @@ int main(int argc, char *argv[]) {
 
   // Check if forward file already exists
   if (doFwd == 0) {
-    size_t expectedSz =
-        (size_t)nrOrients * (1 + 2 * maxNrSpots) * sizeof(uint16_t);
-    if (outfn[0] == '\0') {
-      // No ForwardFile specified: don't blindly open a blank/default path
-      // (which could pick up a stale, incompatible cache).
-      printf("No ForwardFile specified. Running in simulation mode!\n");
+    if (!forwardCacheUsable(outfn, (size_t)nrOrients, maxNrSpots))
       doFwd = 1;
-    } else {
-      printf("Trying to see if the forward simulation exists. Looking for %s "
-             "file.\n",
-             outfn);
-      int result = open(outfn, O_RDONLY, S_IRUSR | S_IWUSR);
-      if (result < 0) { // FIX: was <1, but open returns -1 on error
-        printf("Could not read the forward simulation file. Running in "
-               "simulation mode!\n");
-        doFwd = 1;
-      } else {
-        // Validate the cache size against the current (nrOrients, maxNrSpots)
-        // so a stale cache from a different run is regenerated instead of
-        // silently misread (which gave wrong solution counts).
-        struct stat cst;
-        if (fstat(result, &cst) == 0 && (size_t)cst.st_size != expectedSz) {
-          printf("Forward cache %s size %lld B != expected %zu B for %zu "
-                 "orientations x (1+2*%d); ignoring stale cache, running in "
-                 "simulation mode.\n",
-                 outfn, (long long)cst.st_size, expectedSz, (size_t)nrOrients,
-                 maxNrSpots);
-          close(result);
-          doFwd = 1;
-        } else {
-          printf("%s file was found. Will not do forward simulation.\n",
-                 outfn); // FIX: missing outfn arg
-          close(result);
-        }
-      }
-    }
   } else {
     printf("Forward simulation was requested, will be saved to %s.\n", outfn);
   }

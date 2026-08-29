@@ -452,19 +452,11 @@ int main(int argc, char *argv[]) {
   int h_matchCount = 0;
 
   if (doFwd == 0) {
-    printf("Trying to see if the forward simulation exists. Looking for %s "
-           "file.\n",
-           outfn);
-    int result = open(outfn, O_RDONLY, S_IRUSR | S_IWUSR);
-    if (result < 0) {
-      printf("Could not read the forward simulation file. Running in "
-             "simulation mode!\n");
+    // Shared with the CPU binary (LaueMatchingHeaders.h). This used to accept
+    // any file that merely EXISTED, so a 0-byte leftover was mapped and
+    // faulted with SIGBUS on first touch.
+    if (!forwardCacheUsable(outfn, (size_t)nrOrients, maxNrSpots))
       doFwd = 1;
-    } else {
-      printf("%s file was found. Will not do forward simulation.\n",
-             outfn); // FIX: missing arg
-      close(result);
-    }
   } else
     printf("Forward simulation was requested, will be saved to %s.\n", outfn);
 
@@ -633,10 +625,22 @@ int main(int argc, char *argv[]) {
     str = "/dev/shm";
     LowNr = strncmp(outfn, str, strlen(str));
     if (LowNr == 0) {
+      // Both results were previously ignored: a failed open passed fd = -1 to
+      // mmap, and MAP_FAILED was used as if it were the cache.
       int fd = open(outfn, O_RDONLY);
+      if (fd < 0) {
+        fprintf(stderr, "FATAL: could not open forward cache %s: %s\n", outfn,
+                strerror(errno));
+        return 1;
+      }
       outArr = (uint16_t *)mmap(0, szArr * sizeof(uint16_t), PROT_READ,
                                 MAP_SHARED, fd, 0);
       close(fd);
+      if (outArr == MAP_FAILED) {
+        fprintf(stderr, "FATAL: mmap of forward cache %s failed: %s\n", outfn,
+                strerror(errno));
+        return 1;
+      }
       outArrMapped = 1;
     } else {
       outArr = (uint16_t *)calloc(szArr, sizeof(uint16_t));

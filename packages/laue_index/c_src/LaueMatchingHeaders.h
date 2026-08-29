@@ -11,6 +11,7 @@
 #ifndef LAUE_MATCHING_HEADERS_H
 #define LAUE_MATCHING_HEADERS_H
 
+#include <errno.h>
 #include <fcntl.h>
 #include <math.h>
 #include "nelder_mead.h"
@@ -34,6 +35,65 @@
 #define rad2deg 57.2957795130823
 #define NrValsResults 2
 #define MaxNHKLS 200000
+
+// ── Forward-simulation cache ────────────────────────────────────────────
+// Can an existing cache be used? ONE implementation for all three binaries.
+//
+// This check used to live only in LaueMatchingCPU.c. The CUDA binaries mapped
+// whatever sat at the path, so a 0-byte leftover -- which the C itself creates
+// with O_CREAT when a run is interrupted mid-write -- made LaueMatchingGPU
+// print "file was found. Will not do forward simulation." and then take SIGBUS
+// on first touch, 12.2 GB of mapping backed by an empty file. Three copies of
+// a check is how one of them goes missing; hence one function, three callers.
+//
+// The size IS the contract: entry orientNr occupies (1 + 2*maxNrSpots) uint16
+// at a fixed offset, so a file of the right length is structurally valid and a
+// file of any other length cannot be.
+//
+// It does NOT prove the cache came from THIS geometry. A right-sized cache
+// built with a different detector, energy range or HKL list is accepted and is
+// silently wrong -- the same limit the CPU check always had. Regenerate on any
+// doubt; the cost is minutes, and a wrong cache is not visibly wrong.
+static inline bool forwardCacheUsable(const char *outfn, size_t nrOrients,
+                                      int maxNrSpots) {
+  if (outfn == NULL || outfn[0] == '\0') {
+    // Don't blindly open a blank/default path and pick up a stale cache.
+    printf("No ForwardFile specified. Running in simulation mode!\n");
+    return false;
+  }
+  printf("Trying to see if the forward simulation exists. Looking for %s "
+         "file.\n",
+         outfn);
+  int fd = open(outfn, O_RDONLY);
+  if (fd < 0) { // open returns -1 on error, never 0
+    printf("Could not read the forward simulation file (%s). Running in "
+           "simulation mode!\n",
+           strerror(errno));
+    return false;
+  }
+  const size_t expected =
+      nrOrients * (size_t)(1 + 2 * maxNrSpots) * sizeof(uint16_t);
+  struct stat cst;
+  if (fstat(fd, &cst) != 0) {
+    printf("Could not stat the forward cache %s (%s). Running in simulation "
+           "mode!\n",
+           outfn, strerror(errno));
+    close(fd);
+    return false;
+  }
+  if ((size_t)cst.st_size != expected) {
+    printf("Forward cache %s is %lld B, expected %zu B for %zu orientations x "
+           "(1+2*%d) uint16. Ignoring it and running in simulation mode.\n",
+           outfn, (long long)cst.st_size, expected, nrOrients, maxNrSpots);
+    close(fd);
+    return false;
+  }
+  close(fd);
+  printf("%s was found and is the expected size. Will not do forward "
+         "simulation.\n",
+         outfn);
+  return true;
+}
 
 static inline double CalcLength(double x, double y, double z) {
   return sqrt(x * x + y * y + z * z);

@@ -846,15 +846,11 @@ int main(int argc, char *argv[]) {
   int outArrMapped = 0;
 
   if (doFwd == 0) {
-    int result = open(outfn, O_RDONLY, S_IRUSR | S_IWUSR);
-    if (result < 0) {
-      printf("Forward simulation file %s not found. Running fwd sim...\n",
-             outfn);
+    // Shared with the CPU and single-image GPU binaries
+    // (LaueMatchingHeaders.h). This used to accept any file that merely
+    // EXISTED; a 0-byte or stale cache was then mapped and read as data.
+    if (!forwardCacheUsable(outfn, nrOrients, maxNrSpots))
       doFwd = 1;
-    } else {
-      printf("Forward simulation file %s found.\n", outfn);
-      close(result);
-    }
   }
 
   if (doFwd == 1) {
