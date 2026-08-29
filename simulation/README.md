@@ -78,6 +78,54 @@ python ../scripts/RunImage.py process \
 **Results:**
 Output files will be saved in `results_simulation/` (configured by `ResultDir` in `params_sim.txt`).
 
+## Spot intensities
+
+By default every spot is given the **same** intensity. To simulate physically
+weighted intensities, declare a phase basis in the parameter file and the
+simulator computes |F(hkl)|² from `midas_hkls`:
+
+```
+PhaseAtom Ni 0.0 0.0 0.0 1.0 0.5      # element, fractional x y z, occupancy, B_iso
+```
+
+`PhaseAtom` (or `PhaseCIF`) is the same key the NF, FF and PF pipelines read,
+through the same parser — a basis parsed two ways is a structure factor
+computed two ways.
+
+```bash
+python ../scripts/GenerateSimulation.py -configFile params_sim.txt \
+    -orientationFile fourOrientations.csv -outputFile simulated_1.h5 \
+    -intensityModel structure \
+    -spectrumFile undulator_spectrum.json      # optional I0(E)
+```
+
+| `-intensityModel` | what each spot gets |
+|---|---|
+| `auto` *(default)* | `structure` when a phase basis is declared, `flat` otherwise |
+| `structure` | \|F(hkl)\|² from `midas_hkls` (needs a basis) |
+| `flat` | equal intensities |
+| `random` | uniform 500–16000. **Unphysical**; kept only to reproduce pre-2026-08 images |
+
+`-spectrumFile` takes a `laue_torch` `UndulatorSpectrum` JSON and weights each
+spot by I0(E) at *its own* Bragg energy — white-beam Laue samples a different
+energy per reflection, so a flat spectrum is a real distortion.
+
+**What is modelled: I = |F(hkl)|² · I0(E).** Deliberately absent: Lorentz and
+polarisation factors, absorption, detector efficiency and extinction. That is
+the same factorisation `laue_torch.forward` can represent
+(`per_spot_intensity × spectrum`), and the reason matters — a simulator that
+applies a factor the model has no term for manufactures a mismatch that looks
+like a fit failure. Measured on a single FCC grain, refining from the same
+seeds:
+
+| observation | model assumes flat | model given the same \|F\|² |
+|---|---|---|
+| random intensities *(the old default)* | 0.0050° | — |
+| \|F\|²-weighted | 0.0028° | **0.00014°** |
+
+The last column is the floor set by the raster itself. The gap between the two
+is what knowing the structure factors buys — physics, not a bug.
+
 ## Parameter Reference (`params_sim.txt`)
 
 | Parameter | Example | Description |

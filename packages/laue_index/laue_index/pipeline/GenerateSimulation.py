@@ -218,6 +218,16 @@ class DiffractionSimulator:
         self.params = params
         self.hkl_data = hkl_data
         self.skip_percentage = skip_percentage
+
+        # Intensity model. 'auto' uses |F|^2 when the parameter file declares a
+        # phase basis and equal intensities when it does not, so an existing
+        # run's images are unchanged unless the user asks for physics.
+        self.intensity_model = 'auto'
+        self.phase_atoms = []          # list[midas_hkls.Atom]
+        self.spectrum = None           # laue_torch UndulatorSpectrum, or None
+        self.PEAK_TARGET = 16000.0     # brightest spot's target amplitude
+        self._crystal_t = None
+        self._flat_warned = False
         
         # Validate skip_percentage
         if not 0 <= self.skip_percentage <= 100:
@@ -306,10 +316,13 @@ class DiffractionSimulator:
         qvecs = recip.dot(hkls.T).T
         qlens = np.linalg.norm(qvecs, axis=1)
         
-        # Filter valid q-vectors
+        # Filter valid q-vectors.  hkls rides along through EVERY mask below:
+        # each surviving spot must still know which reflection produced it, or
+        # its structure factor cannot be looked up.
         good = qlens > 0
         qvecs = qvecs[good, :]
         qlens = qlens[good]
+        hkls = hkls[good, :]
         
         # Calculate normalized q-vectors
         qhats = np.divide(qvecs, np.column_stack([qlens, qlens, qlens]))
@@ -333,6 +346,7 @@ class DiffractionSimulator:
         qlens = qlens[goodZ]
         qhats = qhats[goodZ, :]
         xyz = xyz[goodZ, :]
+        hkls = hkls[goodZ, :]
         
         # Scale by detector distance
         xyz = np.divide(xyz * self.params['P'][2], xyz[:, 2, np.newaxis])
@@ -348,6 +362,7 @@ class DiffractionSimulator:
         good = (px >= 0) & (px < (self.params['nPxX'] - 1)) & (py >= 0) & (py < (self.params['nPxY'] - 1))
         px = px[good]
         py = py[good]
+        hkls = hkls[good, :]
         
         # Compile pixel coordinates
         pixels = np.vstack((px, py)).T
@@ -363,6 +378,12 @@ class DiffractionSimulator:
         # Filter by energy range
         good_e = (energies > self.params['Elo']) & (energies < self.params['Ehi'])
         pixels = pixels[good_e, :]
+        hkls = hkls[good_e, :]
+        energies = energies[good_e]
+
+        # One intensity per surviving spot, from |F|^2 (and the spectrum, if
+        # one was supplied) rather than a random draw.
+        intensities = self.spot_intensities(hkls, energies)
         
         # Add spots to image and position array.
         #
@@ -376,14 +397,14 @@ class DiffractionSimulator:
         # misread as a forward-model deficiency until an inverse-crime control
         # (generate with the same renderer you invert) localised it here.
         nr_pixels = 0
-        for pixel in pixels:
+        for spot_idx, pixel in enumerate(pixels):
             self.pos_arr.append([pixel[1], pixel[0], grain_nr])
             
             # Skip spots based on skip_percentage
             # If skip_percentage is 0, don't skip any spots
             if self.skip_percentage == 0 or np.random.randint(0, 10) >= self.skip_threshold:
                 nr_pixels += 1
-                self.splat_spot(pixel[1], pixel[0], np.random.randint(500, 16000))
+                self.splat_spot(pixel[1], pixel[0], float(intensities[spot_idx]))
                 self.pos_arr[-1].append(1)
             else:
                 self.pos_arr[-1].append(0)
@@ -391,6 +412,97 @@ class DiffractionSimulator:
         logger.info(f'Grain {grain_nr}: Generated {nr_pixels} spots')
         return nr_pixels
     
+    def spot_intensities(self, hkls, energies_keV):
+        """Per-spot intrinsic intensity for the surviving reflections.
+
+        The factorisation is deliberately the one a forward model can represent:
+
+            I(hkl) = |F(hkl)|^2 * I0(E)
+
+        which is exactly ``per_spot_intensity * spectrum(E)`` in
+        ``laue_torch.forward``. Anything the simulator applies that a model
+        cannot is a systematic waiting to be misread as a fit failure -- this
+        file has already produced one of those (see splat_spot).
+
+        DELIBERATELY NOT INCLUDED, because the model has no term for them:
+        Lorentz and polarisation factors, absorption (air, windows, sample),
+        detector efficiency, and extinction. This is a kinematic structure-factor
+        simulator, not a radiometric one. Extinction in particular suppresses
+        strong low-order reflections in a pristine crystal and is why a perfect
+        Si calibrant makes a poor intensity standard.
+
+        Structure factors come from ``midas_hkls`` -- never hand-rolled here.
+        """
+        n = len(hkls)
+        model = getattr(self, 'intensity_model', 'auto')
+
+        if model == 'random':
+            # The historical behaviour: uniform-random, unrelated to physics.
+            # Kept so old images can be reproduced exactly, not because it is
+            # defensible.
+            return np.random.randint(500, 16000, size=n).astype(np.float64)
+
+        if model == 'flat' or (model == 'auto' and not self.phase_atoms):
+            if model == 'auto' and not self._flat_warned:
+                logger.info("No PhaseAtom/PhaseCIF in the parameter file -> equal "
+                            "spot intensities. Declare a phase basis for |F|^2 weighting.")
+                self._flat_warned = True
+            return np.full(n, float(self.PEAK_TARGET), dtype=np.float64)
+
+        # ---- |F(hkl)|^2 from midas_hkls -------------------------------------
+        try:
+            from midas_hkls.structure_factor import (structure_factor_intensity,
+                                                     structure_factors)
+        except ImportError as exc:                      # pragma: no cover
+            raise SystemExit(
+                "Structure-factor weighting needs midas_hkls "
+                f"(pip install midas-hkls): {exc}") from exc
+
+        F2 = structure_factor_intensity(
+            structure_factors(self._crystal_tensor(), np.asarray(hkls, dtype=np.int64))
+        )
+        F2 = np.asarray(F2.detach().cpu().numpy() if hasattr(F2, "detach") else F2,
+                        dtype=np.float64)
+
+        # ---- incident spectrum I0(E) ----------------------------------------
+        if self.spectrum is not None:
+            import torch
+            w = self.spectrum(torch.as_tensor(np.asarray(energies_keV, dtype=np.float64)))
+            F2 = F2 * np.asarray(w.detach().cpu().numpy(), dtype=np.float64)
+
+        # Scale so the brightest spot lands at PEAK_TARGET: |F|^2 spans orders
+        # of magnitude and the image is uint16. This is a display scale, not a
+        # radiometric one -- absolute counts here mean nothing.
+        peak = F2.max() if n else 0.0
+        if peak <= 0:
+            logger.warning("All structure factors vanished; falling back to equal intensities.")
+            return np.full(n, float(self.PEAK_TARGET), dtype=np.float64)
+        return F2 * (float(self.PEAK_TARGET) / peak)
+
+    def _crystal_tensor(self):
+        """Build (once) the midas_hkls CrystalTensor for this phase."""
+        if self._crystal_t is not None:
+            return self._crystal_t
+        from midas_hkls.crystal import Crystal, Lattice
+        from midas_hkls.space_group import SpaceGroup
+
+        # latC is stored as a SPACE-SEPARATED STRING by ConfigParser, not a
+        # list: float(latc[0]) would read the first character.
+        latc = str(self.params['latC']).split()
+        # The parameter file carries lattice parameters in NANOMETRES; midas_hkls
+        # works in ANGSTROM. Getting this wrong scales every form factor f(s)
+        # and would silently reweight the whole pattern.
+        lattice = Lattice(float(latc[0]) * 10.0, float(latc[1]) * 10.0,
+                          float(latc[2]) * 10.0,
+                          float(latc[3]), float(latc[4]), float(latc[5]))
+        sg = SpaceGroup.from_number(int(self.params['sgNum']))
+        crystal = Crystal(lattice=lattice, space_group=sg, atoms=self.phase_atoms)
+        logger.info(f"Structure factors: sg {sg.number} ({sg.hm_symbol.strip()}), "
+                    f"{len(self.phase_atoms)} atom(s) in the asymmetric unit, "
+                    f"{len(crystal.unit_cell_atoms())} in the cell")
+        self._crystal_t = crystal.to_torch()
+        return self._crystal_t
+
     def splat_spot(self, py, px, intensity):
         """Add one spot at the FLOAT detector position (py, px).
 
@@ -624,6 +736,24 @@ def parse_arguments():
         default=30.0,
         help='Percentage of spots to randomly skip (0-100). Use 0 for no skipping.'
     )
+    parser.add_argument(
+        '-intensityModel',
+        choices=['auto', 'structure', 'flat', 'random'],
+        default='auto',
+        help="Per-spot intensity. 'structure' = |F(hkl)|^2 from midas_hkls "
+             "(needs a PhaseAtom/PhaseCIF basis in the config); 'flat' = equal; "
+             "'random' = the historical uniform 500-16000 draw, unrelated to "
+             "physics, kept only to reproduce old images; 'auto' = structure "
+             "when a phase basis is declared, flat otherwise."
+    )
+    parser.add_argument(
+        '-spectrumFile',
+        type=str,
+        default='',
+        help='Undulator spectrum JSON (laue_torch UndulatorSpectrum format). '
+             'Weights each spot by I0(E) at its Bragg energy. Without it the '
+             'incident spectrum is flat, which no real source is.'
+    )
     
     args, unparsed = parser.parse_known_args()
     return args
@@ -656,6 +786,41 @@ def main():
     # Initialize simulator with the skip percentage
     logger.info(f"Setting spot skip percentage to: {args.skipPercentage}%")
     simulator = DiffractionSimulator(params, hkl_data, skip_percentage=args.skipPercentage)
+    simulator.intensity_model = args.intensityModel
+
+    # Phase basis for |F|^2. read_phase_basis is the SHARED parser (NF, FF and
+    # PF read parameter files differently, but a basis parsed two ways is a
+    # structure factor computed two ways), and it returns {} when nothing is
+    # declared -- which is what keeps every existing run unchanged.
+    if args.intensityModel in ('auto', 'structure'):
+        try:
+            from midas_hkls.phase_basis import parse_phase_atoms, read_phase_basis
+        except ImportError:
+            try:
+                from midas_hkls import parse_phase_atoms, read_phase_basis
+            except ImportError:
+                read_phase_basis = None
+        if read_phase_basis is not None:
+            basis = read_phase_basis(args.configFile)
+            atoms = parse_phase_atoms(basis.get('PhaseAtom', [])) if basis else None
+            simulator.phase_atoms = atoms or []
+            if simulator.phase_atoms:
+                logger.info(f"Phase basis: {len(simulator.phase_atoms)} atom(s) "
+                            f"from {args.configFile}")
+        elif args.intensityModel == 'structure':
+            logger.error("intensityModel=structure needs midas_hkls (pip install midas-hkls)")
+            sys.exit(1)
+
+    if args.spectrumFile:
+        # Optional: laue_torch owns the spectrum model, so use it rather than
+        # re-implementing the parameterisation here.
+        try:
+            from laue_torch.spectrum import UndulatorSpectrum
+        except ImportError:
+            logger.error("-spectrumFile needs laue_torch (pip install laue-torch)")
+            sys.exit(1)
+        simulator.spectrum = UndulatorSpectrum.from_json(args.spectrumFile)
+        logger.info(f"Incident spectrum: {args.spectrumFile}")
     
     # Run simulation
     logger.info("Running simulation...")
