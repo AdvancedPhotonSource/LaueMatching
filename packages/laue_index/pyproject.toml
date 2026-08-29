@@ -23,19 +23,10 @@ dependencies = [
 [project.optional-dependencies]
 pipeline = ["opencv-python-headless", "scipy", "h5py"]
 preprocess = ["diplib", "scikit-image"]
-# dev must cover the WHOLE legacy script stack, not just this package. The
-# characterization tests import scripts/ (RunImage, laue_config, ...) as the
-# behaviour baseline, and those modules import yaml/matplotlib/plotly/tqdm and
-# the pipeline+preprocess stacks at MODULE level -- so `.[dev]` alone cannot
-# even COLLECT the suite.
-#
-# Every entry below was invisible locally (the dev env had them via other
-# packages) and failed only on CI's clean runner: first 11 collection errors
-# reading "No module named 'cv2'", then 'yaml'. Enumerated by AST-walking every
-# import in laue_index/, tests/ and scripts/ and checking each against a fresh
-# venv, rather than discovered one CI round at a time.
-dev = [
-    "pytest>=7.0",
+# Everything `laue-index run` needs. The orchestration modules ship inside the
+# package (laue_index/pipeline/), but their dependencies are heavy and only
+# matter if you actually run the pipeline, so they stay optional.
+run = [
     "laue-index[pipeline]",    # cv2, scipy, h5py -- laue_index.preprocess
     "laue-index[preprocess]",  # diplib, scikit-image -- ImageCleanup, RunImage
     "PyYAML",                  # laue_config, RunImage
@@ -43,6 +34,16 @@ dev = [
     "plotly",                  # RunImage
     "tqdm",                    # RunImage
     "Pillow",                  # ImageCleanup, GenerateSimulation
+]
+# dev must cover the WHOLE pipeline, not just the library: the characterization
+# tests import RunImage, laue_config and friends, and those pull yaml, plotly,
+# diplib and matplotlib at MODULE level -- so without them the suite cannot
+# even COLLECT. Every entry was invisible locally (the dev env had them via
+# other packages) and failed only on CI's clean runner: first 11 collection
+# errors reading "No module named 'cv2'", then 'yaml'.
+dev = [
+    "pytest>=7.0",
+    "laue-index[run]",
 ]
 
 [project.scripts]

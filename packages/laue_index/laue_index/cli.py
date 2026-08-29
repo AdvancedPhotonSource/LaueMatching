@@ -1,24 +1,36 @@
-"""laue_index command-line entry (REFACTOR_PLAN §3 — mirrors laue_torch/cli.py).
+"""laue_index command-line entry.
 
-Thin wrapper over the package; the full image→index pipeline lives in
-``scripts/RunImage.py``.  This exposes the post-indexing operations the package
-owns — inspect a solutions table, or re-run post-processing (unique-spots →
-filter → spot-filter) on existing C output without re-indexing.
+``run`` drives the full image→index pipeline; ``fetch-db`` gets the orientation
+database it needs; ``parse``/``filter``/``calibrate`` are the post-indexing
+operations the package owns — inspect a solutions table, re-run post-processing
+(unique-spots → filter → spot-filter) on existing C output without re-indexing,
+or solve a detector pose from labelled spots.
 """
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
 import numpy as np
 
 from . import __all__ as _api  # noqa: F401  (kept for `info`)
+from . import __version__ as _VERSION
 from .records import SOLUTION_FORMATS, parse_solutions
 from .postprocess import PostProcessor
 
 __all__ = ["main"]
 
-_VERSION = "0.1.0"
+#: Where `fetch-db` gets the orientation database, and in how many parts.
+ORIENT_DB_RELEASE = (
+    "https://github.com/AdvancedPhotonSource/LaueMatching/releases/download/v1.0-data")
+ORIENT_DB_PARTS = ("100MilOrients.part.aa", "100MilOrients.part.ab",
+                   "100MilOrients.part.ac", "100MilOrients.part.ad")
+#: 100,000,000 orientations x 9 doubles. The count is derivable from the size,
+#: which is why the check below is arithmetic rather than a magic number.
+ORIENT_DB_BYTES = 100_000_000 * 9 * 8
+#: Consulted by the pipeline when a config names no OrientationFile.
+ORIENT_DB_ENV = "LAUEMATCHING_ORIENT_DB"
 
 
 def _cmd_parse(args: argparse.Namespace) -> int:
@@ -135,12 +147,138 @@ def _cmd_calibrate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_run(rest: list[str]) -> int:
+    """Hand off to the orchestrator, which ships inside the package."""
+    from .pipeline import run_module
+    try:
+        run_module("RunImage", rest)
+    except SystemExit as exc:                     # argparse / normal exit
+        return int(exc.code or 0)
+    except ImportError as exc:
+        print(f"error: the pipeline needs dependencies that are not installed ({exc}).\n"
+              "       pip install 'laue-index[run]'", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _download(url: str, dest, expected: int | None = None) -> int:
+    """Fetch one URL to a file, skipping it if already complete. Returns bytes."""
+    import urllib.request
+
+    have = dest.stat().st_size if dest.exists() else 0
+    with urllib.request.urlopen(url) as resp:     # noqa: S310 (fixed release URL)
+        total = int(resp.headers.get("Content-Length") or 0)
+        if have and total and have == total:
+            print(f"  {dest.name}: already complete ({have:,} B)")
+            return have
+        print(f"  {dest.name}: {total:,} B" if total else f"  {dest.name}")
+        written = 0
+        with open(dest, "wb") as f:
+            while True:
+                chunk = resp.read(1 << 22)        # 4 MiB
+                if not chunk:
+                    break
+                f.write(chunk)
+                written += len(chunk)
+    if total and written != total:
+        raise IOError(f"{dest.name}: got {written:,} B, expected {total:,} B")
+    if expected is not None and written != expected:
+        raise IOError(f"{dest.name}: got {written:,} B, expected {expected:,} B")
+    return written
+
+
+def _cmd_fetch_db(args: argparse.Namespace) -> int:
+    """Download and reassemble the orientation database.
+
+    `pip install laue-index` ships the binaries but not the 6.7 GB database
+    they index against, and a pip user has no build.sh to fetch it. This is
+    that step, and nothing more: it does not decide where the database should
+    live, it reports where it put it.
+    """
+    from pathlib import Path
+
+    dest = Path(args.dest).expanduser().resolve()
+    if dest.is_dir():
+        dest = dest / "100MilOrients.bin"
+    if dest.exists() and not args.force:
+        size = dest.stat().st_size
+        print(f"{dest} already exists ({size:,} B). Use --force to replace it.")
+        return 0 if size == ORIENT_DB_BYTES else 1
+
+    parts_dir = Path(args.parts_dir).expanduser().resolve() if args.parts_dir else dest.parent
+    parts_dir.mkdir(parents=True, exist_ok=True)
+    print(f"downloading {len(ORIENT_DB_PARTS)} parts to {parts_dir}")
+    paths = []
+    for name in ORIENT_DB_PARTS:
+        p = parts_dir / name
+        try:
+            _download(f"{ORIENT_DB_RELEASE}/{name}", p)
+        except Exception as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            print("       parts already downloaded are kept; re-run to resume.",
+                  file=sys.stderr)
+            return 1
+        paths.append(p)
+
+    print(f"reassembling -> {dest}")
+    with open(dest, "wb") as out:
+        for p in paths:
+            with open(p, "rb") as f:
+                while True:
+                    chunk = f.read(1 << 22)
+                    if not chunk:
+                        break
+                    out.write(chunk)
+
+    size = dest.stat().st_size
+    if size % 72:
+        print(f"error: {dest} is {size:,} B, not a whole number of orientations "
+              f"(9 doubles = 72 B each). The download is corrupt.", file=sys.stderr)
+        return 1
+    print(f"{dest}: {size:,} B = {size // 72:,} orientations")
+    if size != ORIENT_DB_BYTES:
+        print(f"warning: expected {ORIENT_DB_BYTES:,} B for the 100M database.",
+              file=sys.stderr)
+
+    if not args.keep_parts:
+        for p in paths:
+            p.unlink()
+
+    print(f"\nPoint runs at it with {ORIENT_DB_ENV}={dest}, or set OrientationFile "
+          f"in the config.\nCopying it to /dev/shm first makes the indexer mmap it "
+          f"instead of reading it.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    # Pass `run` straight through: argparse would eat --help and RunImage's own
+    # subcommand names before they ever reached it.
+    if argv and argv[0] == "run":
+        return _cmd_run(argv[1:])
+
     p = argparse.ArgumentParser(
         prog="laue-index", description=__doc__,
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     p.add_argument("--version", action="version", version=f"laue-index {_VERSION}")
     sub = p.add_subparsers(dest="cmd", required=True)
+
+    # `run` is intercepted before parsing (see main) so that every argument --
+    # including --help and RunImage's own subcommands -- reaches RunImage
+    # verbatim. Registered here only so it appears in `laue-index --help`.
+    sub.add_parser(
+        "run", add_help=False,
+        help="run the full pipeline (RunImage): laue-index run process -c ... -i ...")
+
+    pd = sub.add_parser("fetch-db", help="download the 6.7 GB orientation database")
+    pd.add_argument("--dest", default=".",
+                    help="file, or a directory to write 100MilOrients.bin into")
+    pd.add_argument("--parts-dir", dest="parts_dir", default="",
+                    help="where to stage the 4 downloaded parts (default: next to --dest)")
+    pd.add_argument("--keep-parts", dest="keep_parts", action="store_true",
+                    help="keep the parts after reassembly")
+    pd.add_argument("--force", action="store_true", help="overwrite an existing database")
+    pd.set_defaults(func=_cmd_fetch_db)
 
     pp = sub.add_parser("parse", help="parse a solutions table and summarise")
     pp.add_argument("solutions")

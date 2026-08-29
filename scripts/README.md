@@ -2,6 +2,15 @@
 
 Python scripts for image preprocessing, orientation indexing, streaming pipeline orchestration, post-processing, and visualization.
 
+> **Where the code lives.** These modules are in
+> [`packages/laue_index/laue_index/pipeline/`](../packages/laue_index/laue_index/pipeline/),
+> so that `pip install laue-index` ships them: the package used to install the
+> library and the C binaries but nothing that could run an image through them.
+> What remains in `scripts/` is a one-line shim for each entry point, so every
+> invocation below — and the shell pipeline that calls them — works unchanged
+> from a checkout. Without one, `laue-index run process -c … -i …` is the same
+> thing.
+
 > **Tip:** For a quick-start walkthrough with example data, see the [simulation/README.md](../simulation/README.md).
 
 ---
@@ -270,7 +279,7 @@ Dataclass-based configuration with three main sections:
 |-------|---------|
 | `LaueConfig` | Top-level config: material, detector, energy, processing |
 | `VisualizationConfig` | Plot settings, report templates, output formats |
-| `OptimizerConfig` | NLopt algorithm, tolerances, bounds |
+| `OptimizerConfig` | Optimizer tolerances and bounds (Nelder–Mead; the `Optimizer` key is accepted but ignored) |
 | `ConfigurationManager` | Parses `params.txt`, resolves paths, validates settings |
 
 ### `laue_stream_utils.py`

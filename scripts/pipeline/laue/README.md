@@ -65,6 +65,19 @@ export LAUE_PARAMS_<PHASE>=<path to params.txt>  # upper-case suffix
 python analysis/laue_material.py                 # selftest must pass
 ```
 
+**Check the indexer binary the same way — by asking, not by looking.** `ls bin/` has
+reported a binary present and ready that was built for another architecture entirely
+(`LAB_NOTEBOOK_16BMD_Si.md` §2). The package answers with the one that will actually run:
+
+```bash
+python -c "from laue_index import indexer; print(indexer.available(), indexer.binary_path())"
+```
+
+`pip install laue-index` compiles it on this machine; add `LAUEMATCHING_CUDA=1` for the
+GPU and streaming binaries, or point `LAUEMATCHING_BIN` at ones you already have. The
+orchestrators ship with the package too, so `laue-index run process -c … -i …` works
+without a checkout, and `python scripts/RunImage.py …` still works inside one.
+
 ### When to stop and come back with a question
 
 **"Get back to me if you get stuck" does not fire here.** A wrong registration flip

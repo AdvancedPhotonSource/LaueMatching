@@ -1,0 +1,740 @@
+#!/usr/bin/env python
+"""
+laue_orchestrator.py — Top-level orchestrator for LaueMatching streaming pipeline
+
+Launches the LaueMatchingGPUStream daemon, starts the image server, monitors
+progress, and runs post-processing.  Analogous to integrator_batch_process.py.
+
+Workflow:
+    1. Create timestamped output directory
+    2. Start LaueMatchingGPUStream as subprocess (log captured)
+    3. Wait for port 60517 to become ready
+    4. Start laue_image_server.py as subprocess
+    5. Monitor frame_mapping.json for progress
+    6. Wait for server to finish
+    7. Allow daemon flush time, then terminate daemon (SIGTERM)
+    8. Run laue_postprocess.py
+    9. Print summary
+
+Usage:
+    python laue_orchestrator.py \
+        --config params.txt \
+        --folder /path/to/h5s \
+        [--h5-location /entry/data/data] \
+        [--ncpus 8] \
+        [--output-dir auto]
+"""
+
+import argparse
+import logging
+import os
+import shutil
+import signal
+import subprocess
+import sys
+import time
+from datetime import datetime
+
+import laue_stream_utils as lsu
+
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+logger = logging.getLogger("laue_orchestrator")
+
+
+def _setup_logging(level: str = "INFO") -> None:
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(
+        logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    )
+    logger.addHandler(handler)
+    logger.setLevel(getattr(logging, level.upper(), logging.INFO))
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _find_daemon_binary() -> str:
+    """Locate the LaueMatchingGPUStream binary.
+
+    Discovery is delegated to laue_index.indexer, which is the single place
+    that knows every location a binary can live -- including two this function
+    used to miss entirely: LAUEMATCHING_BIN, and the site-packages bin/ that
+    `LAUEMATCHING_CUDA=1 pip install laue-index` now populates. A pip user with
+    the daemon installed was told to "build it first".
+
+    The two checkout-only locations below are kept as a fallback for trees
+    built in place with `cmake --build build/`, which the package cannot know
+    about.
+    """
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(script_dir)
+
+    primary_error = None
+    try:
+        from laue_index.indexer import BinaryUnavailableError, require_binary
+    except ImportError:
+        pass
+    else:
+        try:
+            return str(require_binary("STREAM", repo_root=project_root))
+        except BinaryUnavailableError as exc:
+            primary_error = exc
+
+    for c in (os.path.join(project_root, "build", "LaueMatchingGPUStream"),
+              os.path.join(project_root, "LaueMatchingGPUStream")):
+        if os.path.isfile(c) and os.access(c, os.X_OK):
+            return c
+
+    raise FileNotFoundError(
+        str(primary_error) if primary_error else
+        "LaueMatchingGPUStream binary not found. Build it first "
+        "(cmake --build build/) or add it to PATH."
+    )
+
+
+def _wait_for_daemon_port(
+    proc: subprocess.Popen,
+    port: int,
+    timeout: float,
+    poll_interval: float = 2.0,
+    progress_every: float = 30.0,
+) -> bool:
+    """Wait for the daemon to open *port*, watching the process while we wait.
+
+    ``lsu.wait_for_port()`` is process-blind, which fails in both directions:
+
+    * A daemon that dies immediately (bad params, missing file, GPU error) still
+      holds the orchestrator for the whole timeout before it reports anything.
+    * A daemon that is merely *slow* gets killed. Startup reads a multi-GB
+      orientation database and then initialises a CUDA context; on a cold page
+      cache, a busy GPU, or a loaded machine that legitimately exceeds a short
+      fixed budget, and the run aborts with "Daemon did not open port in time"
+      even though nothing is wrong.
+
+    Polling ``proc`` as well as the port fixes both: we fail fast with the exit
+    code when the daemon is genuinely dead, and we keep waiting (logging
+    progress) as long as it is alive.
+
+    Returns True once the port is open, False if the daemon died or the timeout
+    elapsed while it was still running.
+    """
+    t0 = time.time()
+    last_note = t0
+    while True:
+        if lsu.is_port_open("127.0.0.1", port):
+            logger.info(f"Port {port} ready ({time.time() - t0:.1f}s)")
+            return True
+
+        rc = proc.poll()
+        if rc is not None:
+            logger.error(
+                f"Daemon exited (code {rc}) after {time.time() - t0:.1f}s "
+                f"without opening port {port}. Check daemon log."
+            )
+            return False
+
+        now = time.time()
+        if now - t0 >= timeout:
+            logger.error(
+                f"Daemon is still running but has not opened port {port} after "
+                f"{timeout:.0f}s; giving up. If startup is legitimately this slow "
+                f"(very large orientation database, contended GPU), raise "
+                f"--port-timeout."
+            )
+            return False
+
+        if now - last_note >= progress_every:
+            logger.info(
+                f"  still waiting for port {port} "
+                f"({now - t0:.0f}s elapsed, daemon alive)..."
+            )
+            last_note = now
+
+        time.sleep(poll_interval)
+
+
+def _terminate_process(proc: subprocess.Popen, name: str, timeout: float = 10.0) -> None:
+    """Send SIGTERM, wait, then SIGKILL if necessary."""
+    if proc.poll() is not None:
+        return  # Already exited
+
+    logger.info(f"Sending SIGTERM to {name} (pid {proc.pid})...")
+    try:
+        proc.send_signal(signal.SIGTERM)
+        proc.wait(timeout=timeout)
+        logger.info(f"{name} exited (code {proc.returncode})")
+        return
+    except subprocess.TimeoutExpired:
+        logger.warning(f"{name} did not exit in {timeout}s after SIGTERM, sending SIGKILL...")
+    except Exception as e:
+        logger.error(f"Error sending SIGTERM to {name}: {e}")
+
+    # SIGKILL fallback
+    try:
+        proc.kill()
+        proc.wait(timeout=15)
+        logger.info(f"{name} killed (code {proc.returncode}).")
+    except subprocess.TimeoutExpired:
+        logger.error(f"{name} (pid {proc.pid}) did not exit even after SIGKILL. "
+                     "It may need to be killed manually.")
+    except Exception as e:
+        logger.error(f"Error killing {name}: {e}")
+
+
+def _ensure_shm_files(orient_file: str) -> None:
+    """Copy orientation database to /dev/shm if the path points there.
+
+    When the resolved *orient_file* lives under ``/dev/shm`` and does not
+    yet exist, this helper copies it from the LaueMatching project root
+    (``<project_root>/<basename>``).
+    """
+    if not orient_file.startswith("/dev/shm/"):
+        return  # not a shared-memory path, nothing to do
+
+    if os.path.isfile(orient_file):
+        sz = os.path.getsize(orient_file)
+        logger.info(
+            f"SHM file already present: {orient_file} ({sz / 1e9:.2f} GB) — skipping copy"
+        )
+        return
+
+    # Source: <project_root>/<basename>
+    basename = os.path.basename(orient_file)
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(script_dir)
+    source = os.path.join(project_root, basename)
+
+    if not os.path.isfile(source):
+        logger.error(
+            f"Cannot copy to {orient_file}: source file not found at {source}"
+        )
+        sys.exit(1)
+
+    src_size = os.path.getsize(source)
+    logger.info(
+        f"Copying {source} → {orient_file} ({src_size / 1e9:.2f} GB) ..."
+    )
+    shutil.copy2(source, orient_file)
+    logger.info("SHM copy complete.")
+
+
+# ---------------------------------------------------------------------------
+# Orchestrator
+# ---------------------------------------------------------------------------
+
+def run_pipeline(
+    config_file: str,
+    folder: str,
+    orient_file: str = "",
+    hkl_file: str = "",
+    h5_location: str = "/entry/data/data",
+    ncpus: int = 1,
+    output_dir: str = "",
+    port: int = lsu.LAUE_STREAM_PORT,
+    port_timeout: float = 900.0,
+    flush_time: float = 5.0,
+    min_unique: int = 2,
+    write_indexfile: bool = True,
+    indexfile_dir: str = "",
+    watch: bool = False,
+    watch_poll: float = 2.0,
+    watch_idle: float = 0.0,
+) -> None:
+    """
+    Run the full LaueMatching streaming pipeline.
+
+    Args:
+        config_file:  Path to params.txt.
+        folder:       Folder with H5 image files.
+        orient_file:  Path to orientation database (.bin). Resolved from
+                      CWD if relative.  Looked up in config if empty.
+        hkl_file:     Path to HKL file (.csv/.bin). Resolved from CWD if
+                      relative.  Looked up in config if empty.
+        h5_location:  Internal H5 dataset path.
+        ncpus:        Number of CPUs (passed to daemon).
+        output_dir:   Output directory (auto-generated if empty).
+        port:         Daemon TCP port.
+        port_timeout: Max seconds to wait for the daemon port while the
+                      daemon is still alive (a dead daemon aborts immediately).
+        flush_time:   Seconds to wait after server finishes before killing daemon.
+        min_unique:   Minimum unique spots for orientation filtering.
+    """
+    t_pipeline_start = time.time()
+
+    # Resolve to absolute paths so they remain valid when the daemon
+    # subprocess runs with cwd=output_dir.
+    config_file = os.path.abspath(config_file)
+    folder = os.path.abspath(folder)
+
+    # Resolve orient / HKL files — fall back to defaults read from config.
+    if not orient_file or not hkl_file:
+        try:
+            import laue_config
+            cfg_mgr = laue_config.ConfigurationManager(config_file)
+            if not orient_file:
+                orient_file = cfg_mgr.get("orientation_file", "orientations.bin")
+            if not hkl_file:
+                hkl_file = cfg_mgr.get("hkl_file", "hkls.bin")
+        except Exception as exc:
+            logger.warning(f"Could not read config to resolve orient/hkl files: {exc}")
+            if not orient_file:
+                orient_file = "orientations.bin"
+            if not hkl_file:
+                hkl_file = "hkls.bin"
+    orient_file = os.path.abspath(orient_file)
+    hkl_file = os.path.abspath(hkl_file)
+    logger.info(f"Orientation DB : {orient_file}")
+    logger.info(f"HKL file       : {hkl_file}")
+
+    # Copy orientation file to /dev/shm if the path points there.
+    _ensure_shm_files(orient_file)
+
+    # Read the daemon's ResultDir and ForwardFile from config.
+    daemon_result_dir = "results_stream"  # C-code default
+    forward_file = ""
+    try:
+        import laue_config
+        cfg_mgr = laue_config.ConfigurationManager(config_file)
+        daemon_result_dir = getattr(cfg_mgr.config, "result_dir", daemon_result_dir)
+        forward_file = getattr(cfg_mgr.config, "forward_file", "")
+    except Exception:
+        pass
+    logger.info(f"Daemon ResultDir: {daemon_result_dir}")
+
+    # Warn if the forward simulation file does not exist yet.
+    if forward_file and not os.path.isfile(forward_file):
+        logger.warning("=" * 60)
+        logger.warning(
+            f"Forward simulation file not found: {forward_file}"
+        )
+        logger.warning(
+            "The daemon will generate the forward simulation from scratch. "
+            "This may take a considerable amount of time."
+        )
+        logger.warning("=" * 60)
+
+    # --- 1. Create output directory ---
+    if not output_dir:
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_dir = f"laue_stream_{ts}"
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Paths inside output dir.
+    # The daemon writes solutions/spots to <CWD>/<ResultDir>/.
+    daemon_log = os.path.join(output_dir, "daemon.log")
+    server_log = os.path.join(output_dir, "server.log")
+    daemon_out_dir = os.path.join(output_dir, daemon_result_dir)
+    solutions_file = os.path.join(daemon_out_dir, "solutions.txt")
+    spots_file = os.path.join(daemon_out_dir, "spots.txt")
+    mapping_file = os.path.join(output_dir, "frame_mapping.json")
+    results_dir = os.path.join(output_dir, "results")
+    os.makedirs(results_dir, exist_ok=True)
+
+    logger.info(f"Output directory: {output_dir}")
+    logger.info(f"Daemon output  : {daemon_out_dir}")
+
+    # --- 1b. Stamp run-level provenance up-front ---
+    # Written now (rather than at end-of-run) so a crashed/killed run still
+    # leaves a record of which commit + config was in play.
+    try:
+        import laue_provenance as _lp
+        run_prov = _lp.collect(
+            config=getattr(cfg_mgr, "config", None),
+            input_files=[f for f in (config_file, orient_file, hkl_file) if f],
+            extra={
+                "output_dir": output_dir,
+                "folder": folder,
+                "ncpus": ncpus,
+                "port": port,
+            },
+        )
+        _lp.write_sidecar_json(os.path.join(output_dir, "provenance.json"), run_prov)
+        logger.info(f"Wrote run provenance: {os.path.join(output_dir, 'provenance.json')}")
+    except Exception as prov_exc:
+        logger.warning(f"Could not write run provenance: {prov_exc}")
+
+    # --- 2. Start GPU daemon ---
+    daemon_bin = _find_daemon_binary()
+    daemon_cmd = [
+        daemon_bin,
+        config_file,
+        orient_file,
+        hkl_file,
+        str(ncpus),
+    ]
+    logger.info(f"Starting daemon: {' '.join(daemon_cmd)}")
+
+    daemon_logf = open(daemon_log, "w")
+    daemon_env = os.environ.copy()
+    daemon_env["LAUE_STREAM_PORT"] = str(port)  # daemon reads this (default 60517)
+    daemon_proc = subprocess.Popen(
+        daemon_cmd,
+        stdout=daemon_logf,
+        stderr=subprocess.STDOUT,
+        cwd=output_dir,
+        env=daemon_env,
+    )
+    logger.info(f"Daemon started (pid {daemon_proc.pid}), log → {daemon_log}")
+
+    # --- 3. Wait for daemon port ---
+    logger.info(f"Waiting for port {port}...")
+    if not _wait_for_daemon_port(daemon_proc, port, port_timeout):
+        _terminate_process(daemon_proc, "daemon")
+        daemon_logf.close()
+        _print_log_tail(daemon_log)
+        sys.exit(1)
+
+    # --- 4. Start image server ---
+    python = sys.executable
+    server_script = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "laue_image_server.py",
+    )
+    labels_file = os.path.join(output_dir, "labels.h5")
+    server_cmd = [
+        python, server_script,
+        "--config", os.path.abspath(config_file),
+        "--folder", os.path.abspath(folder),
+        "--h5-location", h5_location,
+        "--mapping-file", os.path.abspath(mapping_file),
+        "--labels-file", os.path.abspath(labels_file),
+        "--port", str(port),
+        "--log-level", "INFO",
+    ]
+    if watch:
+        server_cmd += ["--watch", "--watch-poll", str(watch_poll)]
+        if watch_idle > 0:
+            server_cmd += ["--watch-idle", str(watch_idle)]
+    logger.info(f"Starting image server...")
+
+    server_logf = open(server_log, "w")
+    server_proc = subprocess.Popen(
+        server_cmd,
+        stdout=server_logf,
+        stderr=subprocess.STDOUT,
+        cwd=output_dir,
+    )
+    logger.info(f"Image server started (pid {server_proc.pid}), log → {server_log}")
+
+    # Count total frames for progress bar
+    import glob
+    total_frames = len(glob.glob(os.path.join(folder, "*.h5"))) + \
+                   len(glob.glob(os.path.join(folder, "*.hdf5")))
+    logger.info(f"Total frames to process: {total_frames}")
+
+    # --- 5. Monitor progress ---
+    try:
+        _monitor(server_proc, daemon_proc, mapping_file, daemon_log,
+                 total_frames=total_frames)
+    except KeyboardInterrupt:
+        logger.warning("Pipeline interrupted by user.")
+        _terminate_process(server_proc, "image server")
+        _terminate_process(daemon_proc, "daemon")
+        daemon_logf.close()
+        server_logf.close()
+        sys.exit(130)
+
+    # --- 6. Server finished — wait for daemon to flush output ---
+    logger.info(f"Image server exited (code {server_proc.returncode}). "
+                f"Waiting for daemon to write results...")
+
+    # Wait for the daemon to finish WRITING, not merely to have started.
+    #
+    # solutions.txt is appended to as each frame is fitted, so "the file exists and
+    # is non-empty" means the *first* frame landed, not the last. Breaking there and
+    # SIGTERMing the daemon two seconds later silently discards everything still in
+    # its queue — and the daemon is routinely behind (it logs "receive queue was full
+    # N times (backpressure from processing)"). Observed: a 6561-frame batch run lost
+    # the last 31 frames, contiguously, with no error anywhere.
+    #
+    # Instead, wait until the file stops growing: that is the daemon actually draining.
+    quiet_needed = max(flush_time, 10.0)
+    flush_deadline = time.time() + flush_time + 3600
+    last_size, last_change = -1, time.time()
+    while time.time() < flush_deadline:
+        if daemon_proc.poll() is not None:
+            logger.info("Daemon exited on its own.")
+            break
+        size = os.path.getsize(solutions_file) if os.path.isfile(solutions_file) else 0
+        now = time.time()
+        if size != last_size:
+            last_size, last_change = size, now
+        elif size > 0 and (now - last_change) >= quiet_needed:
+            logger.info(f"solutions.txt quiescent at {size} bytes after "
+                        f"{quiet_needed:.0f}s without growth — daemon has drained")
+            break
+        time.sleep(1.0)
+    else:
+        logger.warning("Timed out waiting for the daemon to finish writing "
+                       "solutions.txt; results may be truncated")
+
+    # --- 7. Terminate daemon ---
+    _terminate_process(daemon_proc, "daemon")
+    daemon_logf.close()
+    server_logf.close()
+
+    # --- 8. Post-processing ---
+    logger.info("Starting post-processing...")
+    postprocess_script = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "laue_postprocess.py",
+    )
+
+    if not os.path.isfile(solutions_file):
+        logger.error(f"solutions.txt not found at {solutions_file}. Check daemon log.")
+        _print_log_tail(daemon_log)
+        sys.exit(1)
+    if not os.path.isfile(spots_file):
+        logger.error(f"spots.txt not found at {spots_file}. Check daemon log.")
+        _print_log_tail(daemon_log)
+        sys.exit(1)
+
+    pp_cmd = [
+        python, postprocess_script,
+        "--solutions", solutions_file,
+        "--spots", spots_file,
+        "--config", os.path.abspath(config_file),
+        "--output-dir", results_dir,
+        "--mapping", os.path.abspath(mapping_file),
+        "--labels", os.path.abspath(labels_file),
+        "--folder", os.path.abspath(folder),
+        "--min-unique", str(min_unique),
+        "--nprocs", str(ncpus),
+    ]
+    if not write_indexfile:
+        pp_cmd.append("--no-indexfile")
+    elif indexfile_dir:
+        pp_cmd.extend(["--indexfile-out", indexfile_dir])
+    logger.info(f"Running: {' '.join(os.path.basename(c) for c in pp_cmd)}")
+    pp_result = subprocess.run(pp_cmd, capture_output=True, text=True)
+
+    if pp_result.returncode != 0:
+        logger.error(f"Post-processing failed (code {pp_result.returncode})")
+        if pp_result.stderr:
+            logger.error(pp_result.stderr[-2000:])
+    else:
+        logger.info("Post-processing complete.")
+
+    # --- 9. Summary ---
+    elapsed = time.time() - t_pipeline_start
+    logger.info("=" * 60)
+    logger.info(f"Pipeline complete in {elapsed:.1f}s")
+    logger.info(f"  Output directory:  {output_dir}")
+    logger.info(f"  Daemon log:        {daemon_log}")
+    logger.info(f"  Server log:        {server_log}")
+    logger.info(f"  Frame mapping:     {mapping_file}")
+    logger.info(f"  Results:           {results_dir}/")
+
+    # Summarise result files
+    result_files = sorted(os.listdir(results_dir))
+    total_sz = sum(
+        os.path.getsize(os.path.join(results_dir, f))
+        for f in result_files
+        if os.path.isfile(os.path.join(results_dir, f))
+    )
+    logger.info(f"  Result files:      {len(result_files)} files, {total_sz / 1e6:.1f} MB total")
+    logger.info("=" * 60)
+
+
+def _monitor(
+    server_proc: subprocess.Popen,
+    daemon_proc: subprocess.Popen,
+    mapping_file: str,
+    daemon_log: str,
+    total_frames: int = 0,
+    poll_interval: float = 1.0,
+) -> None:
+    """Monitor server progress and daemon health until server exits."""
+    try:
+        from tqdm import tqdm
+        has_tqdm = True
+    except ImportError:
+        has_tqdm = False
+
+    last_count = 0
+
+    if has_tqdm and total_frames > 0:
+        pbar = tqdm(
+            total=total_frames,
+            desc="Streaming",
+            unit="img",
+            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]",
+            dynamic_ncols=True,
+        )
+    else:
+        pbar = None
+
+    try:
+        while server_proc.poll() is None:
+            # Check daemon is still running
+            if daemon_proc.poll() is not None:
+                logger.error(
+                    f"Daemon exited unexpectedly (code {daemon_proc.returncode}). "
+                    f"Aborting."
+                )
+                _print_log_tail(daemon_log)
+                _terminate_process(server_proc, "image server")
+                raise RuntimeError("Daemon died")
+
+            # Read mapping for progress
+            mapping = lsu.load_frame_mapping(mapping_file)
+            count = len(mapping)
+            if count > last_count:
+                delta = count - last_count
+                if pbar is not None:
+                    pbar.update(delta)
+                else:
+                    sent = sum(1 for v in mapping.values()
+                               if not v.get("skipped", False))
+                    skipped = count - sent
+                    logger.info(
+                        f"Progress: {count}/{total_frames} frames "
+                        f"({sent} sent, {skipped} skipped)"
+                    )
+                last_count = count
+
+            time.sleep(poll_interval)
+
+        # Final update — pick up any frames written after last poll
+        mapping = lsu.load_frame_mapping(mapping_file)
+        count = len(mapping)
+        if count > last_count and pbar is not None:
+            pbar.update(count - last_count)
+    finally:
+        if pbar is not None:
+            pbar.close()
+
+
+def _print_log_tail(log_path: str, n: int = 2000) -> None:
+    """Print the last n characters of a log file."""
+    if not os.path.exists(log_path):
+        return
+    try:
+        with open(log_path) as f:
+            content = f.read()
+        tail = content[-n:] if len(content) > n else content
+        if tail.strip():
+            logger.info(f"--- Tail of {os.path.basename(log_path)} ---")
+            for line in tail.strip().split("\n"):
+                logger.info(f"  {line}")
+            logger.info("--- End ---")
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Orchestrate LaueMatching streaming pipeline"
+    )
+    parser.add_argument(
+        "--config", required=True,
+        help="Path to params.txt configuration file"
+    )
+    parser.add_argument(
+        "--folder", required=True,
+        help="Folder containing H5 image files"
+    )
+    parser.add_argument(
+        "--h5-location", default="/entry/data/data",
+        help="HDF5 internal dataset path (default: /entry/data/data)"
+    )
+    parser.add_argument(
+        "--ncpus", type=int, default=1,
+        help="Number of CPUs for daemon (default: 1)"
+    )
+    parser.add_argument(
+        "--output-dir", default="",
+        help="Output directory (default: auto-timestamped)"
+    )
+    parser.add_argument(
+        "--port", type=int, default=lsu.LAUE_STREAM_PORT,
+        help=f"Daemon TCP port (default: {lsu.LAUE_STREAM_PORT})"
+    )
+    parser.add_argument(
+        "--port-timeout", type=float, default=900.0,
+        help="Max seconds to wait for daemon port (default: 180)"
+    )
+    parser.add_argument(
+        "--flush-time", type=float, default=5.0,
+        help="Seconds to wait after server finishes before killing daemon (default: 5)"
+    )
+    parser.add_argument(
+        "--min-unique", type=int, default=2,
+        help="Minimum unique spots for orientation filtering (default: 2)"
+    )
+    parser.add_argument(
+        "--orient-file", default="",
+        help="Path to orientation database file (default: from config or orientations.bin)"
+    )
+    parser.add_argument(
+        "--hkl-file", default="",
+        help="Path to HKL file (default: from config or hkls.bin)"
+    )
+    parser.add_argument(
+        "--log-level", default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        help="Logging verbosity (default: INFO)"
+    )
+    parser.add_argument(
+        "--no-indexfile", action="store_true",
+        help="Disable the default Tischler-format .indexing.txt per-image output"
+    )
+    parser.add_argument(
+        "--indexfile-out", default="",
+        help="Directory for .indexing.txt files (default: alongside HDF5 outputs)"
+    )
+    parser.add_argument(
+        "--watch", action="store_true",
+        help="Real-time mode: image server keeps watching the folder for new "
+             "files. Stop with a STOP_LAUE file in the folder or --watch-idle."
+    )
+    parser.add_argument(
+        "--watch-poll", type=float, default=2.0,
+        help="Seconds between folder rescans in watch mode (default: 2)"
+    )
+    parser.add_argument(
+        "--watch-idle", type=float, default=0.0,
+        help="Watch mode exits after N seconds with no new files (default: 0 = never)"
+    )
+    args = parser.parse_args()
+
+    _setup_logging(args.log_level)
+
+    # Validate inputs
+    if not os.path.isfile(args.config):
+        logger.error(f"Config file not found: {args.config}")
+        sys.exit(1)
+    if not os.path.isdir(args.folder):
+        logger.error(f"Folder not found: {args.folder}")
+        sys.exit(1)
+
+    run_pipeline(
+        config_file=args.config,
+        folder=args.folder,
+        orient_file=args.orient_file,
+        hkl_file=args.hkl_file,
+        h5_location=args.h5_location,
+        ncpus=args.ncpus,
+        output_dir=args.output_dir,
+        port=args.port,
+        port_timeout=args.port_timeout,
+        flush_time=args.flush_time,
+        min_unique=args.min_unique,
+        write_indexfile=not args.no_indexfile,
+        indexfile_dir=args.indexfile_out,
+        watch=args.watch,
+        watch_poll=args.watch_poll,
+        watch_idle=args.watch_idle,
+    )
+
+
+if __name__ == "__main__":
+    main()

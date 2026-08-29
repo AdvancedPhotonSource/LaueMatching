@@ -31,13 +31,26 @@ import pytest
 # macOS CI sometimes links two OpenMP runtimes via numpy/scipy; harmless here.
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
-_SCRIPTS = Path(__file__).resolve().parent.parent
-if str(_SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(_SCRIPTS))
+# conftest.py puts laue_index/pipeline/ on sys.path, which is where the
+# orchestration modules live since they moved into the package. These are
+# source-level assertions, so they must read the real modules -- not the
+# same-named one-line shims still sitting in the repo's scripts/.
+from laue_index.pipeline import PIPELINE_DIR  # noqa: E402
 
-_RUN_LAUE = _SCRIPTS / "pipeline" / "run_laue.sh"
-_ORCH_SRC = (_SCRIPTS / "laue_orchestrator.py").read_text()
-_SERVER_SRC = (_SCRIPTS / "laue_image_server.py").read_text()
+_ORCH_SRC = (PIPELINE_DIR / "laue_orchestrator.py").read_text()
+_SERVER_SRC = (PIPELINE_DIR / "laue_image_server.py").read_text()
+
+# The shell pipeline stayed in the repo, so the tests that read it can only run
+# from a checkout. Skip them explicitly rather than handing them a path that
+# does not exist -- a missing file is a failure, and a failure that only means
+# "not a checkout" trains people to ignore red.
+_REPO_ROOT = next(
+    (p for p in Path(__file__).resolve().parents
+     if (p / "scripts").is_dir() and (p / "CMakeLists.txt").is_file()), None)
+_RUN_LAUE = _REPO_ROOT / "scripts" / "pipeline" / "run_laue.sh" if _REPO_ROOT else None
+needs_checkout = pytest.mark.skipif(
+    _RUN_LAUE is None or not _RUN_LAUE.is_file(),
+    reason="scripts/pipeline/run_laue.sh needs a checkout")
 
 
 def _free_port() -> int:
@@ -129,6 +142,7 @@ def _watch_expansion(env_value):
     return out.stdout
 
 
+@needs_checkout
 def test_watch_empty_means_batch():
     """WATCH="" must yield an empty flag (batch mode), not --watch."""
     assert _watch_expansion("") == "", (
@@ -136,6 +150,7 @@ def test_watch_empty_means_batch():
     )
 
 
+@needs_checkout
 def test_watch_unset_still_defaults_to_watch():
     """An unset WATCH must still default to --watch (live mode)."""
     assert _watch_expansion(None) == "--watch"
@@ -217,6 +232,7 @@ def test_snapshot_under_lock_is_immune():
 #        FASTEST_FIRST ordering, which need not match nvidia-smi indices.
 # ---------------------------------------------------------------------------
 
+@needs_checkout
 def test_run_laue_pins_cuda_device_order():
     """The launch line must set CUDA_DEVICE_ORDER=PCI_BUS_ID so the configured GPU
     index selects the card nvidia-smi calls that index."""

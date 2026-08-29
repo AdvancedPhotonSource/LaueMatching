@@ -30,6 +30,18 @@ Experiment folder: <ABSOLUTE PATH>
 Material:          <e.g. Ni superalloy / 316L / Zr-4 / unknown, tell me from the data>
 ```
 
+## Getting the code
+
+`pip install laue-index` installs the pipeline **and compiles the C indexer on the machine
+it will run on** — add `LAUEMATCHING_CUDA=1` for the GPU and streaming binaries (needs
+nvcc), or set `LAUEMATCHING_BIN` to binaries you already have. `laue-index run process -c
+… -i …` drives a frame without a checkout; `laue-index fetch-db` gets the 6.7 GB
+orientation database.
+
+Never confirm the binary by listing `bin/` — a Mach-O arm64 binary once sat there on a
+Linux host, looking present and ready. Ask instead:
+`python -c "from laue_index import indexer; print(indexer.available(), indexer.binary_path())"`
+
 ## Which geometry?
 
 The spine opens with a scope table. Establish this before anything else, because it changes

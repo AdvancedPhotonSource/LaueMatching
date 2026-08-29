@@ -16,9 +16,8 @@ from pathlib import Path
 
 import pytest
 
-_SCRIPTS = Path(__file__).resolve().parent.parent
-if str(_SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(_SCRIPTS))
+# conftest.py puts laue_index/pipeline/ on sys.path, which is where the
+# orchestration modules live since they moved into the package.
 
 
 def test_write_indexfile_field_exists():

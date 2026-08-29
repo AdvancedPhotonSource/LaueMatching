@@ -1,13 +1,18 @@
 """Shared pytest setup for the laue_index test suite.
 
-Puts the legacy ``scripts/`` directory on ``sys.path`` so the characterization
-tests can import the *current* implementation (``laue_stream_utils``,
-``laue_config``, …) as the behaviour baseline.  The ``laue_index`` package is
-imported the same way and these golden anchors must keep passing unchanged.
+The orchestration modules (``RunImage``, ``laue_config``, ``laue_stream_utils``,
+…) import each other FLAT, so the directory holding them has to be on
+``sys.path``. That directory used to be the repo's ``scripts/``; it is now
+``laue_index/pipeline/`` inside the package, which is why the tests keep
+passing unchanged after the move and why they now also run against an
+installed package with no checkout in sight.
 
-``scripts/`` lives at the REPO root, while the package now lives at
-``packages/laue_index/``.  Both are discovered rather than hardcoded by depth,
-so the suite keeps working if the tree is rearranged again.
+``scripts/`` must NOT go on ``sys.path`` any more: it holds one-line shims with
+the same filenames, and importing those instead of the real modules would give
+tests a module object with none of the functions they patch.
+
+Paths are discovered, not hardcoded by depth, so the suite survives the tree
+being rearranged again.
 """
 import os
 import sys
@@ -20,20 +25,24 @@ _HERE = Path(__file__).resolve()
 # The distribution root: packages/laue_index/ (contains the laue_index package).
 _PKG_ROOT = _HERE.parents[1]
 
-# The repo root: identified by scripts/ + the C build, which the
-# characterization tests need. None when running against an installed package.
+# Where the orchestration modules live. Prefer this checkout's copy; fall back
+# to whatever `import laue_index` resolves to (an installed package).
+_PIPELINE = _PKG_ROOT / "laue_index" / "pipeline"
+if not _PIPELINE.is_dir():
+    sys.path.insert(0, str(_PKG_ROOT))
+    from laue_index.pipeline import PIPELINE_DIR as _PIPELINE  # noqa: E402
+
+# The repo root: identified by scripts/ + the C build. None when running
+# against an installed package; tests that need the repo skip themselves.
 _REPO_ROOT = None
 for _candidate in _HERE.parents:
     if (_candidate / "scripts").is_dir() and (_candidate / "CMakeLists.txt").is_file():
         _REPO_ROOT = _candidate
         break
 
-# Package root first so ``import laue_index`` resolves the package; scripts/
-# next so the legacy modules (laue_stream_utils, laue_config) import flat.
-_paths = [str(_PKG_ROOT)]
-if _REPO_ROOT is not None:
-    _paths.append(str(_REPO_ROOT / "scripts"))
-
-for _p in reversed(_paths):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
+# Package root first so ``import laue_index`` resolves the package; the
+# pipeline directory next so the orchestration modules import flat.
+for _p in (str(_PIPELINE), str(_PKG_ROOT)):
+    if _p in sys.path:
+        sys.path.remove(_p)
+    sys.path.insert(0, _p)

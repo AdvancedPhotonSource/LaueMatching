@@ -6,6 +6,40 @@ conventions (curated `__init__`, single-responsibility modules, typed records)
 but stays **independent** of the paper-tied packages (`laue_torch` / `laue_jax`
 / `jax_cpfem`) — shared pure math is duplicated with `# TODO(unify-after-publish)`.
 
+## Install
+
+```bash
+pip install 'laue-index[run]'                # everything the pipeline needs
+pip install laue-index                       # library + the CPU indexer (numpy only)
+LAUEMATCHING_CUDA=1 pip install laue-index   # + the CUDA binaries (needs nvcc)
+```
+
+```bash
+laue-index fetch-db --dest ~/laue            # the 6.7 GB orientation database
+export LAUEMATCHING_ORIENT_DB=~/laue/100MilOrients.bin
+laue-index run process -c params.txt -i frame.h5 -n 8
+```
+
+The C indexer is compiled on your machine at install time (this is an sdist, not
+a wheel — a binary is tied to the toolkit and GPU architectures that built it).
+Without a C compiler and OpenMP the install still succeeds; only the binary is
+missing. The CUDA build is opt-in because a toolkit that cannot compile these
+sources fails at *build* time, which would take the working CPU binary down with
+it.
+
+```python
+from laue_index import indexer
+indexer.available()             # is the CPU indexer usable?
+indexer.available("GPU")        # is LaueMatchingGPU usable?
+indexer.binary_path("GPU")      # where it came from
+```
+
+Set `LAUEMATCHING_BIN` to a binary — or to a directory holding them — to use one
+you built elsewhere or downloaded from a
+[release](https://github.com/AdvancedPhotonSource/LaueMatching/releases). It
+takes precedence over everything else, and the not-found error names every path
+it tried.
+
 ## Modules
 | Module | Responsibility |
 |---|---|
@@ -18,13 +52,16 @@ but stays **independent** of the paper-tied packages (`laue_torch` / `laue_jax`
 | `postprocess.py` | `PostProcessor`: unique-spots → sort → filter → spot-filter. |
 | `output.py` | HDF5 result writer. |
 | `config_schema.py` | One declarative `SCHEMA` table driving config parse + write. |
-| `cli.py` | `laue-index` console entry: `parse` (summarise a solutions table) and `filter` (re-run post-processing on existing C output, no re-indexing). |
+| `cli.py` | `laue-index` console entry: `run` (the whole image→index pipeline), `fetch-db` (the orientation database), `parse` (summarise a solutions table), `filter` (re-run post-processing on existing C output, no re-indexing), `calibrate`. |
+| `pipeline/` | The orchestrators themselves — `RunImage`, the streaming daemon driver and image server, the HKL/simulation generators. They import each other flat, so import them from one place: `from laue_index.pipeline import add_to_path`. |
 
 ## Relationship to `scripts/`
-The legacy `scripts/laue_stream_utils.py` is now a **thin shim** that re-exports
-from this package, so `RunImage.py`, `laue_postprocess.py`, and
-`laue_image_server.py` keep working unchanged while the implementation lives
-here.  `RunImage.py` is the orchestrator wiring the stages together.
+The orchestrators used to live in the repo's `scripts/` and are now in
+`pipeline/` here, so the package ships something that can actually run a frame.
+`scripts/` keeps a one-line shim per entry point — `python scripts/RunImage.py …`
+and the shell pipeline behave exactly as before from a checkout.
+`laue_stream_utils` remains a thin re-export of this package's stages, so
+`RunImage`, `laue_postprocess` and `laue_image_server` are unchanged by any of it.
 
 ## Testing
 `pytest` (from the repo root) runs the unit suite — golden-anchored

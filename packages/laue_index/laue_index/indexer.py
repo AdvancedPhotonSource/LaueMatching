@@ -23,7 +23,7 @@ from pathlib import Path
 logger = logging.getLogger("LaueMatching")
 
 __all__ = ["IndexerResult", "BinaryUnavailableError", "available",
-           "binary_path", "resolve_executable", "run_indexer"]
+           "binary_path", "require_binary", "resolve_executable", "run_indexer"]
 
 #: Override the binary location outright. Checked first.
 BINARY_ENV = "LAUEMATCHING_BIN"
@@ -43,8 +43,16 @@ class IndexerResult:
 
 
 def _executable_name(compute_type: str = "CPU", do_forward: bool = False) -> str:
-    """Which of the three binaries this request needs."""
+    """Which of the three binaries this request needs.
+
+    ``STREAM`` names the persistent GPU daemon. It is not a fallback candidate
+    for anything: a caller that wants the daemon wants the daemon, so an
+    unavailable one must say so rather than silently hand back the CPU
+    single-image binary.
+    """
     compute_type = compute_type.upper()
+    if compute_type in ("STREAM", "GPUSTREAM"):
+        return "LaueMatchingGPUStream"
     if compute_type == "GPU" and not do_forward:
         return "LaueMatchingGPU"
     if compute_type == "GPU" and do_forward:
@@ -123,7 +131,25 @@ def _unavailable_message(compute_type: str, do_forward: bool,
         f"already have with {BINARY_ENV}=/path/to/{name} (or to its directory).",
         "From a source checkout, ./build.sh writes it to bin/.",
     ]
+    if name.startswith("LaueMatchingGPU"):
+        lines.append(
+            "The CUDA binaries are opt-in: LAUEMATCHING_CUDA=1 pip install laue-index "
+            "(needs nvcc), or download them from a GitHub release.")
     return "\n".join(lines)
+
+
+def require_binary(compute_type: str = "CPU", do_forward: bool = False,
+                   repo_root: str | None = None) -> Path:
+    """The binary's path, or :class:`BinaryUnavailableError` explaining why not.
+
+    For callers that cannot proceed without it -- the streaming daemon, above
+    all -- so every one of them reports the same diagnosis (every path tried,
+    plus the escape hatch) instead of inventing its own half of the story.
+    """
+    if not available(compute_type, do_forward, repo_root):
+        raise BinaryUnavailableError(
+            _unavailable_message(compute_type, do_forward, repo_root))
+    return binary_path(compute_type, do_forward, repo_root)
 
 
 def resolve_executable(repo_root: str | None = None, compute_type: str = "CPU",

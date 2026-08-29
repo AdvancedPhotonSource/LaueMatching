@@ -35,6 +35,18 @@ def test_resolve_executable_gpu_with_forward_falls_back_to_cpu():
     assert resolve_executable("/repo", "GPU", do_forward=True).endswith("LaueMatchingCPU")
 
 
+def test_stream_names_the_daemon():
+    """The streaming orchestrator asks for this by name; it is not CPU-able."""
+    for alias in ("STREAM", "stream", "GPUStream"):
+        assert indexer._executable_name(alias) == "LaueMatchingGPUStream"
+
+
+def test_stream_never_falls_back_to_the_single_image_binary():
+    """A caller that wants the daemon must be told it is missing, not handed
+    a binary that cannot serve a socket."""
+    assert indexer._executable_name("STREAM", do_forward=True) == "LaueMatchingGPUStream"
+
+
 # ── search order ────────────────────────────────────────────────────────────
 
 def test_env_var_wins_and_accepts_a_file_or_a_directory(tmp_path, monkeypatch):
@@ -80,6 +92,32 @@ def test_binary_path_returns_a_diagnosable_path_when_absent(tmp_path, monkeypatc
     """Even with nothing found, the caller gets a concrete path to report."""
     missing = _no_candidates_anywhere(monkeypatch, tmp_path)
     assert binary_path() == missing
+
+
+def test_require_binary_raises_with_the_full_diagnosis(tmp_path, monkeypatch):
+    """One diagnosis, shared by every caller that cannot proceed without it."""
+    missing = _no_candidates_anywhere(monkeypatch, tmp_path)
+    with pytest.raises(indexer.BinaryUnavailableError) as e:
+        indexer.require_binary()
+    msg = str(e.value)
+    assert str(missing) in msg and BINARY_ENV in msg
+
+
+def test_require_binary_returns_the_path_when_it_is_there(tmp_path, monkeypatch):
+    exe = tmp_path / "LaueMatchingCPU"
+    exe.write_text("#!/bin/sh\nexit 0\n")
+    exe.chmod(0o755)
+    monkeypatch.setenv(BINARY_ENV, str(exe))
+    assert indexer.require_binary() == exe
+
+
+def test_a_missing_cuda_binary_says_how_to_get_one(tmp_path, monkeypatch):
+    """The CUDA build is opt-in, so 'not found' is not the whole story."""
+    monkeypatch.setattr(indexer, "_candidates",
+                        lambda name, repo_root=None: [tmp_path / "nope" / name])
+    with pytest.raises(indexer.BinaryUnavailableError) as e:
+        indexer.require_binary("STREAM")
+    assert "LAUEMATCHING_CUDA=1" in str(e.value)
 
 
 def test_run_indexer_missing_binary_names_where_it_looked(tmp_path, monkeypatch):

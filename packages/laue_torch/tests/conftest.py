@@ -34,11 +34,21 @@ def _find_repo_root() -> Path | None:
 
 ROOT = _find_repo_root()
 
-# Legacy flat modules (laue_stream_utils, laue_config) live in scripts/.
-if ROOT is not None:
-    _scripts = str(ROOT / "scripts")
-    if _scripts not in sys.path:
-        sys.path.insert(0, _scripts)
+# The flat modules (laue_stream_utils, laue_config, GenerateSimulation, ...)
+# used to live in the repo's scripts/; they are now inside laue_index, which
+# ships them. scripts/ holds same-named one-line shims, so putting it on
+# sys.path would import those instead of the real modules.
+try:
+    from laue_index.pipeline import add_to_path as _add_pipeline_to_path
+except ImportError:                       # laue_index not installed
+    if ROOT is not None:
+        sys.path.insert(0, str(ROOT / "packages" / "laue_index"))
+    try:
+        from laue_index.pipeline import add_to_path as _add_pipeline_to_path
+    except ImportError:
+        _add_pipeline_to_path = None
+if _add_pipeline_to_path is not None:
+    _add_pipeline_to_path()
 
 
 @pytest.fixture(scope="session")

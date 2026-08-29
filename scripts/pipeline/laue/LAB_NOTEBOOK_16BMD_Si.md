@@ -45,8 +45,17 @@ f2", and `calcOverlap` stops at `MaxNrLaueSpots` distinct directions — so the 
 **The canonical tree on the compute host had never been usable.**
 `~s1iduser/opt/LaueMatching_canonical` is an rsync copy from a Mac, and `bin/LaueMatchingCPU`
 was an **arm64 Mach-O binary** on a Linux x86-64 host, with a macOS `libnlopt.a` beside it. A
-`ls bin/` check reports it present and ready. Same class as invariant 6a. Also: CUDA 13 has
-dropped `compute_70`, which `CMakeLists.txt` still requests.
+`ls bin/` check reports it present and ready. Same class as invariant 6a.
+
+> **Both halves of that are now fixed, and the rsync habit is retired.**
+> `pip install laue-index` compiles the C on the machine it will run on, so a
+> foreign-architecture binary cannot be staged by copying a tree; check with
+> `python -c "from laue_index import indexer; print(indexer.binary_path())"`,
+> which reports the binary that will actually be used.
+> The `compute_70` request is gone too — CUDA 13 dropped Volta and the build now
+> asks `nvidia-smi` what the machine has, falling back to the toolkit's
+> `all-major`. `LAUEMATCHING_CUDA=1 pip install laue-index` builds the GPU
+> binaries the same way. NLopt is no longer a dependency at all.
 
 ## 3. Method findings — the transmission-specific ones
 

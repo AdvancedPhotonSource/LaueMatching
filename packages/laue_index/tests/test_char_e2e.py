@@ -30,11 +30,23 @@ import pytest
 
 from _golden import check_golden, local_fixture, SEED_DIR
 
-_REPO = Path(__file__).resolve().parents[1]
 _FRAME = "Indent_KB_2D_scan2_1040.h5"
 _HKLS = "valid_hkls_Ni.csv"
 
-_BIN = Path(os.environ.get("LAUE_BIN", _REPO / "bin" / "LaueMatchingCPU"))
+# The repo root, if we are in one. parents[1] used to be spelled "the repo",
+# but since the tree moved to packages/laue_index/ that is the DISTRIBUTION
+# root -- so <repo>/bin never existed and this test skipped itself for
+# "missing binary" on every machine, silently.
+_REPO = next(
+    (p for p in Path(__file__).resolve().parents
+     if (p / "scripts").is_dir() and (p / "CMakeLists.txt").is_file()), None)
+
+# Default to whatever the package itself would run: the installed binary if
+# there is one, the checkout's bin/ otherwise.
+from laue_index import indexer as _indexer  # noqa: E402
+
+_BIN = Path(os.environ.get("LAUE_BIN")
+            or _indexer.binary_path(repo_root=str(_REPO) if _REPO else None))
 _DB = Path(os.environ.get("LAUE_ORIENT_DB",
                           Path.home() / "opt/LaueMatching/100MilOrients.bin"))
 _CACHE = Path(os.environ.get("LAUE_FWD_CACHE", SEED_DIR / "e2e" / "fwdcache_NiIndent.bin"))
@@ -105,12 +117,17 @@ def test_char_e2e_runimage_1040():
         cfg.write_text(_CONFIG.format(
             db=_DB, cache=_CACHE, hkls=local_fixture(_HKLS), results=results))
 
+        # Drive it the way a user does now -- through the packaged entry point,
+        # not a path into a checkout -- so this anchors the shipped artifact.
         env = dict(os.environ, KMP_DUPLICATE_LIB_OK="TRUE")
+        env["PYTHONPATH"] = os.pathsep.join(
+            [str(Path(__file__).resolve().parents[1])] +
+            ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else []))
         proc = subprocess.run(
-            [sys.executable, str(_REPO / "scripts" / "RunImage.py"), "process",
+            [sys.executable, "-m", "laue_index.cli", "run", "process",
              "-c", str(cfg), "-i", str(local_fixture(_FRAME)), "-n", "8",
              "--no-viz", "--no-sim", "--no-indexfile"],
-            cwd=str(_REPO), env=env, capture_output=True, text=True, timeout=1200)
+            cwd=str(d), env=env, capture_output=True, text=True, timeout=1200)
         assert proc.returncode == 0, f"RunImage failed:\n{proc.stdout[-3000:]}\n{proc.stderr[-2000:]}"
 
         out_h5 = results / f"{Path(_FRAME).stem}.output.h5"
