@@ -8,7 +8,7 @@ Enable float64 to match the laue_torch reference::
     import jax; jax.config.update("jax_enable_x64", True)
 """
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 from .geometry import (
     HC_KEV_NM,
