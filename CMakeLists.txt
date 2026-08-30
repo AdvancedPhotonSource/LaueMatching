@@ -80,11 +80,27 @@ include(GNUInstallDirs)
 # which is unsurprising -- the objective samples intensity at integer pixels
 # and is piecewise-constant, so a smooth quadratic model has nothing to fit.
 #
-# src/nelder_mead.{c,h} is an exact reimplementation of NLopt's LN_NELDERMEAD
+# nelder_mead.{c,h} is an exact reimplementation of NLopt's LN_NELDERMEAD
 # (nldrmd.c), vendored from MIDAS packages/midas_ckernel/c_src. Removing the
 # dependency means: no network fetch during a build, no lib/lib64 install-path
 # divergence across distros, and the C can be compiled at `pip install` time.
-set(LAUE_OPTIMIZER_SRC ${CMAKE_CURRENT_SOURCE_DIR}/src/nelder_mead.c)
+
+# ---------------------------------------------------------------------------
+# Where the C lives
+# ---------------------------------------------------------------------------
+# ONE copy, inside the package. `pip install laue-index` builds from that
+# package's own sdist, which contains only what is under packages/laue_index/ --
+# so the C has to live there or the pip build finds nothing. The root build then
+# reaches DOWN into it, which is exactly what it already does for
+# cmake/LaueCudaArch.cmake above.
+#
+# It used to be the other way round: a canonical repo-root src/ plus a vendored
+# copy in the package, with utils/sync_vendored_c.py --check in CI to catch
+# drift. That worked, but it made a one-copy edit possible at all -- and such an
+# edit leaves the pip-installed indexer computing something different from the
+# one a checkout builds, with every test green. Deleted 2026-08-29.
+set(LAUE_SRC ${CMAKE_CURRENT_SOURCE_DIR}/packages/laue_index/c_src)
+set(LAUE_OPTIMIZER_SRC ${LAUE_SRC}/nelder_mead.c)
 
 # ---------------------------------------------------------------------------
 # OpenMP
@@ -106,7 +122,7 @@ set(LAUE_C_FLAGS -fPIC -O3 -Wall)
 # ---------------------------------------------------------------------------
 # LaueMatchingCPU
 # ---------------------------------------------------------------------------
-add_executable(LaueMatchingCPU src/LaueMatchingCPU.c ${LAUE_OPTIMIZER_SRC})
+add_executable(LaueMatchingCPU ${LAUE_SRC}/LaueMatchingCPU.c ${LAUE_OPTIMIZER_SRC})
 
 target_compile_options(LaueMatchingCPU PRIVATE ${LAUE_C_FLAGS})
 target_link_libraries(LaueMatchingCPU PRIVATE m)
@@ -133,7 +149,7 @@ add_custom_command(TARGET LaueMatchingCPU POST_BUILD
 if(USE_CUDA)
 
 
-  add_executable(LaueMatchingGPU src/LaueMatchingGPU.cu ${LAUE_OPTIMIZER_SRC})
+  add_executable(LaueMatchingGPU ${LAUE_SRC}/LaueMatchingGPU.cu ${LAUE_OPTIMIZER_SRC})
 
   set_target_properties(LaueMatchingGPU PROPERTIES
     CUDA_SEPARABLE_COMPILATION ON     # -rdc=true
@@ -166,7 +182,7 @@ if(USE_CUDA)
   # -------------------------------------------------------------------------
   # LaueMatchingGPUStream  (persistent GPU daemon — socket-based streaming)
   # -------------------------------------------------------------------------
-  add_executable(LaueMatchingGPUStream src/LaueMatchingGPUStream.cu ${LAUE_OPTIMIZER_SRC})
+  add_executable(LaueMatchingGPUStream ${LAUE_SRC}/LaueMatchingGPUStream.cu ${LAUE_OPTIMIZER_SRC})
 
   set_target_properties(LaueMatchingGPUStream PROPERTIES
     CUDA_SEPARABLE_COMPILATION ON

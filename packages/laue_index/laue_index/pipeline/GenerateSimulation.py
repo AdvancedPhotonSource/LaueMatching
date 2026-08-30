@@ -166,7 +166,7 @@ class OrientationLoader:
 def calc_recip_array(lat, sg_num):
     """Reciprocal-lattice basis B (3x3) from lattice parameters.
 
-    Port of calcRecipArray in src/LaueMatchingHeaders.h (and GenerateHKLs.py),
+    Port of calcRecipArray in ../c_src/LaueMatchingHeaders.h (and GenerateHKLs.py),
     so q = OM @ B @ hkl matches the C matcher for ALL crystal systems. The
     previous `OM * astar` shortcut is only valid for cubic lattices and put
     simulated spots in the wrong places for e.g. hexagonal Ti-alpha.

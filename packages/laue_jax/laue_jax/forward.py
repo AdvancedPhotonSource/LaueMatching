@@ -1,7 +1,8 @@
 """Differentiable Laue forward projection — JAX port of laue_torch.forward.
 
 Math identical to ``laue_torch/forward.py`` (and scripts/GenerateSimulation.py /
-src/LaueMatchingCPU.c), as a single functional entry point ``laue_forward`` so
+packages/laue_index/c_src/LaueMatchingCPU.c), as a single functional entry
+point ``laue_forward`` so
 it composes with JAX-CPFEM in one autodiff graph (Plan A, Option 7.1).
 
 Scope note: the coded-aperture path, ``forward_stack``, and the intensity

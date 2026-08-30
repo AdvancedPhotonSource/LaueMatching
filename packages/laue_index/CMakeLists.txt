@@ -15,12 +15,13 @@
 cmake_minimum_required(VERSION 3.20)
 project(laue_index_c LANGUAGES NONE)
 
-# The C is VENDORED into this package's own c_src/, not read from the repo-root
-# src/. That duplication is deliberate: pip builds from this package's sdist,
-# which contains only what is under packages/laue_index/, so a CMakeLists
-# reaching up to ../../src works in a checkout and silently produces no binary
-# for every pip user. Keep the copy honest with utils/sync_vendored_c.py
-# (--check in CI).
+# c_src/ is where the C LIVES -- the only copy in the repository. It has to be
+# inside the package because pip builds from this package's sdist, which
+# contains only what is under packages/laue_index/: a CMakeLists reaching up to
+# a repo-root ../../src works in a checkout and silently produces no binary for
+# every pip user. The repo-root build reaches DOWN into this same directory, so
+# a checkout and a pip install compile identical sources by construction rather
+# than by a sync check.
 set(LAUE_SRC "${CMAKE_CURRENT_SOURCE_DIR}/c_src")
 
 if(NOT EXISTS "${LAUE_SRC}/LaueMatchingCPU.c")

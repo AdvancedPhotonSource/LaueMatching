@@ -68,13 +68,22 @@ for the change and any important details.
 
 | File | Purpose |
 |------|---------|
-| `src/LaueMatchingCPU.c` | CPU implementation (OpenMP parallelized) |
-| `src/LaueMatchingGPU.cu` | GPU implementation (CUDA) |
-| `src/LaueMatchingHeaders.h` | Shared structs, constants, and utility functions |
-| `RunImage.py` | End-to-end Python pipeline |
-| `GenerateHKLs.py` | HKL generation for a given crystal structure |
-| `GenerateSimulation.py` | Synthetic Laue pattern generator |
-| `ImageCleanup.py` | Image preprocessing utilities |
+| `packages/laue_index/c_src/LaueMatchingCPU.c` | CPU implementation (OpenMP parallelized) |
+| `packages/laue_index/c_src/LaueMatchingGPU.cu` | GPU implementation (CUDA) |
+| `packages/laue_index/c_src/LaueMatchingHeaders.h` | Shared structs, constants, and utility functions |
+| `packages/laue_index/c_src/nelder_mead.c` | Vendored simplex — the refiner's optimizer, no NLopt |
+| `packages/laue_index/laue_index/` | Typed pipeline stages (the Python core) |
+| `packages/laue_index/laue_index/pipeline/RunImage.py` | End-to-end Python pipeline |
+| `…/pipeline/GenerateHKLs.py` | HKL generation for a given crystal structure |
+| `…/pipeline/GenerateSimulation.py` | Synthetic Laue pattern generator |
+| `…/pipeline/ImageCleanup.py` | Image preprocessing utilities |
+| `scripts/*.py` | One-line shims onto the above, so a checkout runs unchanged |
+
+**The C lives in exactly one place**, `packages/laue_index/c_src/`. It is inside the
+package because `pip install laue-index` compiles from that package's own sdist,
+which cannot reach a repo-root directory; the root `CMakeLists.txt` reaches down
+into the same files. Do not reintroduce a second copy — an edit to one of two
+copies leaves pip users running different code with the whole suite green.
 
 ## Contact
 

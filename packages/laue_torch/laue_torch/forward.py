@@ -1,6 +1,7 @@
 """Differentiable Laue forward projection model.
 
-Math identical to scripts/GenerateSimulation.py and src/LaueMatchingCPU.c,
+Math identical to laue_index/pipeline/GenerateSimulation.py and the C indexer
+(packages/laue_index/c_src/LaueMatchingCPU.c),
 but expressed as PyTorch tensor ops so all parameters carry gradients.
 """
 

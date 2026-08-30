@@ -1,7 +1,8 @@
 """Rotation, lattice, and strain helpers — JAX port of laue_torch.geometry.
 
 Math identical to ``laue_torch/geometry.py`` (which mirrors
-``scripts/GenerateSimulation.py`` and ``src/LaueMatchingCPU.c``), expressed as
+``laue_index/pipeline/GenerateSimulation.py`` and
+``packages/laue_index/c_src/LaueMatchingCPU.c``), expressed as
 JAX ops so the whole chain is differentiable in one framework.
 
 Run with ``jax.config.update("jax_enable_x64", True)`` to match the float64

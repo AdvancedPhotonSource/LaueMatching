@@ -39,7 +39,7 @@
 # subnets and ALCF. Not Docker Hub.
 
 # ---------------------------------------------------------------------------
-# CPU build. No NLopt to fetch — the simplex is vendored (src/nelder_mead.c) —
+# CPU build. No NLopt to fetch — the simplex is vendored (c_src/nelder_mead.c) —
 # so this stage needs no network beyond the base image.
 # ---------------------------------------------------------------------------
 FROM docker.io/library/ubuntu:24.04 AS build-cpu
@@ -48,7 +48,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 COPY CMakeLists.txt build.sh ./
-COPY src/ src/
+# The C lives once, inside the package; the root CMakeLists reaches down into it.
+COPY packages/laue_index/c_src/ packages/laue_index/c_src/
 COPY packages/laue_index/cmake/ packages/laue_index/cmake/
 # SKIP_DOWNLOAD=1: build.sh otherwise pulls the 6.7 GB orientation database,
 # which must not end up in an image layer.
@@ -93,7 +94,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 COPY CMakeLists.txt build.sh ./
-COPY src/ src/
+# The C lives once, inside the package; the root CMakeLists reaches down into it.
+COPY packages/laue_index/c_src/ packages/laue_index/c_src/
 COPY packages/laue_index/cmake/ packages/laue_index/cmake/
 RUN SKIP_DOWNLOAD=1 ./build.sh gpu \
     && test -f bin/LaueMatchingGPU && test -f bin/LaueMatchingGPUStream

@@ -2,7 +2,7 @@
 
 `laue_torch` is a PyTorch implementation of the LaueMatching forward model
 (the math behind [scripts/GenerateSimulation.py](../scripts/GenerateSimulation.py)
-and [src/LaueMatchingCPU.c](../src/LaueMatchingCPU.c)). Every output pixel
+and [LaueMatchingCPU.c](../packages/laue_index/c_src/LaueMatchingCPU.c)). Every output pixel
 is a smooth function of the inputs, so PyTorch's autograd can backprop
 through the rendered image into:
 

@@ -20,13 +20,6 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y cmake build-essential
         
-    - name: Vendored C is in sync
-      # packages/laue_index/c_src/ is a deliberate copy of src/ so that
-      # `pip install laue-index` can compile from its own sdist. A one-copy
-      # edit would leave the pip-installed indexer running different code from
-      # the one this job builds, with every test still green.
-      run: python3 utils/sync_vendored_c.py --check
-
     - name: Build
       run: SKIP_DOWNLOAD=1 ./build.sh
       
@@ -105,8 +98,9 @@ jobs:
   # and a plain install must NOT. Both halves are checked here because both can
   # break invisibly: the sdist can ship without the .cu, and the opt-in can
   # quietly become an opt-out. The equivalent gap for the CPU binary (a
-  # CMakeLists reaching up to the repo-root src/, which works in a checkout and
-  # produces nothing from an sdist) shipped once already.
+  # CMakeLists reaching up to a repo-root src/, which works in a checkout and
+  # produces nothing from an sdist) shipped once already -- which is why the C
+  # now lives ONLY in packages/laue_index/c_src/ and the root build reaches down.
   pip-cuda:
     name: pip install --with CUDA
     runs-on: ubuntu-latest
