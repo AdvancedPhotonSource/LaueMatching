@@ -31,12 +31,24 @@ CONFIG block ships with portable defaults (`WORK=$HOME/laue_run`, `PY=python`), 
 
 ```bash
 WORK=$LAUE_WORK \
-PY=/home/beams/EPIX34ID/conda-envs/laue_rt/bin/python \
+PY=/home/beams/EPIX34ID/conda-envs/lauematching/bin/python \
 ALPHA_CONFIG=$LAUE_WORK/params/params_Ti_alpha.txt \
 BETA_CONFIG=$LAUE_WORK/params/params_Ti_beta.txt \
-/home/beams/EPIX34ID/opt/LaueMatching/pipeline/run_laue.sh /path/to/DATA_FOLDER
+/home/beams/EPIX34ID/opt/LaueMatching_canonical/pipeline/run_laue.sh /path/to/DATA_FOLDER
 touch /path/to/DATA_FOLDER/STOP_LAUE                  # stop a watch-mode run
 ```
+
+**The 34-ID-E install, as of 2026-08-30.** One checkout,
+`/home/beams/EPIX34ID/opt/LaueMatching_canonical`, and two conda environments
+beside the account's others, mirroring MIDAS's `midas` / `midas-dev`:
+
+| | |
+|---|---|
+| `~epix34id/conda-envs/lauematching` | **use this** — the three packages from PyPI, C indexer compiled in |
+| `~epix34id/conda-envs/lauematching_dev` | all three *editable* on the canonical checkout, for changing the code |
+
+`laue_rt` was retired on 2026-08-30: it never had the laue packages installed at
+all, because the old workflow ran the scripts straight out of a flat checkout.
 
 There is **one** launcher — `pipeline/run_laue.sh`. Its **CONFIG block at the top** is where
 these live; every entry is `${VAR:-default}`, so each can be set per run in the environment (as
@@ -45,7 +57,7 @@ above) or made permanent by editing the block:
 | CONFIG value | 34-ID-E value |
 |---|---|
 | `SCRIPTS` — LaueMatching install | `/home/beams/EPIX34ID/opt/LaueMatching/scripts` (auto-derived from the launcher's own path) |
-| `PY` — Python environment | `/home/beams/EPIX34ID/conda-envs/laue_rt/bin/python` (the `laue_rt` conda env) |
+| `PY` — Python environment | `/home/beams/EPIX34ID/conda-envs/lauematching/bin/python` (see below) |
 | `WORK` — working dir | `$LAUE_WORK` (parameter files, database, results) |
 | `ALPHA_CONFIG` / `BETA_CONFIG` | `$WORK/params/params_Ti_alpha.txt` / `..._beta.txt` |
 
@@ -53,7 +65,7 @@ If `WORK` is left unset the run lands in `$HOME/laue_run` and the parameter-file
 there — a wrong path, not a missing one, so check the launcher's echoed paths before walking away.
 
 The analysis scripts in `analysis/` are run with the same Python, e.g.
-`/home/beams/EPIX34ID/conda-envs/laue_rt/bin/python analysis/parentbeta_reconstruct.py 30`.
+`/home/beams/EPIX34ID/conda-envs/lauematching/bin/python analysis/parentbeta_reconstruct.py 30`.
 
 ---
 
