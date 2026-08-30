@@ -9,10 +9,11 @@
 
 ## R1. Where it runs
 
-The 34-ID-E operational detail — beamline access, the daemon, sharding across hosts, and
-the a two-phase hcp/bcc alloy campaign state — is in
-[`laue_torch/report/RUN_PROCESS_REPORT_HANDOFF.md`](../../../laue_torch/report/RUN_PROCESS_REPORT_HANDOFF.md).
-That file predates this doc set and is the authority for host and access specifics.
+Site-specific operational detail — beamline account and access, which host runs the daemon,
+how work is sharded across GPUs, and a given campaign's state — is **deliberately not in
+this public tree**. It belongs to the facility and the users who ran the experiment, and it
+goes stale faster than anything else here. Keep it in the campaign's own directory beside
+the data. What follows is the part that transfers.
 
 | | |
 |---|---|
@@ -67,5 +68,5 @@ geometries and is the most consequential thing in this update.
 5. The ~40 µm filament in the 16-BM-D wafer is unidentified; SAXS cannot separate crack from
    scribe from scratch.
 6. `DIAGNOSIS.md` now has five entries.
-7. Substrate/deposit direction on Zn/Zn flipped several times — **read
-   `LAB_NOTEBOOK_ZnZn.md` §5 before re-arguing it.**
+7. Substrate/deposit direction flipped several times on a deposit-on-substrate campaign —
+   **read `LAB_NOTEBOOK.md` §3b before re-arguing it.**

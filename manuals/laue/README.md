@@ -50,7 +50,7 @@ and ask rather than adapting a phase below.**
 
 ### Verify the configuration before you start
 
-**Run everything below from `scripts/pipeline/`** — every relative path in this doc set is
+**Run everything below from `pipeline/`** — every relative path in this doc set is
 written from there, and from the repository root the first command fails with
 `No such file or directory`.
 
@@ -59,7 +59,7 @@ symmetry follows the **space group**, not the phase name, and the old rule hande
 operators to any phase not called `"alpha"`.
 
 ```bash
-cd scripts/pipeline                              # every path below is relative to here
+cd pipeline                                      # every path below is relative to here
 export LAUE_PHASES=<phase>                       # comma-separated; single-phase is fine
 export LAUE_PARAMS_<PHASE>=<path to params.txt>  # upper-case suffix
 python analysis/laue_material.py                 # selftest must pass
@@ -126,13 +126,12 @@ purpose: a handbook has to stay short enough to follow, and a campaign record ha
 honest enough to stop a refuted idea coming back. When a rule below cites a measurement, the
 full account — including the controls that killed the competing explanation — is in a notebook.
 
-- [`LAB_NOTEBOOK.md`](LAB_NOTEBOOK.md) — method and defect record for
-  the fcc substrate and Al on Al. Three retracted claims, the image-peel autopsy, the α-brass
-  identifiability limit, and the measurement ledger.
-- [`LAB_NOTEBOOK_ZnZn.md`](LAB_NOTEBOOK_ZnZn.md) — Zn on Zn. The
-  substrate/deposit direction saga (it flipped several times; **read §5 before re-arguing it**),
-  scattering-vs-fluorescence, the readback race, and why the layers separate on the map but not
-  per position.
+- [`LAB_NOTEBOOK.md`](LAB_NOTEBOOK.md) — the reflection-geometry record, merged across both
+  34-ID-E deposit-on-substrate campaigns and carrying only what transfers: the detector
+  artefacts and operational traps (§2), why image-space substrate removal **cannot** work and
+  what replaced it (§3a–3b), three retracted claims and what killed them (§4). **Read §3b
+  before re-arguing which grains are substrate and which are deposit** — that direction
+  flipped several times before stage-invariance settled it.
 - [`LAB_NOTEBOOK_16BMD_Si.md`](LAB_NOTEBOOK_16BMD_Si.md) — **the transmission-geometry
   campaign.** Si wafer at 16-BM-D, six ω settings. The PONI-is-not-the-beam trap, the
   pixel-origin offset that a Procrustes fit turned into a crystal rotation, seven retracted
@@ -144,9 +143,9 @@ retractions are the part that decays fastest. Structure that works: what the cam
 established (a table with a status column) → defects fixed → method findings → scientific
 findings → **retracted claims and open questions** → measurement ledger.
 
-Companion docs: [`README.md`](README.md) (the pipeline itself), and — outside this repo — the
-34-ID-E operational runbook `laue_torch/report/RUN_PROCESS_REPORT_HANDOFF.md` (beamline access,
-the a two-phase hcp/bcc alloy campaign, and its current state).
+Companion doc: [`RUNBOOK.md`](RUNBOOK.md) — healthy ranges and the current pick-up point.
+Site-specific operational detail (beamline access, which host runs the daemon, a campaign's
+own state) is deliberately kept out of this public tree; see `RUNBOOK.md` §R1.
 
 ---
 

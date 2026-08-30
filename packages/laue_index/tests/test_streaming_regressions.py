@@ -44,13 +44,16 @@ _SERVER_SRC = (PIPELINE_DIR / "laue_image_server.py").read_text()
 # from a checkout. Skip them explicitly rather than handing them a path that
 # does not exist -- a missing file is a failure, and a failure that only means
 # "not a checkout" trains people to ignore red.
-_REPO_ROOT = next(
-    (p for p in Path(__file__).resolve().parents
-     if (p / "scripts").is_dir() and (p / "CMakeLists.txt").is_file()), None)
-_RUN_LAUE = _REPO_ROOT / "scripts" / "pipeline" / "run_laue.sh" if _REPO_ROOT else None
+# Anchor on the launcher ITSELF, not on a directory that happens to exist: the
+# old form looked for a `scripts/` dir and then reached into `scripts/pipeline/`,
+# so when the launcher moved to `pipeline/` the marker still found a repo root,
+# the file was absent, and these tests skipped instead of failing.
+_RUN_LAUE = next(
+    (p / "pipeline" / "run_laue.sh" for p in Path(__file__).resolve().parents
+     if (p / "pipeline" / "run_laue.sh").is_file()), None)
 needs_checkout = pytest.mark.skipif(
-    _RUN_LAUE is None or not _RUN_LAUE.is_file(),
-    reason="scripts/pipeline/run_laue.sh needs a checkout")
+    _RUN_LAUE is None,
+    reason="pipeline/run_laue.sh needs a checkout")
 
 
 def _free_port() -> int:

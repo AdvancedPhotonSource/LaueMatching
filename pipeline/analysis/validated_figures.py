@@ -20,7 +20,7 @@ SQ2 = np.sqrt(2.0)
 PREFIX = os.environ.get("LAUE_OUT_PREFIX", "scan")
 COL = {"alpha": "#4269d0", "beta": "#e8843c"}
 GK = {"alpha": r"\alpha", "beta": r"\beta"}
-# Random-orientation null MEASURED ON THIS SCAN by scripts/null_model.py
+# Random-orientation null MEASURED ON THIS SCAN by analysis/null_model.py
 # (120 frames x 150 draws = 18,000 draws per phase). Do NOT substitute the
 # SmallArea scan's numbers -- lambda differs with peak and reflection counts.
 NULL = {"alpha": dict(mean=2.95, p999=12, mx=16, lam=3.08),

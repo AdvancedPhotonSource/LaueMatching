@@ -151,7 +151,7 @@ ALLOWLIST = [
     # The public notebook explains WHY these were scrubbed, in prose that has to
     # be able to say what it is talking about ("an hcp deposit on an fcc
     # substrate"). It carries no real label -- verified by the same gate.
-    ("scripts/pipeline/laue/LAB_NOTEBOOK.md", r"parentbeta|beta_alpha"),
+    ("manuals/laue/LAB_NOTEBOOK.md", r"parentbeta|beta_alpha"),
 ]
 
 BINARY_SUFFIXES = {

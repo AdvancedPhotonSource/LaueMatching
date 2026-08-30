@@ -75,7 +75,7 @@ been established — check before assuming a path from one works on the other.
 Every remote shell is **tcsh**: pipe scripts to `bash -s`, and never use `$(...)` in the outer
 ssh command.
 
-`scripts/pipeline/launch_shard.sh SHARD GPU PORT NCPUS` runs one orchestrator on whatever host it
+`pipeline/launch_shard.sh SHARD GPU PORT NCPUS` runs one orchestrator on whatever host it
 is invoked on. Stagger launches by ~60 s: each daemon reads 19 GB before binding its port.
 
 Also: files written by one account are not automatically readable by another. `forward_*.bin` is

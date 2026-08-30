@@ -19,7 +19,7 @@ repository so it lives beside the code it cites and stays usable without this sk
 
 ## Start here
 
-Read **`scripts/pipeline/laue/README.md`** — the spine: scope gate, install gate, halt
+Read **`manuals/laue/README.md`** — the spine: scope gate, install gate, halt
 conditions, the invariants, a worked example and done-means. The seven phases open as you
 reach them.
 
@@ -91,13 +91,14 @@ The forward model is identical for both. Everything built *around* it is not.
 
 ## When something looks wrong
 
-Go to **`scripts/pipeline/laue/DIAGNOSIS.md`** — symptom → discriminating test → cause →
+Go to **`manuals/laue/DIAGNOSIS.md`** — symptom → discriminating test → cause →
 lever. The sharpest entry: a detector artefact at a fixed position reproduces perfectly
 frame to frame, so **persistence cannot separate it from a real reflection**. Test in
 orientation space instead.
 
-Before re-arguing anything, read the campaign notebooks — `LAB_NOTEBOOK_ZnZn.md` §5 in
-particular, where the substrate/deposit direction flipped several times before it settled.
+Before re-arguing anything, read the lab notebook for your geometry — `LAB_NOTEBOOK.md` §3b
+in particular, where the substrate/deposit direction flipped several times before
+stage-invariance settled it.
 
 ## Sibling doc sets
 

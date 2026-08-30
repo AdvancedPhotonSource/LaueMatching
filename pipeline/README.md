@@ -16,10 +16,10 @@ the chain is run on another material.
 [`Laue_Handbook.md`](Laue_Handbook.md) — survey the experiment folder, decide which analyses the
 material system actually supports, index, analyse, report.
 
-The handbook says *what to do*; the per-campaign **lab notebooks** say *what was found*, including
-what turned out to be wrong. Current:
-[`Laue_Lab_Notebook_bt_34ide_jul26.md`](Laue_Lab_Notebook_bt_34ide_jul26.md) (an hcp deposit on an fcc single crystal,
-Al on Al) and [`Laue_Lab_Notebook_bt_34ide_jul26b.md`](Laue_Lab_Notebook_bt_34ide_jul26b.md) (Zn on Zn).
+The handbook says *what to do*; the **lab notebooks** say *what was found*, including what
+turned out to be wrong — one per geometry:
+[`LAB_NOTEBOOK.md`](../manuals/laue/LAB_NOTEBOOK.md) (reflection, 34-ID-E) and
+[`LAB_NOTEBOOK_16BMD_Si.md`](../manuals/laue/LAB_NOTEBOOK_16BMD_Si.md) (transmission, 16-BM-D).
 
 ---
 
@@ -34,11 +34,11 @@ WORK=$LAUE_WORK \
 PY=/home/beams/EPIX34ID/conda-envs/laue_rt/bin/python \
 ALPHA_CONFIG=$LAUE_WORK/params/params_Ti_alpha.txt \
 BETA_CONFIG=$LAUE_WORK/params/params_Ti_beta.txt \
-/home/beams/EPIX34ID/opt/LaueMatching/scripts/pipeline/run_laue.sh /path/to/DATA_FOLDER
+/home/beams/EPIX34ID/opt/LaueMatching/pipeline/run_laue.sh /path/to/DATA_FOLDER
 touch /path/to/DATA_FOLDER/STOP_LAUE                  # stop a watch-mode run
 ```
 
-There is **one** launcher — `scripts/pipeline/run_laue.sh`. Its **CONFIG block at the top** is where
+There is **one** launcher — `pipeline/run_laue.sh`. Its **CONFIG block at the top** is where
 these live; every entry is `${VAR:-default}`, so each can be set per run in the environment (as
 above) or made permanent by editing the block:
 

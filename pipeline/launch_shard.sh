@@ -15,7 +15,7 @@ cd $W
 WORK=$W PY=$PY WATCH="" NCPUS=$NC \
   ALPHA_CONFIG=$W/params/params_Zn_h_s$K.txt BETA_CONFIG="" \
   ALPHA_GPU=$GPU ALPHA_PORT=$PORT \
-  bash $LM/scripts/pipeline/run_laue.sh $W/shards/h_s$K /entry1/data/data \
+  bash $LM/pipeline/run_laue.sh $W/shards/h_s$K /entry1/data/data \
   > $W/logs/shard${K}_${H}.launch 2>&1
 
 sleep 8
