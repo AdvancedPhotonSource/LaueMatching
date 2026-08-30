@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "laue-torch"
-version = "0.1.2"
+version = "0.1.3"
 description = "Differentiable PyTorch forward model for white-beam Laue microdiffraction, with per-voxel orientation- and strain-distribution (ODF/SDF) recovery, coded-aperture depth resolution, and joint multi-grain fitting."
 readme = "README.md"
 requires-python = ">=3.9"
