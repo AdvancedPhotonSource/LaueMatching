@@ -8,7 +8,7 @@ robustness fixes:
      so faint frames are not gutted by the old ~fixed-240 std formula.
 
 Standalone: `python tests/test_robustness_fixes.py` or `pytest`.  Only needs
-numpy + scripts/laue_stream_utils.py (no external fixtures).  When the library
+numpy + laue_index/pipeline/laue_stream_utils.py (no external fixtures).  When the library
 is refactored, keep these as behaviour anchors and re-point the import.
 """
 import math

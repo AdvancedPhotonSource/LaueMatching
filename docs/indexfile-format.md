@@ -76,7 +76,7 @@ $arrayN  <N>  <N>     G^             (hkl)   intens     E(keV)    err(deg)   PkI
 
 | Field                   | Source                                          |
 |-------------------------|--------------------------------------------------|
-| `$EulerAngles`          | `scripts/laue_indexfile.orient_matrix_to_euler_deg` — a faithful port of the C `OrientMat2Euler` in `src/LaueMatchingHeaders.h`, with the 1st/3rd angles wrapped into (-180°, 180°]. |
+| `$EulerAngles`          | `laue_index.pipeline.laue_indexfile.orient_matrix_to_euler_deg` — a faithful port of the C `OrientMat2Euler` in `packages/laue_index/c_src/LaueMatchingHeaders.h`, with the 1st/3rd angles wrapped into (-180°, 180°]. |
 | `$goodness`             | `NMatches * sqrt(Intensity)` — col 5 of `solutions.txt` / filtered_orientations. |
 | `$rms_error`            | RMS of per-spot angular errors (see below). Falls back to col-33 `misOrientationPostRefinement` when no spots are present. |
 | `$rotation_matrix`      | Cols 23–31 of `solutions.txt` (OrientMatrix). |

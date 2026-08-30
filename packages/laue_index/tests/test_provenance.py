@@ -1,4 +1,4 @@
-"""Tests for scripts/laue_provenance.py.
+"""Tests for laue_index/pipeline/laue_provenance.py.
 
 Run:
     cd ~/opt/LaueMatching && python -m pytest scripts/tests/test_provenance.py -v

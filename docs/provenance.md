@@ -8,7 +8,7 @@ weeks later can tell:
 - what config was in effect,
 - and which input files fed into it.
 
-The single source of truth is `scripts/laue_provenance.py`.
+The single source of truth is `packages/laue_index/laue_index/pipeline/laue_provenance.py`.
 
 ## What gets stamped
 

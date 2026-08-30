@@ -1,4 +1,4 @@
-"""Tests for scripts/laue_indexfile.py.
+"""Tests for laue_index/pipeline/laue_indexfile.py.
 
 Run:
     cd ~/opt/LaueMatching && python -m pytest scripts/tests/test_indexfile.py -v

@@ -220,7 +220,7 @@ class LaueConfig:
     log_level: LogLevel = LogLevel.INFO
     log_file: Optional[str] = None
 
-    # Optional IndexFile metadata (used by scripts/laue_indexfile.py)
+    # Optional IndexFile metadata (used by laue_indexfile.py, alongside this file)
     xtal_file: str = ""           # path to a CIF/xml crystal description (optional)
     structure_desc: str = ""      # short structure tag, e.g. "Ni", "Cu"
     atom_description: str = ""    # raw ``AtomDesctiption`` line contents (sic)
