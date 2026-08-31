@@ -74,7 +74,8 @@ inline void gpuAssert(cudaError_t code, const char *file, int line,
 // 4M entries x 12 B x MAX_STREAMS is < 200 MB on device and pinned host.
 
 __global__ void compare(size_t nrPxX, size_t nOr, size_t nrMaxSpots,
-                        float minInt, size_t minSps, uint16_t *oA, float *im,
+                        float minInt, size_t minSps, float minSpotInt,
+                        uint16_t *oA, float *im,
                         int *matchCount, size_t *matchIdx,
                         float *matchScore, size_t chunkOffset) {
   size_t i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -91,7 +92,7 @@ __global__ void compare(size_t nrPxX, size_t nOr, size_t nrMaxSpots,
       loc++;
       py = (size_t)oA[loc];
       float raw = __ldg(&im[py * nrPxX + px]);
-      if (raw > 0) {
+      if (raw > minSpotInt) {
         totInt += raw;
         nSps++;
       }
@@ -446,7 +447,8 @@ static void finalize_stream(StreamContext *fc, double *orients, int *hkls,
                             double pxX, double pxY, double Elo, double Ehi,
                             double tol, double *LatticeParameter,
                             double maxAngle, int maxNrSpots, int minGoodSpots,
-                            int numProcs, FILE *outF, FILE *ExtraInfo) {
+                            int numProcs, FILE *outF, FILE *ExtraInfo,
+                            double minSpotIntensity) {
   if (!fc->hasPendingWork)
     return;
   gpuErrchk(cudaStreamSynchronize(fc->stream));
@@ -514,7 +516,8 @@ static void finalize_stream(StreamContext *fc, double *orients, int *hkls,
                           rotTranspose, pArr, pxX, pxY, Elo, Ehi, tol,
                           LatticeParameter, maxNrSpots, minGoodSpots, numProcs,
                           outF, ExtraInfo, (int)img_num,
-                          0.0 /* auto geometry-scaled coarse-fit sigma */);
+                          0.0 /* auto geometry-scaled coarse-fit sigma */,
+                          minSpotIntensity);
   double wt_flush_start = omp_get_wtime();
   fflush(outF);
   fflush(ExtraInfo);
@@ -587,6 +590,8 @@ int main(int argc, char *argv[]) {
   for (iter = 0; iter < 6; iter++)
     tol_LatC[iter] = 0;
   double minIntensity = 1000.0, maxAngle = 2.0;
+  // See MinSpotIntensity in LaueMatchingCPU.c; 0.0 == the historical `> 0`.
+  double minSpotIntensity = 0.0;
   double LatticeParameter[6];
   tol_c_over_a = 0;
   char resultDir[1000] = "results_stream";
@@ -679,6 +684,12 @@ int main(int argc, char *argv[]) {
     LowNr = strncmp(aline, str, strlen(str));
     if (LowNr == 0) {
       sscanf(aline, "%s %d", dummy, &sg_num);
+      continue;
+    }
+    str = "MinSpotIntensity";
+    LowNr = strncmp(aline, str, strlen(str));
+    if (LowNr == 0) {
+      sscanf(aline, "%s %lf", dummy, &minSpotIntensity);
       continue;
     }
     str = "MinIntensity";
@@ -1196,7 +1207,7 @@ int main(int argc, char *argv[]) {
     finalize_stream(ctx, orients, hkls, nhkls, nrPxX, nrPxY, recip,
                     rotTranspose, pArr, pxX, pxY, Elo, Ehi, tol,
                     LatticeParameter, maxAngle, maxNrSpotsFit, minGoodSpots,
-                    numProcs, outF, ExtraInfo);
+                    numProcs, outF, ExtraInfo, minSpotIntensity);
 
     // 2. ACQUIRE new image (100ms timeout for drain support)
     ImageChunk chunk;
@@ -1250,7 +1261,8 @@ int main(int argc, char *argv[]) {
       uint16_t *d_chunkPtr =
           outArrOnGPU ? d_outArr + offset * stride : d_outArr;
       compare<<<blocks, 1024, 0, ctx->stream>>>(
-          nrPxX, thisChunk, maxNrSpots, minIntensity, minNrSpots, d_chunkPtr,
+          nrPxX, thisChunk, maxNrSpots, minIntensity, minNrSpots,
+          (float)minSpotIntensity, d_chunkPtr,
           ctx->d_image, ctx->d_matchCount, ctx->d_matchIdx,
           ctx->d_matchScore, offset);
       // The LAUNCH result is reported here, not by the event/sync that
@@ -1293,7 +1305,7 @@ int main(int argc, char *argv[]) {
     finalize_stream(&streams[s], orients, hkls, nhkls, nrPxX, nrPxY, recip,
                     rotTranspose, pArr, pxX, pxY, Elo, Ehi, tol,
                     LatticeParameter, maxAngle, maxNrSpotsFit, minGoodSpots,
-                    numProcs, outF, ExtraInfo);
+                    numProcs, outF, ExtraInfo, minSpotIntensity);
   }
 
   if (g_queue_full_count > 0)

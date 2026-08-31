@@ -145,7 +145,8 @@ is what knowing the structure factors buys — physics, not a bug.
 | **Matching** | | |
 | `MinNrSpots` | `7` | Min matching spots to qualify an orientation (1st pass) |
 | `MinGoodSpots` | `5` | Min spots after refinement (2nd pass) |
-| `MinIntensity` | `50` | Min total intensity from matched pixels |
+| `MinIntensity` | `50` | Min **total** intensity summed over matched pixels |
+| `MinSpotIntensity` | `0` | Pixel value a predicted reflection must **exceed** to count as matched. `0` is the historical behaviour and the default: any non-zero pixel counts, so a pixel carrying 4e-06 increments `NMatches`. Raise it to stop counting non-evidence — on real data 35% (Zn) / 29% (Si) of matched spots carry intensity below 1.0. Applies to candidate matching, the refinement objective (which multiplies by the match **count**) and the reported `NMatches`, so all three stay consistent. |
 | `MaxAngle` | `5` | Misorientation threshold [degrees] for merging candidates |
 | `MaxNrLaueSpots` | `30` | Max spots per orientation (2nd pass uses 3×) |
 | **Files** | | |

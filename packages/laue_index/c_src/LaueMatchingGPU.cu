@@ -48,7 +48,7 @@ inline void gpuAssert(cudaError_t code, const char *file, int line,
 
 __global__ void compare(size_t nrPxX, size_t nrPxY, size_t nOr,
                         size_t nrMaxSpots, float minInt, size_t minSps,
-                        uint16_t *oA, float *im,
+                        float minSpotInt, uint16_t *oA, float *im,
                         int *matchCount, size_t *matchIdx, float *matchScore,
                         size_t chunkOffset) {
   size_t i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -68,7 +68,7 @@ __global__ void compare(size_t nrPxX, size_t nrPxY, size_t nOr,
       py = (size_t)oA[loc];
       if (px < nrPxX && py < nrPxY) {
         float raw = __ldg(&im[py * nrPxX + px]);
-        if (raw > 0) {
+        if (raw > minSpotInt) {
           totInt += raw;
           nSps++;
         }
@@ -129,6 +129,8 @@ int main(int argc, char *argv[]) {
   for (iter = 0; iter < 6; iter++)
     tol_LatC[iter] = 0;
   double minIntensity = 1000.0, maxAngle = 2.0;
+  // See MinSpotIntensity in LaueMatchingCPU.c; 0.0 == the historical `> 0`.
+  double minSpotIntensity = 0.0;
   double LatticeParameter[6] = {0, 0, 0, 0, 0, 0};
   puts("Reading parameter file");
   fflush(stdout);
@@ -219,6 +221,12 @@ int main(int argc, char *argv[]) {
     LowNr = strncmp(aline, str, strlen(str));
     if (LowNr == 0) {
       sscanf(aline, "%s %d", dummy, &sg_num);
+      continue;
+    }
+    str = "MinSpotIntensity";
+    LowNr = strncmp(aline, str, strlen(str));
+    if (LowNr == 0) {
+      sscanf(aline, "%s %lf", dummy, &minSpotIntensity);
       continue;
     }
     str = "MinIntensity";
@@ -570,7 +578,7 @@ int main(int argc, char *argv[]) {
             outArrThis[(orientNr - startOrientNr) * (1 + 2 * maxNrSpots) + 1 +
                        2 * spotNr + 1] = (uint16_t)ipy;
             thisInt = image[ipy * nrPxX + ipx];
-            if (thisInt > 0) {
+            if (thisInt > minSpotIntensity) {
               totInt += thisInt;
               nSpots++;
             }
@@ -750,7 +758,8 @@ int main(int argc, char *argv[]) {
       double wt_kern = omp_get_wtime();
       int blocks = (int)((thisChunk + 1023) / 1024);
       compare<<<blocks, 1024>>>(nrPxX, nrPxY, thisChunk, maxNrSpots,
-                                minIntensity, minNrSpots, d_outChunk, d_image,
+                                minIntensity, minNrSpots,
+                                (float)minSpotIntensity, d_outChunk, d_image,
                                 d_matchCount, d_matchIdx, d_matchScore,
                                 offset);
       // The LAUNCH result is reported here, not by the synchronize below. A
@@ -886,7 +895,7 @@ int main(int argc, char *argv[]) {
       imageF, FinOrientArr, dArr, bsArr, bsScoreArr, totalSols, hkls, nhkls,
       nrPxX, nrPxY, recip, rotTranspose, pArr, pxX, pxY, Elo, Ehi, tol,
       LatticeParameter, maxNrSpots, minNrSpots, numProcs, outF, ExtraInfo, 0,
-      0.0 /* auto geometry-scaled coarse-fit sigma */);
+      0.0 /* auto geometry-scaled coarse-fit sigma */, minSpotIntensity);
   fclose(ExtraInfo);
   fclose(outF);
 

@@ -41,7 +41,7 @@ static void usageCPU() {
        "\t\t* SpaceGroup,\n"
        "\t\t* P_Array, R_Array, PxX, PxY, NrPxX, NrPxY,\n"
        "\t\t* Elo, Ehi, MaxNrLaueSpots, ForwardFile, DoFwd,\n"
-       "\t\t* MinNrSpots, MinIntensity, MaxAngle.\n");
+       "\t\t* MinNrSpots, MinIntensity, MinSpotIntensity, MaxAngle.\n");
 }
 
 // ── Main ────────────────────────────────────────────────────────────────
@@ -68,6 +68,9 @@ int main(int argc, char *argv[]) {
   for (iter = 0; iter < 6; iter++)
     tol_LatC[iter] = 0;
   double minIntensity = 1000.0, maxAngle = 2.0;
+  // Pixel value a predicted reflection must EXCEED to count as matched.
+  // 0.0 == the historical `> 0`, so omitting it changes nothing.
+  double minSpotIntensity = 0.0;
   double orientSpacing = 0.4;       // orientation-DB grid spacing (deg)
   double coarseFitSigmaParam = 0.0; // >0 overrides geometry-scaled coarse blur
   double LatticeParameter[6] = {0};
@@ -179,6 +182,12 @@ int main(int argc, char *argv[]) {
     LowNr = strncmp(aline, str, strlen(str));
     if (LowNr == 0) {
       sscanf(aline, "%s %d", dummy, &sg_num);
+      continue;
+    }
+    str = "MinSpotIntensity";
+    LowNr = strncmp(aline, str, strlen(str));
+    if (LowNr == 0) {
+      sscanf(aline, "%s %lf", dummy, &minSpotIntensity);
       continue;
     }
     str = "MinIntensity";
@@ -629,7 +638,7 @@ int main(int argc, char *argv[]) {
               outArrBatch[local * entriesPerOrient + 1 + 2 * spotNr + 1] =
                   (uint16_t)ipy;
               thisInt = image[ipy * nrPxX + ipx];
-              if (thisInt > 0) {
+              if (thisInt > minSpotIntensity) {
                 totInt += thisInt;
                 nSpots++;
               }
@@ -661,7 +670,7 @@ int main(int argc, char *argv[]) {
             // inflating totInt and flipping the minIntensity test -> the cache
             // path used to report more solutions than the fresh path.
             double thisIntC = image[ipy * nrPxX + ipx];
-            if (thisIntC > 0) {
+            if (thisIntC > minSpotIntensity) {
               totInt += thisIntC;
               nSpots++;
             }
@@ -800,7 +809,7 @@ int main(int argc, char *argv[]) {
       imageF, FinOrientArr, dArr, bsArr, bsScoreArr, totalSols, hkls, nhkls,
       nrPxX, nrPxY, recip, rotTranspose, pArr, pxX, pxY, Elo, Ehi, tol,
       LatticeParameter, maxNrSpots, minNrSpots, numProcs, outF, ExtraInfo, 0,
-      coarseFitSigmaValue);
+      coarseFitSigmaValue, minSpotIntensity);
   fclose(ExtraInfo);
   fclose(outF);
 

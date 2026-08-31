@@ -139,6 +139,10 @@ struct dataFit {
   double Ehi;
   int *validHKLIdx; // prefiltered HKL indices (NULL = iterate all)
   int nValidHKL;    // number of valid HKLs
+  // A predicted reflection counts as MATCHED when the pixel under it exceeds
+  // this. 0.0 reproduces the historical `> 0` exactly, so the default is a
+  // no-op; see MinSpotIntensity in the parameter file.
+  double minSpotIntensity;
 };
 
 // ── Symmetry tables ─────────────────────────────────────────────────────
@@ -507,7 +511,8 @@ static inline double calcOverlap(float *image, double euler[3], int *hkls,
                                  double recip[3][3], double *outArrThis,
                                  int maxNrSpots, double rotTranspose[3][3],
                                  double pArr[3], double pxX, double pxY,
-                                 double Elo, double Ehi) {
+                                 double Elo, double Ehi,
+                                 double minSpotIntensity) {
   double OM[3][3], OMt[3][3];
   Euler2OrientMat(euler, OMt);
   double ki[3] = {0, 0, 1.0};
@@ -562,7 +567,8 @@ static inline double calcOverlap(float *image, double euler[3], int *hkls,
       outArrThis[3 * spotNr + 0] = qhat[0];
       outArrThis[3 * spotNr + 1] = qhat[1];
       outArrThis[3 * spotNr + 2] = qhat[2];
-      if (image[(size_t)((size_t)py * nrPxX + (size_t)px)] > 0) {
+      if (image[(size_t)((size_t)py * nrPxX + (size_t)px)] >
+          minSpotIntensity) {
         result += image[(size_t)((size_t)py * nrPxX + (size_t)px)];
         nrPos++;
       }
@@ -631,7 +637,8 @@ calcOverlapFiltered(float *image, double euler[3], int *hkls, int *validIdx,
                     int nValid, int nrPxX, int nrPxY, double recip[3][3],
                     double *outArrThis, int maxNrSpots,
                     double rotTranspose[3][3], double pArr[3], double pxX,
-                    double pxY, double Elo, double Ehi) {
+                    double pxY, double Elo, double Ehi,
+                    double minSpotIntensity) {
   double OM[3][3], OMt[3][3];
   Euler2OrientMat(euler, OMt);
   double ki[3] = {0, 0, 1.0};
@@ -687,7 +694,8 @@ calcOverlapFiltered(float *image, double euler[3], int *hkls, int *validIdx,
       outArrThis[3 * spotNr + 0] = qhat[0];
       outArrThis[3 * spotNr + 1] = qhat[1];
       outArrThis[3 * spotNr + 2] = qhat[2];
-      if (image[(size_t)((size_t)py * nrPxX + (size_t)px)] > 0) {
+      if (image[(size_t)((size_t)py * nrPxX + (size_t)px)] >
+          minSpotIntensity) {
         result += image[(size_t)((size_t)py * nrPxX + (size_t)px)];
         nrPos++;
       }
@@ -746,12 +754,13 @@ static inline double problem_function(unsigned n, const double *x, double *grad,
     overlap = calcOverlapFiltered(
         image, Euler, hkls, f_data->validHKLIdx, f_data->nValidHKL,
         f_data->nrPxX, f_data->nrPxY, recip, outArrThis, f_data->maxNrSpots,
-        rotTranspose, pArr, f_data->pxX, f_data->pxY, f_data->Elo, f_data->Ehi);
+        rotTranspose, pArr, f_data->pxX, f_data->pxY, f_data->Elo, f_data->Ehi,
+        f_data->minSpotIntensity);
   } else {
     overlap = calcOverlap(image, Euler, hkls, f_data->nhkls, f_data->nrPxX,
                           f_data->nrPxY, recip, outArrThis, f_data->maxNrSpots,
                           rotTranspose, pArr, f_data->pxX, f_data->pxY,
-                          f_data->Elo, f_data->Ehi);
+                          f_data->Elo, f_data->Ehi, f_data->minSpotIntensity);
   }
   return -overlap;
 }
@@ -765,7 +774,8 @@ FitOrientation(float *image, double euler[3], int *hkls, int nhkls, int nrPxX,
                double pxX, double pxY, double Elo, double Ehi, double tol,
                double latc[6], double eulerFit[3], double latCUpd[6],
                double *minVal, int doCrystalFit, int *validHKLIdx,
-               int nValidHKL, int forceNelderMead, double initStepRad) {
+               int nValidHKL, int forceNelderMead, double initStepRad,
+               double minSpotIntensity) {
   int i, j;
   unsigned n;
   if (doCrystalFit == 0) {
@@ -817,6 +827,7 @@ FitOrientation(float *image, double euler[3], int *hkls, int nhkls, int nrPxX,
   f_data.maxNrSpots = maxNrSpots;
   f_data.validHKLIdx = validHKLIdx;
   f_data.nValidHKL = nValidHKL;
+  f_data.minSpotIntensity = minSpotIntensity;
   for (i = 0; i < 3; i++) {
     f_data.pArr[i] = pArr[i];
     for (j = 0; j < 3; j++) {
@@ -908,7 +919,8 @@ static inline int writeCalcOverlap(float *image, double euler[3], int *hkls,
                                    double recip[3][3], double *outArrThis,
                                    int maxNrSpots, double rotTranspose[3][3],
                                    double pArr[3], double pxX, double pxY,
-                                   double Elo, double Ehi, FILE *ExtraInfo,
+                                   double Elo, double Ehi,
+                                   double minSpotIntensity, FILE *ExtraInfo,
                                    int saveExtraInfo, int *simulNrSps,
                                    int imageNr) {
   int nrSps = 0;
@@ -976,7 +988,8 @@ static inline int writeCalcOverlap(float *image, double euler[3], int *hkls,
       outArrThis[3 * spotNr + 0] = qhat[0];
       outArrThis[3 * spotNr + 1] = qhat[1];
       outArrThis[3 * spotNr + 2] = qhat[2];
-      if (image[(size_t)((size_t)py * nrPxX + (size_t)px)] > 0) {
+      if (image[(size_t)((size_t)py * nrPxX + (size_t)px)] >
+          minSpotIntensity) {
         if (saveExtraInfo != 0) {
           if (outputBuf != NULL) {
             // snprintf with remaining space: never overrun outputBuf even if a
@@ -1252,7 +1265,8 @@ static inline void fitAndWriteOrientations(
     int nrPxY, double recip[3][3], double rotTranspose[3][3], double pArr[3],
     double pxX, double pxY, double Elo, double Ehi, double tol,
     double *LatticeParameter, int maxNrSpots, int minNrSpots, int numProcs,
-    FILE *outF, FILE *ExtraInfo, int imageNum, double coarseFitSigma) {
+    FILE *outF, FILE *ExtraInfo, int imageNum, double coarseFitSigma,
+    double minSpotIntensity) {
   int iterNr;
   // Blur the match image once (shared, read-only across threads) to give the
   // coarse fit stage a wide capture radius.
@@ -1301,7 +1315,8 @@ static inline void fitAndWriteOrientations(
                    outArrThisFit, maxNrSpots, rotTranspose, pArr, pxX, pxY, Elo,
                    Ehi, tol, LatticeParameter, eulerCoarse, latCdummy, &mvCoarse,
                    0 /*doCrystalFit*/, NULL /*all HKLs*/, 0,
-                   1 /*forceNelderMead*/, 0.2 * deg2rad /*initStep*/);
+                   1 /*forceNelderMead*/, 0.2 * deg2rad /*initStep*/,
+                   minSpotIntensity);
     // Re-prefilter HKLs at the coarse solution (spots can move on/off the
     // detector after a ~grid-spacing correction), then fine-fit on the sharp
     // image for full precision (orientation + crystal).
@@ -1316,7 +1331,8 @@ static inline void fitAndWriteOrientations(
     FitOrientation(image, eulerCoarse, hkls, nhkls, nrPxX, nrPxY, recip,
                    outArrThisFit, maxNrSpots, rotTranspose, pArr, pxX, pxY, Elo,
                    Ehi, tol, LatticeParameter, eulerFit, latCFit, &mv,
-                   doCrystalFit, validIdx, nValid, 0 /*BOBYQA*/, 0.0);
+                   doCrystalFit, validIdx, nValid, 0 /*BOBYQA*/, 0.0,
+                   minSpotIntensity);
     free(validIdx);
     Euler2OrientMat(eulerFit, orientFit);
     OrientMat2Quat33(orientBest, q1);
@@ -1327,8 +1343,8 @@ static inline void fitAndWriteOrientations(
     int saveExtraInfo = iterNr + 1;
     int nrSps = writeCalcOverlap(
         image, eulerFit, hkls, nhkls, nrPxX, nrPxY, recipFit, outArrThisFit,
-        maxNrSpots, rotTranspose, pArr, pxX, pxY, Elo, Ehi, ExtraInfo,
-        saveExtraInfo, &simulNrSps, imageNum);
+        maxNrSpots, rotTranspose, pArr, pxX, pxY, Elo, Ehi, minSpotIntensity,
+        ExtraInfo, saveExtraInfo, &simulNrSps, imageNum);
     if (nrSps >= minNrSpots) {
       int bs = bsArr[iterNr];
       double miso = GetMisOrientation(q1, q2);
