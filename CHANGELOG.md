@@ -7,6 +7,26 @@ each package's `pyproject.toml` for its current version.
 
 ## v2.2 (unreleased)
 
+- **`MinSpotIntensity`: a floor on what counts as a matched spot.** The match
+  test was a bare `image[px] > 0`, so a pixel carrying 4e-06 counted as evidence
+  for a candidate orientation. The objective is `NMatches * sqrt(Intensity)` —
+  it multiplies by the *count* — so such a pixel adds nothing to the intensity
+  sum, inflates the score anyway, and increments the `NMatches` that
+  `MinNrSpots` gates on. Measured on real 34-ID-E frames, **35.3% (Zn) and 28.8%
+  (Si) of matched spots carry intensity below 1.0**. The new
+  `MinSpotIntensity` parameter is the pixel value a predicted reflection must
+  exceed; it is applied at all nine match sites — candidate matching in all
+  three binaries (including both device kernels), the refinement objective, and
+  the reported `NMatches` — so the optimised and reported counts cannot describe
+  different things.
+
+  **The default is `0.0`, which is exactly the historical `> 0`.** Verified on
+  real data rather than asserted: on a Si frame and a Zn frame, indexed on both
+  the CPU and the GPU path, the new binaries reproduce the old ones' solution
+  set exactly. A positive control at `MinSpotIntensity 1.0` moves Si from 77 to
+  24 candidate matches and Zn from 140 to 55, so the no-op default is not a
+  parameter that fails to arrive.
+
 - **Repository layout rearranged (2026-08-29).** No behaviour change; every move
   was a `git mv`, so history follows the files.
   - The C/CUDA source now lives in **one** place, `packages/laue_index/c_src/`.
