@@ -27,6 +27,24 @@ each package's `pyproject.toml` for its current version.
   24 candidate matches and Zn from 140 to 55, so the no-op default is not a
   parameter that fails to arrive.
 
+  > **⚠️ Leave this at the default unless you have measured, on your own data,
+  > that raising it helps. No setting of it has been shown to improve a result.**
+  > Follow-up work (2026-09-03) found: on one real frame (34-ID-E `Si-white_1`)
+  > `MinSpotIntensity >= 5` **deleted the correct crystal** — the highest-scoring
+  > solution in the frame, 49 matched reflections, independently confirmed by a
+  > separate campaign to 5e-5° — leaving its Σ3/Σ5 coincidence ghosts ranked top.
+  > It is removed from the *stage-1 candidate set*, before refinement can recover
+  > it, so no later stage can put it back.
+  >
+  > That failure did **not** generalise: across 10 frames of a Zn raster, no grain
+  > was lost at any tested value (0 losses in 30 frame×floor cells), and on a
+  > synthetic image with 19 known orientations all 19 were recovered at every
+  > value from 0 to 20. So this is a demonstrated hazard on at least one real
+  > frame, not a general defect — and the parameter has no demonstrated upside to
+  > weigh against it. The default `0.0` is exactly the historical `> 0` and was
+  > verified byte-identical on real Si and Zn frames, on both the CPU and GPU
+  > paths.
+
 - **Repository layout rearranged (2026-08-29).** No behaviour change; every move
   was a `git mv`, so history follows the files.
   - The C/CUDA source now lives in **one** place, `packages/laue_index/c_src/`.
