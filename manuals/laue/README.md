@@ -33,11 +33,18 @@ resulting map. Two geometries are covered and they are **not** interchangeable:
 
 | | **Reflection** | **Transmission** |
 |---|---|---|
-| station | 34-ID-E | 16-BM-D (HPCAT) |
+| station | 34-ID-E · **TPS 21A (NSRRC)** | 16-BM-D (HPCAT) |
 | panel | edge-on above the sample, normal along lab **+Y** | downstream, centred near the beam |
 | direct beam | not on the panel, far off | **just off the panel edge — and NOT at the PONI** |
 | pattern runs | vertically | radially about the beam |
-| worked example | `LAB_NOTEBOOK.md` | `LAB_NOTEBOOK_16BMD_Si.md` |
+| worked example | `LAB_NOTEBOOK.md` · `LAB_NOTEBOOK_TPS21A.md` | `LAB_NOTEBOOK_16BMD_Si.md` |
+
+**TPS 21A is the first non-APS station and the first calibrated in XMAS.** Its geometry is
+the 34-ID-E class — 2θ = 90°, k_in = (0,0,1), sample at 45°, panel above — on a PILATUS3 6M
+rather than a Perkin Elmer. `laue_index.xmas` converts an XMAS calibration to
+`P_Array`/`R_Array` and enumerates the candidate poses; `LAB_NOTEBOOK_TPS21A.md` is the
+campaign record. A *fourth* station in this class needs no new code, but does need the
+candidate sweep re-run: nothing about the mounting transfers.
 
 The **forward model is the same** for both — `kf = ki − 2(q̂·ki)q̂` is the general Bragg
 mirror and has no hemisphere restriction (invariant 23). What differs is everything that
@@ -132,6 +139,12 @@ full account — including the controls that killed the competing explanation �
   what replaced it (§3a–3b), three retracted claims and what killed them (§4). **Read §3b
   before re-arguing which grains are substrate and which are deposit** — that direction
   flipped several times before stage-invariance settled it.
+- [`LAB_NOTEBOOK_TPS21A.md`](LAB_NOTEBOOK_TPS21A.md) — **the XMAS-calibrated reflection
+  campaign.** TPS 21A, three datasets and three beamtimes. The XMAS→`P_Array`/`R_Array`
+  conversion and its three traps, the two mount degeneracies (one an exact gauge, one a
+  near-gauge that looks decidable and is not), the energy window as the binding constraint
+  for a small-cell phase, and four measurement errors caught by controls rather than by
+  inspection. **Read §3a before claiming any Laue pattern settles detector handedness.**
 - [`LAB_NOTEBOOK_16BMD_Si.md`](LAB_NOTEBOOK_16BMD_Si.md) — **the transmission-geometry
   campaign.** Si wafer at 16-BM-D, six ω settings. The PONI-is-not-the-beam trap, the
   pixel-origin offset that a Procrustes fit turned into a crystal rotation, seven retracted
@@ -382,6 +395,15 @@ own state) is deliberately kept out of this public tree; see `RUNBOOK.md` §R1.
     **118× too permissive** for `NMatches`, which `writeCalcOverlap` scores with **zero-pixel
     tolerance** on the daemon's own image (11.5× more acceptance area) and `maxNrSpots *= 3`.
     Measure the null with the criterion, budget and image the indexer actually uses.
+    **The cheap way to do all of that at once: run the SAME search against a spot-SCRAMBLED
+    image** — same component count, same pixel intensities, same lit-pixel total, positions
+    randomised and never onto a masked region (`scramble_bin.py`). Whatever the best-of-1e8
+    reaches on that is the bar, and it is measured rather than modelled. Measured at TPS 21A:
+    **0 solutions** on scrambled Si (83 on the real frame) and **0** on scrambled Ni — but
+    **NMatches 8** on scrambled Ti, because those frames carry 123,720 lit px against Si's
+    36,098. `MinNrSpots = 8` — the value the template ships — therefore sat exactly ON the Ti
+    null, and five of seven raw α solutions were inside it. **The null sets the gate; the
+    template default is a starting point, not a threshold.**
 
 30. **Screen detector artefacts on what the INDEXER sees, not on raw counts.** A screen at
     `max(50 × frame_median, 250)` raw counts left a **9–250 count blind band**, because the
@@ -405,6 +427,37 @@ own state) is deliberately kept out of this public tree; see `RUNBOOK.md` §R1.
     of a result that is real at 0.008°. And when reporting, remember N scans give **N−1**
     independent comparisons, not N(N−1)/2: fifteen pairs here regress onto six per-scan
     offsets at R² 0.97.
+
+33. **Before blaming the indexer for finding nothing, COUNT what the energy window can
+    even deliver.** A phase with a small unit cell puts its strong low-index reflections at
+    low energy, and a photon-counting detector's discriminator can sit above all of them. At
+    TPS 21A, Ni's (111) through (400) are **all** below the 8.74 keV `Threshold_setting` at
+    every 2θ the panel covers, leaving 18.6 weak high-index reflections per orientation
+    against 47 for Si and 52 for Ti α on the same station and geometry — and Ni indexed 27.9 %
+    of voxels while Ti indexed 99 %. Project a few hundred random orientations through the
+    geometry and histogram the on-panel reflections by energy; it takes a minute and it
+    separates "the code is wrong" from "the measurement cannot see it". Note which end binds:
+    widening Elo 8.74 → 6.0 keV bought **+0.54** reflections/orientation, and Ehi 26 → 45 keV
+    bought **+65.75 predicted and −0.01 matched** — which is itself a measurement that the
+    beam carries nothing above 26 keV.
+
+34. **A null statistic must be MONOTONIC in the thing it tests.** Gating a grain map on the
+    *number of multi-voxel grains* passed Ti α (418 real vs 222 null) and FAILED Ti β
+    (19 vs 210) — when β is the **more** clustered of the two. A field that is a few huge
+    grains has few multi-voxel grains, exactly like a field with no structure, and the
+    statistic cannot tell them apart. Grain **count** (fewer = more clustered) and
+    **largest-grain size** are both monotonic and both put β far outside its null
+    (77 vs ≥597 grains; largest 530 vs ≤290). Before running a null, ask which direction the
+    statistic moves as the effect gets stronger — and if the answer is "both", pick another.
+
+35. **`ResultDir` is where the streaming daemon writes, and it must be unique per run.**
+    `solutions.txt` and `spots.txt` go to the **parameter file's** `ResultDir`, not to the
+    orchestrator's `--output-dir`. Two runs of the same phase off the same template therefore
+    share one solutions file and each one's post-processing reads whatever the other has
+    written so far. Measured: a 10-frame check alongside a 961-frame production run left
+    **both with 770 outputs**, both logging `Pipeline complete` and exiting **0** — the
+    production map silently truncated to 80 %. Rewrite `ResultDir` per run before launching,
+    and check output count against frames requested in **both** directions.
 
 ## Worked example
 

@@ -149,3 +149,76 @@ beam shift between the calibration beam and the experiment beam.
 residual to 4e-5 px. And remember what agreement between two codes can and cannot test: it
 tests their algebra, never anything they both read from the same calibration (invariant 26).
 Lab Notebook 16BMD §3–4, invariants 25 and 26.
+
+
+## One phase indexes to nothing while another, same station and geometry, indexes fine
+
+**Symptom.** `Initial solutions: 0 / Unique Orientations: 0`, exit 0, on every frame of one
+dataset, while a different phase on the same detector and the same converted geometry returns
+dozens of solutions per frame.
+
+**Discriminating test.** Do not touch the code. Project a few hundred random orientations
+through the geometry and histogram the **on-panel reflections by energy**, against the
+detector's `Threshold_setting` and the beam's declared band:
+
+```python
+# ~1 min. For each random U: project all allowed hkl, keep on-panel, bin the energies.
+```
+
+If the count inside the usable window is near or below `MinNrSpots`, the measurement cannot
+index that phase and no parameter will make it.
+
+**Cause.** A small unit cell puts the strong low-index reflections at low energy. Measured at
+TPS 21A: Ni's (111) through (400) all sit **below** the 8.74 keV discriminator at every 2θ the
+panel covers, leaving **18.6** weak high-index reflections per orientation against 47 for Si
+and 52 for Ti α. Ni indexed 27.9 % of voxels; Ti indexed 99 %.
+
+**Lever.** None at analysis time — and prove that rather than assuming it. Widening Elo
+8.74 → 6.0 keV bought +0.54 reflections/orientation; widening Ehi 26 → 45 keV bought +65.75
+*predicted* and **−0.01 matched**, on exactly the same 135 voxels. That second number is also
+a measurement of the beam: there is no usable flux above 26 keV. The fix is a detector
+threshold that reaches the strong reflections, flux at those energies, or a different
+detector distance — i.e. a beamline change, reportable as such.
+
+## The same solution table read from two files disagrees
+
+**Symptom.** A match count that is plausible but wrong — e.g. NMatches 280 where the physics
+caps it at 30.
+
+**Discriminating test.** Count the columns. `solutions_filtered.txt` has **34**;
+`/entry/results/filtered_orientations` in the `.output.h5` has **35**, because the HDF5 writer
+prepends `image_nr`.
+
+| quantity | .txt | .h5 |
+|---|---|---|
+| NMatches | `[5]` | **`[6]`** |
+| NSpotsCalc | `[6]` | `[7]` |
+| OrientMatrix | `[22:31]` | **`[23:32]`** |
+
+**Cause.** Text-file offsets applied to the HDF5 array return `NMatches*sqrt(Intensity)`.
+
+**Lever.** Assert the column count before indexing into either, and take the frame number from
+the `source_file` attribute on `/entry/results` rather than parsing the output filename. What
+caught this was a **physical ceiling**, not inspection: the phase could only put ~18.6
+reflections in the window and `MaxNrLaueSpots` capped at 30, so 280 was impossible by
+construction. Keep a physical bound in mind for every count you read back.
+
+## A spot-coincidence test says neighbouring voxels are different crystals
+
+**Symptom.** The fraction of one voxel's detected spots landing within N px of the next
+voxel's falls off fast with raster distance — 0.70 at one step, 0.30 at two, ~0 beyond — and
+the obvious reading is that the illuminated volume changed grain.
+
+**Discriminating test.** Stop counting coincidences and **track individual reflections**. Take
+the two or three brightest blobs per frame along one raster line and plot their positions.
+
+**Cause.** A fixed-tolerance coincidence test cannot distinguish a grain boundary from a
+smooth orientation *gradient*. At TPS 21A the reflections never disappeared — they swept
+**56 and 46 px** along smooth monotonic paths across a 1.05 µm row, about 2.7 px per 50 nm
+step, which is exactly why a 3 px test fails after one step. It is one crystal rotating.
+
+**Lever.** For a gradient, the right validation is **spatial smoothness** against a
+label-shuffled null (which preserves every orientation and destroys only their arrangement),
+plus monotonic growth of misorientation with distance — not neighbour agreement. Measured:
+neighbour misorientation 0.086° against a shuffled null of 0.236–0.266°, 100/100 shuffles
+worse.

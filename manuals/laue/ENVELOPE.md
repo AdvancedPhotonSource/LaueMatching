@@ -29,10 +29,17 @@ No suggestions here. State the consequence and the substitute.
 | Incident beam axis | lab **Z**; `Phase.project` computes `kf = ki - 2*qh[:,2]*qh`, valid only for `ki = (0,0,1)` | `phase-1-science.md` §3b (confirm with `ph.ki`) | A geometry with a different `ki` is not describable by this forward model. | none — stop and ask |
 | Panel orientation check | — | — | The usual validation (rotate a crystal about the beam, check the pattern rotates rigidly) **needs a detector perpendicular to the beam**. Edge-on, all three axes fail and prove nothing. | Validate instead by forward-model prediction of observed peaks against a random-orientation null. |
 | **Rotation about the beam axis** | **an exact, unmeasured gauge freedom** | measured: at φ = 90° the largest change in any predicted pixel is **2.3e-13 px** and in any energy **0**; the CeO₂ rings move 1.9e-14° in 2θ while χ sweeps 30° | **Absolute orientation in the laboratory frame.** Every orientation this chain produces is correct only up to an unknown rotation about the beam. No cross-check *internal* to the diffraction can fix it — not a rotation series, not agreement with a second code on the same calibration. | Metrology from outside the pattern: a **surveyed rotation-axis direction** (cheapest, and nearly fully informative when the axis is ⊥ beam), a **surveyed detector translation**, a knife-edge on a surveyed lab axis, or a plumb/fiducial reading of the panel column direction. **Sample translation will not work** — the source is the beam–sample intersection and the beam is lab-fixed. |
+| **Detector handedness** (readout row direction vs the panel's own axis) | **not recoverable from the pattern** | measured at TPS 21A: with the tilts zeroed a row-mirror about the PONI is exact to **6.7e-16** in q̂; at the real −0.388°/+0.308° tilts it breaks only linearly, and on real data both parities index **identically** — 46 reflections each, **0.42 vs 0.43 px** median | The **sense** of any rotation axis, and absolute orientation. Symmetry-reduced misorientation *angles* survive (the mirror conjugates them by point-group operations); axes do not. | Metrology, exactly as for the beam azimuth: the station's own detector drawing, a χ or azimuth sign convention, or a surveyed panel direction. A `tth` annotation constrains the COLUMN direction only — the parity is the ROW direction. |
 
 **Consequence worth stating on any report:** every angle this pipeline produces is relative
 to an instrument frame until the surface normal is supplied. On sampleH that distinction turned
 a meaningless "69.7° from Z" into "**c-axis avoids the growth direction by 8×**".
+
+**A near-gauge is more dangerous than a gauge.** The beam azimuth (row 5) is exactly
+unmeasurable and everyone treats it that way. Handedness is *nearly* unmeasurable — a
+synthetic test with the orientation held to the 24 symmetry images makes it look decidable at
+~34 px — and a free 100M-orientation search absorbs almost all of it. Measure a claimed
+discriminator against the search the pipeline actually runs, not against a constrained one.
 
 **And the instrument frame itself is only fixed up to a rotation about the beam** (row 5).
 Relative quantities — misorientation, texture, grain boundaries, a rotation series — are

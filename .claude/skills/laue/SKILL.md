@@ -7,9 +7,12 @@ description: >-
   a measured null, and report. Use when asked to index, analyse or diagnose a
   Laue / polychromatic / white-beam microdiffraction scan, when handed a raster
   of Laue frames, or when a Laue grain map, orientation or correlation looks
-  wrong. Covers both REFLECTION geometry (34-ID-E, panel edge-on above the
-  sample) and TRANSMISSION geometry (16-BM-D / HPCAT, panel downstream and
-  centred near the direct beam), through the LaueMatching chain.
+  wrong. Covers both REFLECTION geometry (34-ID-E and TPS 21A, panel edge-on
+  above the sample) and TRANSMISSION geometry (16-BM-D / HPCAT, panel
+  downstream and centred near the direct beam), through the LaueMatching chain,
+  including converting an XMAS detector calibration to the pose the indexer
+  wants. Detector handedness is NOT recoverable from a Laue pattern and is
+  gated, not delivered.
 ---
 
 # Laue microdiffraction
@@ -51,20 +54,38 @@ report success. `laue-index --version`.
 The spine opens with a scope table. Establish this before anything else, because it changes
 where the pattern sits on the panel and therefore what every downstream assumption means:
 
-- **Reflection** (34-ID-E) — panel edge-on above the sample, pattern runs vertically.
+- **Reflection** (34-ID-E, TPS 21A) — panel edge-on above the sample, pattern runs vertically.
 - **Transmission** (16-BM-D) — panel downstream, pattern radial about the beam, and the
   **direct beam is not at the point of normal incidence**: at 30° tilt they were 751 px
   apart. See `LAB_NOTEBOOK_16BMD_Si.md`.
 
 The forward model is identical for both. Everything built *around* it is not.
 
+**Calibrated in XMAS rather than a geoN XML?** `laue_index.xmas` converts it —
+`xmas_to_laue(XmasCalibration(...))` — and `xmas_candidates()` enumerates the 32
+physically distinct poses for the indexer to discriminate. Do not pick one by argument:
+at TPS 21A six of eight candidate mountings returned `Initial solutions: 0` and the
+station's own detector drawing independently selected the survivor. Three traps the
+converter encodes so you do not have to rediscover them: the XMAS pixel origin counts
+from the far end of the long axis and is 1-based, `P` is the *inverse* of the projection
+rather than a fit, and `R_Array` is **radians** however loudly `GenerateHKLs --help` says
+degrees.
+
 ## Five things to know before you start
 
-0. **Nothing you can measure inside a Laue pattern fixes the rotation about the beam.** It is
+0. **Nothing you can measure inside a Laue pattern fixes the rotation about the beam, or the
+   detector's handedness.** The rotation about the beam is
    an exact gauge freedom — measured at φ = 90°, no predicted pixel moves by more than
    2.3e-13 px and no energy changes at all. Relative quantities are fine; anything absolute
    needs metrology from outside the pattern. Agreement with a second code on the same
    calibration does **not** count. This was missed twice in one day.
+
+   **Handedness is the same class and is worse, because it looks decidable.** With the
+   detector tilts zeroed a readout row-mirror is exact to 6.7e-16 in q̂; nonzero tilts break
+   it only linearly, and a synthetic test that holds the orientation to the 24 symmetry
+   images makes it look resolvable at ~34 px. On real data both parities index identically
+   — 46 reflections, 0.42 vs 0.43 px. Misorientation *angles* survive a wrong choice;
+   rotation *axes* and absolute orientations do not. `ENVELOPE.md` §1 carries the row.
 
 ## Four more
 
@@ -96,9 +117,15 @@ lever. The sharpest entry: a detector artefact at a fixed position reproduces pe
 frame to frame, so **persistence cannot separate it from a real reflection**. Test in
 orientation space instead.
 
-Before re-arguing anything, read the lab notebook for your geometry — `LAB_NOTEBOOK.md` §3b
-in particular, where the substrate/deposit direction flipped several times before
-stage-invariance settled it.
+Before re-arguing anything, read the lab notebook for your geometry:
+
+- `LAB_NOTEBOOK.md` §3b — where the substrate/deposit direction flipped several times
+  before stage-invariance settled it.
+- `LAB_NOTEBOOK_16BMD_Si.md` §4 — read before quoting any agreement number.
+- `LAB_NOTEBOOK_TPS21A.md` — read before assuming a phase that indexes to **nothing** is a
+  code fault. At TPS 21A it was the energy window, measured: the phase's six strongest
+  reflections sat below the detector's discriminator, and no parameter could recover them.
+  §3a is the one to read before claiming any pattern settles detector handedness.
 
 ## Sibling doc sets
 
