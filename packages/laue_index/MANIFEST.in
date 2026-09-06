@@ -6,6 +6,11 @@ include pyproject.toml
 include laue_index/README.md
 
 recursive-include c_src *.c *.h
+# The CUDA sub-project and the architecture helper. Explicit, not left to
+# scikit-build-core's git-tracked-files default: a pip user who does not get
+# cmake/cuda/CMakeLists.txt gets no GPU binaries, silently, and the CPU build
+# succeeds so nothing looks wrong.
+recursive-include cmake *.cmake CMakeLists.txt
 recursive-include tests *.py
 recursive-include tests/fixtures *.txt *.npz
 recursive-include tests/golden *.json

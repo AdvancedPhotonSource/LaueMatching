@@ -7,6 +7,29 @@ each package's `pyproject.toml` for its current version.
 
 ## v2.2 (unreleased)
 
+- **The CUDA binaries are now built BY DEFAULT, and the install records what it
+  did.** Auto-detecting nvcc used to be rejected for a good reason: once a CUDA
+  target is added to a project, CMake cannot try-and-continue, so a toolkit that
+  cannot compile these sources killed the whole `pip install` and took the
+  working CPU binary with it. The CUDA targets now live in their own project
+  under `cmake/cuda/`, configured and built through `execute_process()`, so a
+  failure is an exit code the parent catches — the CPU binary cannot be
+  affected, by construction. `LAUEMATCHING_CUDA` becomes a tri-state: unset
+  attempts and degrades with a warning, `0` skips, and **`1` now REQUIRES** the
+  GPU build and fails the install if it cannot be done (previously `1` only
+  meant "try", and degraded silently).
+- **`laue-index doctor`, and a build manifest behind it.** Every install writes
+  `laue_index/_build_info.json`: which binaries were built, by which nvcc, for
+  which architectures, the SHA-256 of the compiled sources, and — when the CUDA
+  binaries were not built — *why not*. `doctor` reads it and catches the two
+  states that are otherwise silent: a CUDA device present with no GPU binary
+  (measured 2026-09-06: `pip install --upgrade` removed the GPU binaries from
+  two beamline environments and nothing said so), and a GPU binary that cannot
+  launch on the card in front of it, which prints `Unique Orientations: 0` and
+  exits 0. `--json` for deployment checks. The recorded source hash is what
+  lets a binary salvaged from a previous install be shown equivalent to what
+  this install would have produced, rather than assumed to be.
+
 - **`laue_index.xmas`: XMAS detector calibrations to `P_Array` / `R_Array`.**
   XMAS describes a detector with a distance, a "center channel" pixel and
   roll/pitch/yaw; LaueMatching wants a translation in metres and a rotation

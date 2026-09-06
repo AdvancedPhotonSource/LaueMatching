@@ -250,6 +250,11 @@ def _cmd_fetch_db(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_doctor(args) -> int:
+    from .doctor import main as doctor_main
+    return doctor_main(["--json"] if getattr(args, "as_json", False) else [])
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     # Pass `run` straight through: argparse would eat --help and RunImage's own
@@ -302,6 +307,14 @@ def main(argv: list[str] | None = None) -> int:
     pf.add_argument("--nr-px-y", dest="nr_px_y", type=int, default=2048)
     pf.add_argument("--out", default="", help="write filtered solutions here")
     pf.set_defaults(func=_cmd_filter)
+
+    pd2 = sub.add_parser(
+        "doctor",
+        help="can this install do what it will be asked to? binaries, build "
+             "manifest, and whether the GPU binary can launch on this card")
+    pd2.add_argument("--json", action="store_true", dest="as_json",
+                     help="machine-readable, for deployment checks")
+    pd2.set_defaults(func=_cmd_doctor)
 
     pc = sub.add_parser(
         "calibrate",

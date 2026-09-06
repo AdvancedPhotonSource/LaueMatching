@@ -112,12 +112,16 @@ def test_require_binary_returns_the_path_when_it_is_there(tmp_path, monkeypatch)
 
 
 def test_a_missing_cuda_binary_says_how_to_get_one(tmp_path, monkeypatch):
-    """The CUDA build is opt-in, so 'not found' is not the whole story."""
+    """Since 0.6.0 the CUDA build is ATTEMPTED by default, so a missing GPU
+    binary means no nvcc at install time or a failed CUDA build -- and the
+    message has to send the reader at the thing that can tell them which."""
     monkeypatch.setattr(indexer, "_candidates",
                         lambda name, repo_root=None: [tmp_path / "nope" / name])
     with pytest.raises(indexer.BinaryUnavailableError) as e:
         indexer.require_binary("STREAM")
-    assert "LAUEMATCHING_CUDA=1" in str(e.value)
+    msg = str(e.value)
+    assert "doctor" in msg
+    assert "LAUEMATCHING_CUDA=1" in msg
 
 
 def test_run_indexer_missing_binary_names_where_it_looked(tmp_path, monkeypatch):
