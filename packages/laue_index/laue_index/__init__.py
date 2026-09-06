@@ -20,9 +20,14 @@ from .postprocess import PostProcessor, PostProcessResult
 from .calibrate import (
     Anchor, CalibrationResult, DetectorSpec, calibrate,
 )
+from .xmas import (
+    LaueGeometry, XmasCalibration, convert as xmas_to_laue,
+    enumerate_candidates as xmas_candidates,
+)
 
 __all__ = [
     "Solution", "SolutionFormat", "SOLUTION_FORMATS", "parse_solutions",
     "PostProcessor", "PostProcessResult",
     "Anchor", "CalibrationResult", "DetectorSpec", "calibrate",
+    "XmasCalibration", "LaueGeometry", "xmas_to_laue", "xmas_candidates",
 ]

@@ -7,6 +7,23 @@ each package's `pyproject.toml` for its current version.
 
 ## v2.2 (unreleased)
 
+- **`laue_index.xmas`: XMAS detector calibrations to `P_Array` / `R_Array`.**
+  XMAS describes a detector with a distance, a "center channel" pixel and
+  roll/pitch/yaw; LaueMatching wants a translation in metres and a rotation
+  vector in radians. Nothing bridged the two, so an XMAS-calibrated dataset
+  could not be indexed without hand-deriving the pose — and that derivation has
+  three traps that each yield a confident wrong answer rather than a failure:
+  the pixel origin (XMAS x counts from the far end of the long axis and its y is
+  1-based), `P` being the *inverse* of the projection rather than a fit, and
+  `R_Array` being **radians** where `GenerateHKLs --help` and
+  `params_alpha.template.txt` both say degrees. `enumerate_candidates` yields the
+  32 physically distinct poses for the indexer to discriminate rather than
+  picking one, having first removed the 180°-about-beam duplicates (an exact
+  gauge, verified at 2.0e-12 px). Detector handedness is carried as
+  `LaueGeometry.row_parity` because it cannot live in a proper rotation matrix.
+  Validated at TPS 21A (NSRRC): 46 Si(100) reflections at **0.42 px** median
+  residual, and 6 of 8 candidate mounts return `Initial solutions: 0`.
+
 - **`MinSpotIntensity`: a floor on what counts as a matched spot.** The match
   test was a bare `image[px] > 0`, so a pixel carrying 4e-06 counted as evidence
   for a candidate orientation. The objective is `NMatches * sqrt(Intensity)` —
