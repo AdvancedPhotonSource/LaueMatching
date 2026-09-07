@@ -204,23 +204,32 @@ jobs:
         print('LAUEMATCHING_CUDA=1 -> mode', m)
         "
 
-    - name: A CUDA build that fails does NOT fail the install
-      # The whole point of the isolated sub-project. Break the CUDA compiler and
-      # the CPU binary must still ship, exit 0, with the manifest saying why.
+    - name: A broken CUDA toolchain does NOT fail the install
+      # The claim the isolated sub-project exists to defend. CUDACXX reaches the
+      # child: it is configured through execute_process(), which inherits the
+      # environment, whereas --config-settings=cmake.define lands on the PARENT
+      # cache and the child is passed only LAUE_SRC, CMAKE_INSTALL_PREFIX and
+      # CMAKE_BUILD_TYPE -- an earlier version of this step used the define and
+      # CUDA built normally, because nothing had been overridden at all.
+      #
+      # This exercises the check_language branch (compiler unusable), not the
+      # sub-build-fails branch. Inducing the latter needs an nvcc that passes a
+      # trivial try_compile and then fails on the real .cu, which tests the
+      # sabotage more than the package.
       run: |
         python3 -m venv /tmp/venv_deg
         . /tmp/venv_deg/bin/activate
         pip install --upgrade pip
-        pip install --config-settings=cmake.define.CMAKE_CUDA_COMPILER=/bin/false \
-          /tmp/dist/*.tar.gz \
+        CUDACXX=/bin/false pip install /tmp/dist/*.tar.gz \
           || { echo "::error::a broken CUDA toolchain failed the whole install"; exit 1; }
         BIN=$(python -c "import laue_index, os; print(os.path.join(os.path.dirname(laue_index.__file__), 'bin'))")
         test -x "$BIN/LaueMatchingCPU" || { echo "::error::CPU binary lost to a CUDA failure"; exit 1; }
         python -c "
         from laue_index.buildmeta import build_info
         c = build_info()['cuda']
-        assert not c['built'], c
-        print('degraded cleanly:', c['reason'][:80])
+        assert not c['built'], f'CUDACXX=/bin/false still built CUDA: {c}'
+        assert c['reason'], 'a skipped CUDA build must record WHY'
+        print('degraded cleanly:', c['reason'][:90])
         "
 
     - name: The installed package can actually run something
