@@ -7,6 +7,19 @@ each package's `pyproject.toml` for its current version.
 
 ## v2.2 (unreleased)
 
+- **`LAUEMATCHING_CUDA=1` means ATTEMPT again (0.6.1).** 0.6.0 redefined it to
+  "require", which was a gratuitous break: every README and script from the
+  opt-in era says `LAUEMATCHING_CUDA=1 pip install laue-index`, so on any
+  machine without nvcc the install began *failing* where it used to succeed
+  CPU-only. The new capability moves to a new name, `LAUEMATCHING_CUDA=require`.
+  Values now: unset or `1` attempt and degrade with a warning, `0` skips,
+  `require` fails the install if the GPU binaries cannot be built.
+  The `pip-cuda` CI job is updated to the post-0.6.0 contract it had been
+  pinning the opposite of — a plain install in a CUDA container must now
+  *produce* the GPU binaries — and gains two steps: `=0` stays CPU-only, and
+  `=1` with nvcc hidden must still succeed, which is exactly the case 0.6.0
+  broke.
+
 - **The CUDA binaries are now built BY DEFAULT, and the install records what it
   did.** Auto-detecting nvcc used to be rejected for a good reason: once a CUDA
   target is added to a project, CMake cannot try-and-continue, so a toolkit that

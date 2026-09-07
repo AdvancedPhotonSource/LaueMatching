@@ -121,7 +121,7 @@ def test_a_missing_cuda_binary_says_how_to_get_one(tmp_path, monkeypatch):
         indexer.require_binary("STREAM")
     msg = str(e.value)
     assert "doctor" in msg
-    assert "LAUEMATCHING_CUDA=1" in msg
+    assert "LAUEMATCHING_CUDA=require" in msg
 
 
 def test_run_indexer_missing_binary_names_where_it_looked(tmp_path, monkeypatch):

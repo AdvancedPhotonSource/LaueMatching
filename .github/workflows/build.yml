@@ -126,13 +126,13 @@ jobs:
         tar -tzf /tmp/dist/*.tar.gz | grep -E 'c_src/.*\.cu$' || {
           echo "::error::the sdist carries no CUDA sources"; exit 1; }
 
-    - name: Opt-in build produces the GPU binaries
+    - name: LAUEMATCHING_CUDA=require produces the GPU binaries
       # No GPU in the runner, so the architecture probe finds nothing and falls
       # back to `all-major` -- which is the point: it must not need a card, and
       # it must not name an architecture this toolkit dropped.
       run: |
         . /tmp/venv/bin/activate
-        LAUEMATCHING_CUDA=1 pip install /tmp/dist/*.tar.gz
+        LAUEMATCHING_CUDA=require pip install /tmp/dist/*.tar.gz
         BIN=$(python -c "import laue_index, os; print(os.path.join(os.path.dirname(laue_index.__file__), 'bin'))")
         ls -l "$BIN"
         for b in LaueMatchingCPU LaueMatchingGPU LaueMatchingGPUStream; do
@@ -145,7 +145,13 @@ jobs:
         print("GPU binary at", indexer.binary_path("GPU"))
         PY
 
-    - name: A plain install stays CPU-only
+    - name: A plain install BUILDS the GPU binaries when nvcc is present
+      # Since 0.6.0 the CUDA build is attempted by default, in an isolated
+      # sub-project that cannot take the CPU binary down if it fails. This step
+      # used to assert the opposite ("a plain install stays CPU-only") and is
+      # the contract that changed -- it is kept, inverted, rather than deleted,
+      # because "does a plain install in a CUDA container get a GPU binary" is
+      # exactly the behaviour worth pinning.
       run: |
         python3 -m venv /tmp/venv_plain
         . /tmp/venv_plain/bin/activate
@@ -153,10 +159,45 @@ jobs:
         pip install /tmp/dist/*.tar.gz
         BIN=$(python -c "import laue_index, os; print(os.path.join(os.path.dirname(laue_index.__file__), 'bin'))")
         test -x "$BIN/LaueMatchingCPU" || { echo "::error::CPU binary missing"; exit 1; }
+        for b in LaueMatchingGPU LaueMatchingGPUStream; do
+          test -x "$BIN/$b" || { echo "::error::plain install did not build $b, but nvcc is present"; exit 1; }
+        done
+        python -c "
+        from laue_index.buildmeta import build_info
+        i = build_info(); c = i['cuda']
+        assert i['available'], 'no build manifest'
+        assert c['mode'] == 'auto' and c['built'], c
+        assert c['architectures'], 'no architectures recorded'
+        print('manifest:', c['mode'], c['nvcc_version'], c['architectures'][:60])
+        "
+
+    - name: LAUEMATCHING_CUDA=0 stays CPU-only
+      run: |
+        python3 -m venv /tmp/venv_off
+        . /tmp/venv_off/bin/activate
+        pip install --upgrade pip
+        LAUEMATCHING_CUDA=0 pip install /tmp/dist/*.tar.gz
+        BIN=$(python -c "import laue_index, os; print(os.path.join(os.path.dirname(laue_index.__file__), 'bin'))")
+        test -x "$BIN/LaueMatchingCPU" || { echo "::error::CPU binary missing"; exit 1; }
         if [ -e "$BIN/LaueMatchingGPU" ]; then
-          echo "::error::a plain install built the GPU binary -- the opt-in has become an opt-out"
-          exit 1
+          echo "::error::LAUEMATCHING_CUDA=0 still built the GPU binary"; exit 1
         fi
+
+    - name: LAUEMATCHING_CUDA=1 still means ATTEMPT, and never fails an install
+      # Backwards compatibility. Every README and script from the opt-in era
+      # says `LAUEMATCHING_CUDA=1`; 0.6.0 briefly redefined it to "require" and
+      # so made those installs FAIL on any machine without nvcc. Pinned here
+      # with nvcc hidden, which is the case that broke.
+      run: |
+        python3 -m venv /tmp/venv_one
+        . /tmp/venv_one/bin/activate
+        pip install --upgrade pip
+        env PATH=/usr/bin:/bin CUDACXX= CUDA_PATH= \
+          LAUEMATCHING_CUDA=1 pip install /tmp/dist/*.tar.gz \
+          || { echo "::error::LAUEMATCHING_CUDA=1 failed the install without nvcc -- it must only ATTEMPT"; exit 1; }
+        BIN=$(python -c "import laue_index, os; print(os.path.join(os.path.dirname(laue_index.__file__), 'bin'))")
+        test -x "$BIN/LaueMatchingCPU" || { echo "::error::CPU binary missing"; exit 1; }
+        laue-index doctor || true
 
     - name: The installed package can actually run something
       # Binaries without an orchestrator index nothing. The pipeline modules

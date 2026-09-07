@@ -69,13 +69,18 @@ message(STATUS "laue_index: building LaueMatchingCPU from ${LAUE_SRC}")
 
 # ── CUDA: attempted BY DEFAULT, in an isolated sub-build ────────────────────
 #
-#   (unset)                 attempt if nvcc is present; warn and continue if it
-#                           cannot build. This is the default.
-#   LAUEMATCHING_CUDA=0     skip entirely -- fast installs, CI.
-#   LAUEMATCHING_CUDA=1     REQUIRED. Fail the install if the GPU binaries
-#                           cannot be built. What a beamline deployment wants:
-#                           previously `=1` only meant "try", and degraded to
-#                           CPU-only with a warning nobody reads.
+#   (unset)                   attempt if nvcc is present; warn and continue if
+#                             it cannot build. This is the default.
+#   LAUEMATCHING_CUDA=0       skip entirely -- fast installs, CI.
+#   LAUEMATCHING_CUDA=1       attempt, same as unset.
+#   LAUEMATCHING_CUDA=require FAIL the install if the GPU binaries cannot be
+#                             built. What a beamline deployment wants.
+#
+# `=1` MEANS ATTEMPT, NOT REQUIRE. 0.6.0 briefly redefined it to "require" and
+# that was a gratuitous break: every README and script since the opt-in era says
+# `LAUEMATCHING_CUDA=1 pip install laue-index`, so on any machine without nvcc
+# the install started failing where it used to succeed CPU-only. The new
+# capability gets a new name instead.
 #
 # Auto-detect used to be rejected because "once a target is added CMake cannot
 # try-and-continue: the whole pip install dies and takes the working CPU binary
@@ -101,10 +106,14 @@ if(DEFINED LAUE_CUDA_REQUIRE)  # -Dcmake.define.LAUE_CUDA_REQUIRE=ON/OFF via pip
     set(LAUE_CUDA_MODE "off")
   endif()
 elseif(NOT _laue_cuda_env STREQUAL "")
-  if(_laue_cuda_env STREQUAL "0")
+  string(TOLOWER "${_laue_cuda_env}" _cuda_env_lc)
+  if(_cuda_env_lc STREQUAL "0" OR _cuda_env_lc STREQUAL "off"
+     OR _cuda_env_lc STREQUAL "false" OR _cuda_env_lc STREQUAL "no")
     set(LAUE_CUDA_MODE "off")
-  else()
+  elseif(_cuda_env_lc STREQUAL "require" OR _cuda_env_lc STREQUAL "required")
     set(LAUE_CUDA_MODE "required")
+  else()
+    set(LAUE_CUDA_MODE "auto")   # includes the historical `=1`
   endif()
 endif()
 
@@ -125,9 +134,9 @@ else()
     set(_cuda_reason "skipped: no CUDA compiler (nvcc) found")
     if(LAUE_CUDA_MODE STREQUAL "required")
       message(FATAL_ERROR
-        "LAUEMATCHING_CUDA=1 was requested but no CUDA compiler was found.\n"
-        "Install the CUDA toolkit (nvcc) and reinstall, or set LAUEMATCHING_CUDA=0\n"
-        "to build the CPU binary only.")
+        "LAUEMATCHING_CUDA=require was set but no CUDA compiler was found.\n"
+        "Install the CUDA toolkit (nvcc) and reinstall, or drop the variable to\n"
+        "build whatever this machine can (CPU only, here).")
     endif()
     message(STATUS "laue_index: no nvcc; building the CPU binary only")
   else()
@@ -186,7 +195,7 @@ else()
       set(_cuda_reason "failed: ${_err_short}")
       if(LAUE_CUDA_MODE STREQUAL "required")
         message(FATAL_ERROR
-          "LAUEMATCHING_CUDA=1 was requested but the CUDA build FAILED.\n${_err}")
+          "LAUEMATCHING_CUDA=require was set but the CUDA build FAILED.\n${_err}")
       endif()
       message(WARNING
         "laue_index: the CUDA build failed; installing the CPU binary only.\n"

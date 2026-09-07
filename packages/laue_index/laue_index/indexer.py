@@ -136,7 +136,7 @@ def _unavailable_message(compute_type: str, do_forward: bool,
             "The CUDA binaries are built automatically when nvcc is present at "
             "install time, so this install was made without one, or the CUDA build "
             "failed. `laue-index doctor` says which, and what this host can run. "
-            "To require them: LAUEMATCHING_CUDA=1 pip install --force-reinstall "
+            "To require them: LAUEMATCHING_CUDA=require pip install --force-reinstall "
             "--no-deps laue-index (fails loudly if it cannot).")
     return "\n".join(lines)
 

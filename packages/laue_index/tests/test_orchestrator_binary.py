@@ -50,8 +50,9 @@ def test_the_error_names_every_path_and_the_escape_hatch(tmp_path, monkeypatch):
     assert str(missing) in msg, "must say where it looked"
     assert indexer.BINARY_ENV in msg, "must say how to override"
     assert "doctor" in msg, "must point at the one command that diagnoses it"
-    assert "LAUEMATCHING_CUDA=1" in msg, (
-        "must say how to REQUIRE the CUDA build -- since 0.6.0 it is attempted "
-        "by default, so =1 means 'fail if you cannot', not 'opt in'")
+    assert "LAUEMATCHING_CUDA=require" in msg, (
+        "must say how to REQUIRE the CUDA build. Since 0.6.0 it is attempted by "
+        "default; `=1` keeps its historical 'attempt' meaning so existing "
+        "scripts do not start failing, and `=require` is the new capability")
     assert "cmake --build build/" not in msg, (
         "the old advice was useless to a pip user, who has no build directory")
