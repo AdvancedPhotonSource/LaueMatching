@@ -183,21 +183,45 @@ jobs:
           echo "::error::LAUEMATCHING_CUDA=0 still built the GPU binary"; exit 1
         fi
 
-    - name: LAUEMATCHING_CUDA=1 still means ATTEMPT, and never fails an install
-      # Backwards compatibility. Every README and script from the opt-in era
-      # says `LAUEMATCHING_CUDA=1`; 0.6.0 briefly redefined it to "require" and
-      # so made those installs FAIL on any machine without nvcc. Pinned here
-      # with nvcc hidden, which is the case that broke.
+    - name: LAUEMATCHING_CUDA=1 maps to ATTEMPT, not REQUIRE
+      # 0.6.0 redefined `=1` as "require", so installs on machines without nvcc
+      # started failing where they had succeeded CPU-only -- every README from
+      # the opt-in era tells people to type exactly that. Assert the MODE the
+      # manifest records rather than trying to hide nvcc from the build: an
+      # earlier version of this step set PATH=/usr/bin:/bin to do that, which
+      # also hid the venv, so pip fell back to the system interpreter and died
+      # with PEP 668 externally-managed-environment -- a step failing for its
+      # own reasons and blaming the package.
       run: |
         python3 -m venv /tmp/venv_one
         . /tmp/venv_one/bin/activate
         pip install --upgrade pip
-        env PATH=/usr/bin:/bin CUDACXX= CUDA_PATH= \
-          LAUEMATCHING_CUDA=1 pip install /tmp/dist/*.tar.gz \
-          || { echo "::error::LAUEMATCHING_CUDA=1 failed the install without nvcc -- it must only ATTEMPT"; exit 1; }
+        LAUEMATCHING_CUDA=1 pip install /tmp/dist/*.tar.gz
+        python -c "
+        from laue_index.buildmeta import build_info
+        m = build_info()['cuda']['mode']
+        assert m == 'auto', f'=1 must mean attempt; manifest says mode={m!r}'
+        print('LAUEMATCHING_CUDA=1 -> mode', m)
+        "
+
+    - name: A CUDA build that fails does NOT fail the install
+      # The whole point of the isolated sub-project. Break the CUDA compiler and
+      # the CPU binary must still ship, exit 0, with the manifest saying why.
+      run: |
+        python3 -m venv /tmp/venv_deg
+        . /tmp/venv_deg/bin/activate
+        pip install --upgrade pip
+        pip install --config-settings=cmake.define.CMAKE_CUDA_COMPILER=/bin/false \
+          /tmp/dist/*.tar.gz \
+          || { echo "::error::a broken CUDA toolchain failed the whole install"; exit 1; }
         BIN=$(python -c "import laue_index, os; print(os.path.join(os.path.dirname(laue_index.__file__), 'bin'))")
-        test -x "$BIN/LaueMatchingCPU" || { echo "::error::CPU binary missing"; exit 1; }
-        laue-index doctor || true
+        test -x "$BIN/LaueMatchingCPU" || { echo "::error::CPU binary lost to a CUDA failure"; exit 1; }
+        python -c "
+        from laue_index.buildmeta import build_info
+        c = build_info()['cuda']
+        assert not c['built'], c
+        print('degraded cleanly:', c['reason'][:80])
+        "
 
     - name: The installed package can actually run something
       # Binaries without an orchestrator index nothing. The pipeline modules
