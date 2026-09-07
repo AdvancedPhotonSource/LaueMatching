@@ -72,6 +72,21 @@ and are not in the parameter files either. Until they are filled in, a report **
 propose changing exposure, step size, or total dwell — an undeclared bound produces no
 counterfactual, by design.
 
+## 2b. In scope for the station, out of reach for the PHASE
+
+A station being covered does not mean every material at it can be indexed. Whether a phase
+is reachable is set by how many of its reflections land on the panel inside the recorded
+energy window, and a small unit cell can put all the strong ones below the detector's
+discriminator. Measured at TPS 21A, same geometry and same frames: Si gets 47
+reflections per orientation and Ti α gets 52, while **Ni gets 18.6, all weak high-index**,
+because (111) through (400) sit below the 8.74 keV threshold at every 2θ the panel covers.
+Si and Ti indexed; **Ni did not** — its accepted solutions explained a median 7.8 % of each
+frame's reflection intensity and were withdrawn.
+
+**Count this before promising a phase**, not after: a few hundred random orientations
+projected through the geometry, histogrammed by energy, takes a minute. If the count inside
+the window is near `MinNrSpots`, say so up front.
+
 ## 3. Intrinsic — the sample or the physics forbids it
 
 No configuration helps.

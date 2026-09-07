@@ -1,9 +1,8 @@
 # Lab notebook — TPS 21A (NSRRC) Laue
 
 Campaign started 2026-09-06. Question from TPS beamline staff: **can LaueMatching
-index these patterns?** Data: `A5_fine` (Ni, 484 frames) and `Nb1_3` (Ti α + β, 961 frames), plus one Si(100)
-frame. **Three separate beamtimes** — 2023-06, 2024-10 and 2025-04 — so the Si frame
-calibrates neither scan.
+index these patterns?** Data: `A5_fine` (Ni, 484 frames, 2024-10-24) and `Nb1_3`
+(Ti α + β, 961 frames, 2023-06-06), plus one Si(100) frame (2025-04-09).
 
 Handbook = [`README.md`](README.md). This file is the campaign
 record: what was found, including what turned out to be wrong.
@@ -23,7 +22,7 @@ record: what was found, including what turned out to be wrong.
 
 | 7 | **LaueMatching indexes TPS 21A patterns.** Si(100): 46 reflections, hkl-assigned, 8.87-25.91 keV, **median residual 0.42 px** (0.0079 deg). | established, see §5a |
 | 8 | The geometry convention is `mount=34IDE`, settled **three independent ways**. Handedness (row parity) is **NOT** settled and cannot be, from these patterns. | see §5a, §3a-correction |
-| 9 | The search-adjusted null is **0 solutions** for Si and Ni, but **8 matched spots** for the dense Ti frames — so `MinNrSpots = 8` is exactly ON the Ti null and too loose. | established, see §5b, §5h |
+| 9 | A search-adjusted null gates CHANCE, not REDUNDANCY — see the §5c retraction. It is **0 solutions** for Si and Ni, but **8 matched spots** for the dense Ti frames — so `MinNrSpots = 8` is exactly ON the Ti null and too loose. | established, see §5b, §5h |
 | 10 | A5's CPU/GPU difference is **marginality at the ±1-spot level**, not a search fault: both paths return the same orientation to 0.0185°. | established, see §5g |
 
 ---
@@ -31,10 +30,10 @@ record: what was found, including what turned out to be wrong.
 ## 2. Operational
 
 - Work: `$ANALYSIS/tps21a_laue/` (analysis host), `$SCRATCH/tps21a_laue/` (compute host).
-- Python: the beamline `lauematching` env — laue-index 0.5.0, with `LaueMatchingCPU`,
-  `LaueMatchingGPU` and `LaueMatchingGPUStream`. A general shared env may carry the
-  **CPU binary only**; ask `indexer.binary_path()`, never `ls bin/`.
-- Orientation DB: the shared `100MilOrients.bin` beside the canonical checkout.
+- Python: `/home/beams/EPIX34ID/conda-envs/lauematching/bin/python` — laue-index 0.4.0,
+  has `LaueMatchingCPU` + `LaueMatchingGPU` + `LaueMatchingGPUStream`.
+  The S1IDUSER shared env has the **CPU binary only**.
+- Orientation DB: `/home/beams/EPIX34ID/opt/LaueMatching_canonical/100MilOrients.bin`.
 - Detector traps, measured on the raw frames:
   - negative sentinels (−1, −2) over **8.46 %** of the panel (module gaps)
   - **one module suppressed to 7.3 %**: rows 0–194 × cols 988–1474, median 9 counts
@@ -264,111 +263,82 @@ the spot positions scrambled (and never onto a module gap):
 
 Zero. Every reported solution clears it.
 
-### 5c. The Si calibrant is not a single crystal
+### 5c. RETRACTED — "the Si calibrant is not a single crystal"
 
-Pairwise cubic disorientation between the four accepted solutions:
+**This section claimed the Si(100) piece carried three Σ3 twins. It does not. It is one
+crystal, and the claim was wrong for a reason worth keeping.**
 
-|  | sol1 (46) | sol2 (18) | sol3 (20) | sol4 (17) |
-|---|---|---|---|---|
-| sol1 | 0.014° | 59.990° | 59.967° | 59.987° |
-| sol2 | | 0.022° | 38.904° | 38.951° |
-| sol3 | | | 0.015° | 38.938° |
+The indexer returns four solutions, at 60.0° (Σ3) from the first and 38.9° (Σ9) from each
+other. The obvious suspicion was a coincidence-site artifact: a Σ3-related orientation
+shares a third of the reciprocal lattice, so it re-explains ~46/3 ≈ 15 of the parent's
+spots for free, and 17–20 were observed. **I tested that, got "disjoint", and refuted it.
+The test was wrong.**
 
-60° = Σ3, 38.94° = Σ9 — a parent plus three Σ3-related orientations, mutually Σ9.
+It compared the sets of matched **PIXELS** in the indexer's `.bin`. That image is blurred:
+36 098 lit pixels in **50 connected components, 722 px per blob**. Two predicted spots
+20 px apart land on different *pixels* of the *same reflection*, and the test scored them
+as explaining different data. Redone at the level of the reflection:
 
-The obvious suspicion is a coincidence-site artifact: a Σ3-related orientation shares 1/3 of
-the parent's reciprocal lattice, so it would pick up ~1/3 of its spots for free, and 46/3 ≈ 15
-is close to the observed 17–20. **Tested and refuted** — the matched-pixel sets are essentially
-disjoint (shared with sol1: 0, 0 and 1 pixels out of 18, 20, 17). They explain *different*
-spots, and they clear the search-adjusted null. So the 2025 beamline-test Si piece really does
-carry Σ3 twins. It is used here only as a convention discriminator, so this changes nothing
-downstream — but it is not the clean single crystal the filename implies.
-
-### 5d. Ni indexes to nothing, and the cause is the energy window, not the code
-
-`Ti_alpha` on a Nb1_3 frame gives **95 initial solutions, 17 unique orientations**, and Si
-gives 83/7 — with the same binary, the same database and the same converted geometry. Ni on
-an A5 frame gives **0**. So the failure is specific to (Ni lattice × this energy window),
-not to the pipeline.
-
-**Measured cause.** Ni's cell is small, so its reflections sit at high energy in this
-geometry. Reflection energies across the panel's actual 2θ span (67°–111°):
-
-| hkl | d (nm) | E @ 2θ=67° | @ 90° | @ 111° | usable? |
-|---|---|---|---|---|---|
-| (111) | 0.2034 | 5.52 | 4.31 | 3.70 | **below the 8.74 keV discriminator everywhere** |
-| (200) | 0.1762 | 6.37 | 4.98 | 4.27 | below |
-| (220) | 0.1246 | 9.02 | 7.04 | 6.04 | below |
-| (311) | 0.1062 | 10.57 | 8.25 | 7.08 | below |
-| (222) | 0.1017 | 11.04 | 8.62 | 7.39 | below |
-| (400) | 0.0881 | 12.75 | 9.95 | 8.54 | below |
-| (331) | 0.0808 | 13.89 | 10.84 | 9.30 | first usable |
-
-**All six strongest FCC reflections are below the Pilatus threshold.** What survives is the
-weak high-index tail. Counting on-panel reflections over 200 random orientations:
-
-| energy band | reflections per orientation | share |
+| | shared with sol1 | |
 |---|---|---|
-| below 8.74 keV | 0.77 | 0.5 % |
-| **8.74 – 26 keV (declared window)** | **18.6** | **12 %** |
-| 26 – 40 keV | 50.0 | 33 % |
-| above 40 keV | 82.4 | 54 % |
+| sol2 | **18 of 18** | 1.00 |
+| sol3 | **20 of 20** | 1.00 |
+| sol4 | **17 of 17** | 1.00 |
+| union of all four | **46 blobs** | exactly sol1's set |
 
-So the declared window captures 12 % of what the panel could see, and the part it captures
-is the weak part. For comparison Si gets 47 per orientation and Ti α gets 52. Widening Elo
-from 8.74 to 6.0 keV adds **0.54** reflections per orientation — nothing; the discriminator
-is not the binding constraint, the *upper* limit is.
+They explain nothing the parent does not. The original suspicion was right and the
+refutation was the error.
 
-**RESULT: the energy window cannot be widened into anything. Measured, not argued.**
+**Two lessons, both general.**
 
-Full 484-frame runs at Ehi = 26 and Ehi = 45 keV, same geometry, same GPU path, each with
-its own hkl list and its own forward cache (verified distinct on disk, and the E45 config
-verified to carry `Ehi 45.0` and the 17260-line hkl list against E26's 3924):
+1. **Test redundancy at the level of the physical entity — a reflection — not pixels, and
+   not sub-regions.** Any unit finer than the thing being counted inflates uniqueness. This
+   is why the pipeline's own `--min-unique 2` did not filter these either: it counts
+   *watershed* labels, and watershed found **3540 regions** on a frame with 50 reflections,
+   so a redundant orientation clears a 2-unique-label gate trivially.
 
-| | Ehi = 26 keV | Ehi = 45 keV |
-|---|---|---|
-| voxels indexed | **135 / 484** | **135 / 484** |
-| frame set | — | **identical**, 0 differences either way |
-| NSpotsCalc per voxel | baseline | **+65.75** (min +63, max +67) |
-| NMatches per voxel | baseline | **−0.01** (min −1, max **+0**) |
+2. **A random-orientation null cannot gate a solution that is symmetry- or CSL-related to a
+   true one.** The scrambled-image null for this frame was **0 solutions**, and all three
+   artifacts cleared it — because they are not random draws. Clearing a random null shows a
+   solution is not chance; it says nothing about whether it is *independent* of another
+   accepted solution. Those need the unique-reflection test above.
 
-Adding ~66 predicted reflections per orientation above 26 keV produced **not one additional
-match, on any frame**. Those reflections are predicted and simply are not in the data.
+**Reach of the error.** Si is the worst case (1 of 4 survive) because there is only one
+crystal. On Nb1_3, measured over 5 frames, **49 of 67** orientations (73 %) have ≥3
+reflections no other accepted orientation explains — so the two-phase counts in §5i are
+inflated and need re-gating, but the qualitative structure is not in question.
 
-**So the declared 6–26 keV bandpass is honest**, and this is a direct measurement of it
-rather than a reading of the Condition file. Combined with the +0.54 reflections/orientation
-from dropping Elo 8.74 → 6.0, **neither end of the window is a usable analysis knob**: Ni's
-accessible set is 18.6 weak high-index reflections and that is all there is.
+### 5f. RETRACTED — "A5_fine / Ni: a 50 nm-resolution lattice-rotation map"
 
-The consequence for TPS is a beamline statement, not an analysis one. Ni's strong
-reflections — (111) at 3.7–5.5 keV, (200) at 4.3–6.4 keV — sit below *both* the 8.74 keV
-discriminator and the beam's own 6 keV lower limit. Reaching them needs a lower threshold
-AND flux below 6 keV, or a different detector distance; it cannot be recovered from these
-frames.
+**The indexed orientation field is withdrawn. The gradient measured from the raw frames is
+not.** Across all 135 frames that produced an accepted Ni orientation:
 
-**Superseded note — the frame-242 arm of this test was uninformative.** At Ehi = 45 keV
-with 17260 hkls the frame still returns `Initial solutions: 0, Unique Orientations: 0`, and
-the scrambled control is 0 at both 26 and 45 keV so the gate is clean either way.
+| | |
+|---|---|
+| median share of blob intensity the solution explains | **7.8 %** (mean 21.9 %, max 73.1 %) |
+| frames explaining under 10 % of the intensity | **88 / 135** |
+| of the 5 brightest blobs, how many explained | **median 1**; 36 frames explain **0**, one frame explains 5 |
 
-**But frame 242 cannot answer the question**, because it fails at *both* windows — a
-comparison between two zeros carries no information. I picked it because it was the cache
-build frame, not because it was near the decision boundary; that was the wrong choice. The
-question "does widening the window recover voxels?" is answered by the **scan rate**, and a
-full 484-frame run at Ehi = 45 is queued against the measured 135/484 baseline at Ehi = 26.
+Frame 132 is typical: 55 blobs, 4 explained, 4 % of the intensity, and both strong
+reflections (1455 and 659 counts, 2857 and 2047 px) missed.
 
-One inference does survive: if the beam carried real flux above 26 keV, the extra predicted
-reflections would be present in the data and could only *raise* NMatches, never lower it. It
-stayed at 0. That is weak evidence the declared 6-26 keV bandpass is honest and the missing
-reflections are simply not there to be recorded.
+**The smoothness gate was confounded, and this is the transferable part.** I accepted the
+field because neighbour misorientation (0.086°) beat a label-shuffle null (0.236–0.266°,
+100/100 shuffles worse). But adjacent A5 frames are near-identical images — the pattern
+moves ~2.7 px per 50 nm step — so *any* solution driven by those inputs, correct or not,
+varies smoothly between neighbours. **A label shuffle tests whether a field is spatially
+coherent; it cannot test whether the values are right when the inputs themselves are
+spatially coherent.** For a finely-stepped raster, smoothness is nearly free.
 
-(Original plan text: rebuild Ni at Ehi = 45 keV, re-index the same frame, and re-measure the
-scrambled-image null **at the new Ehi** (a wider window predicts more spots and would raise
-the chance rate if left unchecked). Confirms if a solution clears that null and its matched
-reflections include E > 26 keV; refutes if it is still zero — in which case the honest
-answer is that this detector configuration cannot index a small-cell material in this
-geometry, which is itself the useful thing to tell TPS.
+The test that would have caught it, and did: does the solution explain the pattern —
+specifically the STRONGEST reflections? It does not.
 
-### 5f. A5_fine / Ni: a 50 nm-resolution lattice-rotation map
+This is consistent with §5d rather than in tension with it: Ni's accessible reflections in
+this window are the weak high-index ones, so the bright reflections on these frames cannot
+be Ni in 8.74–26 keV at all. The indexer, restricted to that weak set, fits a few weak
+blobs. **What the bright reflections are is now an open question worth putting to TPS.**
+
+#### Superseded: the original section
 
 Full 484-frame run, GPU, `Pipeline complete`, no errors, 4 min 12 s (1.92 img/s).
 
@@ -403,6 +373,38 @@ Caveat carried to the report: the map is **sparse** (27.9 % of voxels), and the 
 nominal — no stage readback, sample at 45°, so µm figures are the commanded grid, not measured.
 
 ### 5i. Nb1_3 / Ti alpha + beta: a two-phase grain map over 961 voxels
+
+**RE-GATED 2026-09-07 after the Si retraction (§5c).** NMatches alone cannot tell a real
+orientation from one related to it by a coincidence-site lattice, which re-explains a third
+of its reflections for free. Adding a second gate -- **>= 3 reflections that no other
+accepted orientation explains, computed across BOTH phases together** -- removed
+**599 of 5113** orientations (12 %). Cross-phase matters: a beta orientation that only
+re-explains alpha's reflections is not independent evidence of a beta grain, and the
+"both phases" count depends on that.
+
+| | before | after |
+|---|---|---|
+| orientations | 5113 | **4514** |
+| Ti alpha | 952 voxels / 3488 orient | **948 / 2948** |
+| Ti beta | 959 / 1625 | **958 / 1566** |
+| both phases | 950 | **945** (3 alpha-only, 13 beta-only) |
+| alpha grains | 1464, largest 88 | **1069, largest 79** (707 singletons) |
+| beta grains | 77, largest 530 | **42, largest 529** (27 singletons) |
+
+Nulls re-run on the surviving set, 30 position shuffles, both monotonic statistics:
+
+| | statistic | real | shuffled | verdict |
+|---|---|---|---|---|
+| Ti alpha | grain count | **1069** | mean 2689, min 2661 | fewer than any shuffle |
+| Ti alpha | largest grain | **79** | mean 8.7, max 20 | ~4x any shuffle |
+| Ti beta | grain count | **42** | mean 586.6, min 561 | fewer than any shuffle |
+| Ti beta | largest grain | **529** | mean 120.5, max 187 | ~2.8x any shuffle |
+
+**The result is unchanged in kind and sharper in degree**: beta's top four grains now hold
+1315 of 1566 orientations (84 %). The coarse prior-beta matrix with fine alpha laths
+survives the stricter gate -- which is the point of applying it.
+
+#### Superseded: the original section
 
 Both phases indexed over the full 31 x 31 raster, gated at the MEASURED null (NMatches >= 9,
 §5h) rather than the shipped `MinNrSpots = 8`:
@@ -528,12 +530,3 @@ Guards now in `a5_gradient_map.py`: assert 35 columns, and take the frame number
 | Detection optimum, Nb1_3 | ~99.75 -> ~229 centers (229 measured) | same |
 | Gap dilation needed | **4 px** (2x detection excess at 0-4 px, gone beyond) | measured, 11 frames |
 
-
----
-
-## 7. What went into the shipped code
-
-`laue_index.xmas` (laue-index 0.5.0) carries the converter, `enumerate_candidates`, and
-both degeneracies, with 14 tests pinning the pixel origin, the P inversion, the radians
-convention and the two gauge measurements. The two TPS calibrations ship as worked
-examples inside it -- so this notebook's numbers are reproducible from the package alone.

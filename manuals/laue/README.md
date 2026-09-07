@@ -459,6 +459,35 @@ own state) is deliberately kept out of this public tree; see `RUNBOOK.md` §R1.
     production map silently truncated to 80 %. Rewrite `ResultDir` per run before launching,
     and check output count against frames requested in **both** directions.
 
+36. **`NMatches` is not evidence of INDEPENDENCE, and the unit of uniqueness is the
+    REFLECTION.** An orientation related to a true one by a coincidence-site lattice
+    re-explains a share of its reflections for free — Σ3 shares a third — so it clears any
+    match-count gate and any random-orientation null, because it is not a random draw.
+    Measured on a Si(100) calibrant: three accepted solutions at 60.0° (Σ3) and 38.9° (Σ9)
+    whose reflections were a **100 % subset** of the parent's (18/18, 20/20, 17/17; union =
+    the parent's 46). One crystal reported as four.
+    **Count uniqueness in reflections.** Any finer unit inflates it and the artifacts
+    survive: matched PIXELS of the blurred indexer image (722 px per blob there) called them
+    disjoint, and the pipeline's own `--min-unique 2` passed them too because it counts
+    **watershed labels** — watershed found 3540 regions on a frame carrying 50 reflections.
+    Gate on "reflections no other accepted orientation explains", computed across **all**
+    phases at once: a β orientation that only re-explains α's reflections is not independent
+    evidence of a β grain. On Nb1_3 this removed 12 % of accepted orientations (5113 → 4514)
+    and left the structure intact; on Si it removed three of four.
+
+37. **A spatial-coherence null cannot validate a finely-stepped raster.** If neighbouring
+    frames are near-identical images, *any* input-driven solution — right or wrong — varies
+    smoothly between them, so it beats a label shuffle automatically. The null separates
+    "coherent" from "random", and coherence was free. Measured: an A5 Ni orientation field
+    passed at 0.086° neighbour misorientation against a shuffled 0.236–0.266°, 100/100
+    shuffles worse, on a raster whose pattern moves ~2.7 px per 50 nm step — and the same
+    solutions explain a **median 7.8 %** of each frame's reflection intensity and a median
+    of **1 of the 5 brightest reflections**, 36 frames of 135 explaining none. The field was
+    withdrawn.
+    **The test that works is per-frame and physical: does the solution explain the pattern,
+    starting with the STRONGEST reflections?** A solution that misses the brightest spots
+    while picking up faint ones is not describing that frame, whatever the map looks like.
+
 ## Worked example
 
 The Zn/Zn electroplated dataset (`bt_34ide_jul26/sampleG/scan1_Laue2D`, 40,401 frames) is the first

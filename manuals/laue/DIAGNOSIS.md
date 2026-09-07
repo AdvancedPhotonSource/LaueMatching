@@ -222,3 +222,47 @@ label-shuffled null (which preserves every orientation and destroys only their a
 plus monotonic growth of misorientation with distance — not neighbour agreement. Measured:
 neighbour misorientation 0.086° against a shuffled null of 0.236–0.266°, 100/100 shuffles
 worse.
+
+
+## Several accepted orientations on one frame, at Σ3 / Σ9 to each other
+
+**Symptom.** The indexer returns N solutions whose pairwise disorientations are 60.0°
+(Σ3), 38.9° (Σ9) or another CSL angle, each with a respectable `NMatches`, all clearing the
+scrambled-image null.
+
+**Discriminating test.** For each solution, the set of **reflections** it explains — not
+pixels, not watershed labels. Then ask how many are explained by no other accepted
+solution.
+
+```python
+d, idx = cKDTree(detected_blobs).query(predicted_xy)   # one entry per REFLECTION
+hits_i = set(idx[d < tol])
+unique_i = hits_i - set().union(*(hits_j for j != i))
+```
+
+**Cause.** A CSL-related orientation shares a fixed fraction of the reciprocal lattice —
+1/3 for Σ3 — so it re-explains that fraction of the parent's reflections for free. It is
+not a random orientation, so a random-orientation null says nothing about it: **that null
+gates chance, not redundancy.**
+
+**Lever.** Require ≥3 reflections no other accepted orientation explains, across all phases
+at once. Do not count in a finer unit: matched pixels of the blurred indexer image (722 px
+per blob) reported these artifacts as *disjoint*, and `--min-unique 2` passed them because
+it counts watershed labels (3540 regions for 50 reflections).
+
+## An orientation map that is smooth, and wrong
+
+**Symptom.** A per-voxel orientation field over a finely-stepped raster looks convincingly
+smooth and beats a label-shuffle null comfortably.
+
+**Discriminating test.** Ignore the map. Per frame, ask what fraction of the observed
+reflection intensity the accepted orientation explains, and how many of the five brightest
+reflections it accounts for.
+
+**Cause.** On a fine raster, neighbouring frames are near-identical images, so any solution
+driven by them varies smoothly whether or not it is right. The shuffle destroys the spatial
+arrangement, so the real field wins by construction.
+
+**Lever.** Gate per frame on explanatory power before assembling any map. Measured on an A5
+Ni scan: median **7.8 %** of intensity explained, median **1 of the 5 brightest** (36 of 135
+frames explained none of them) — while the map passed smoothness at 100/100 shuffles.
