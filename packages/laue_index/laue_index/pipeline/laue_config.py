@@ -113,6 +113,8 @@ class ImageProcessingConfig:
     threshold_value: float = 0.0       # Used only if threshold_method is 'fixed'
     threshold_percentile: float = 90.0 # Used only if threshold_method is 'percentile'
     min_area: int = 10
+    # 0 = choose automatically (laue_index.workers). See config_schema.
+    preprocess_workers: int = 0
     # Detector positions whose spots must not count as evidence (a known substrate,
     # or the spots an accepted orientation already explains between iterative
     # passes). Consumed in laue_index.preprocess.  NOTE: this dataclass is

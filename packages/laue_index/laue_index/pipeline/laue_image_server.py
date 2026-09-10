@@ -36,6 +36,10 @@ import numpy as np
 
 import laue_stream_utils as lsu
 
+# After lsu: it puts the install root on sys.path, which is how every other
+# `from laue_index...` import in this package is reached.
+from laue_index.workers import choose_preprocess_workers  # noqa: E402
+
 # Optional imports
 try:
     import h5py
@@ -240,7 +244,22 @@ def serve_images(
     # A sender thread handles TCP I/O concurrently.
     #
     SEND_QUEUE_SIZE = 4  # buffer up to 4 frames
-    PREPROCESS_WORKERS = min(os.cpu_count() or 4, 8)  # cap at 8 workers
+    # How deep the producer may run ahead. Every completed future here holds a
+    # DENSE float32 frame, so this is the parent's dominant memory term: at 512
+    # x 2048^2 it is 8.6 GB, which is most of the ~17 GB RSS seen on a 13k-frame
+    # shard. It is charged to the worker-count budget below rather than left to
+    # be discovered by the OOM killer.
+    FUTURES_QUEUE_DEPTH = 512
+    # Was `min(os.cpu_count() or 4, 8)`. The 8 was a throughput ceiling -- the
+    # measured curve is near-linear to 8 and 8 -> 16 is a further +37% -- and
+    # cpu_count() over-reports under taskset, a cpuset cgroup or a container CPU
+    # quota. See laue_index.workers for the measurement and the fitted memory
+    # model. LAUE_PREPROCESS_WORKERS overrides.
+    PREPROCESS_WORKERS, _worker_decision = choose_preprocess_workers(
+        nr_px_x, nr_px_y,
+        queue_depth=FUTURES_QUEUE_DEPTH,
+        max_workers=cfg.get("preprocess_workers") or None,
+    )
     send_q: queue.Queue = queue.Queue(maxsize=SEND_QUEUE_SIZE)
     send_error: list = []  # shared error flag
 
@@ -309,14 +328,23 @@ def serve_images(
     skip_count = 0
     t_start = time.time()
 
-    logger.info(f"Using {PREPROCESS_WORKERS} parallel preprocessing workers")
+    logger.info(
+        "Using %d parallel preprocessing workers (bound by %s; "
+        "%d usable CPUs, %s available, %.0f MB per worker, "
+        "%.1f GB of futures queue)",
+        PREPROCESS_WORKERS, _worker_decision["bound_by"],
+        _worker_decision["usable_cpus"],
+        ("%.1f GB" % (_worker_decision["available_memory_bytes"] / 1e9))
+        if _worker_decision["available_memory_bytes"] is not None else "unknown",
+        _worker_decision["per_worker_bytes"] / 1e6,
+        _worker_decision["queue_bytes"] / 1e9)
 
     try:
         with ProcessPoolExecutor(max_workers=PREPROCESS_WORKERS) as pool:
             # Stage 1: Producer — submit frames to the pool as files are known.
             # Single-pass mode: submit the initial batch and finish.
             # Watch mode: keep rescanning the folder for new (settled) files.
-            futures_q: queue.Queue = queue.Queue(maxsize=512)
+            futures_q: queue.Queue = queue.Queue(maxsize=FUTURES_QUEUE_DEPTH)
             totals = {"frames": total_frames}
             stop_file = os.path.join(folder, "STOP_LAUE")
 

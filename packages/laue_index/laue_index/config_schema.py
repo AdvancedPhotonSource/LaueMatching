@@ -91,6 +91,13 @@ SCHEMA = [
     Param("ThresholdPercentile", "threshold_percentile", float, 90.0, "image_processing", _IMG,
           doc="Used only if ThresholdMethod is 'percentile'"),
     Param("MinArea", "min_area", int, 10, "image_processing", _IMG),
+    Param("PreprocessWorkers", "preprocess_workers", int, 0, "image_processing", _IMG,
+          doc="Upper bound on parallel preprocessing worker processes. 0 (default) "
+              "lets laue_index.workers.choose_preprocess_workers decide from the "
+              "usable CPU count and the memory this frame size needs per worker. "
+              "Set it only to cap the pool below what the machine could feed; it "
+              "cannot raise the count above the memory budget. The environment "
+              "variable LAUE_PREPROCESS_WORKERS overrides both."),
     Param("ExcludeSpotsDir", "exclude_spots_dir", str, "", "image_processing", _IMG,
           doc="Directory of PER-FRAME exclusion lists for iterative indexing: one "
               "'<frame-stem>.txt' of 'x y [radius]' rows per frame, holding the spots "
