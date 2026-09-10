@@ -162,14 +162,34 @@ if [ "$LEAKS" -ne 0 ]; then
     restore_version
     exit 1
 fi
-SDIST_MB=$(( $(wc -c < "$SDIST") / 1048576 ))
-if [ "$SDIST_MB" -gt 10 ]; then
-    echo "ERROR: sdist is ${SDIST_MB} MB -- far larger than the ~1 MB expected."
-    echo "       Something bulky got swept in. Inspect: tar -tzf $SDIST"
+# UNCOMPRESSED, not the tarball size. Measuring the compressed size is what
+# let median.bin through: 33,554,432 bytes of working file gzipped to a 320 KB
+# tarball, which sailed past a 10 MB threshold while the sdist it described was
+# 32.93 MB on disk. The published 0.6.1 was 0.88 MB, so ~1 MB is the real
+# expectation and the check has to see through compression to enforce it.
+SDIST_RAW_MB=$(python3 -c "
+import tarfile, sys
+with tarfile.open(sys.argv[1]) as t:
+    print(sum(m.size for m in t.getmembers() if m.isfile()) // 1048576)
+" "$SDIST")
+if [ "$SDIST_RAW_MB" -gt 10 ]; then
+    echo "ERROR: sdist is ${SDIST_RAW_MB} MB uncompressed -- far larger than the ~1 MB expected."
+    echo "       Something bulky got swept in. Largest entries:"
+    python3 -c "
+import tarfile, sys
+with tarfile.open(sys.argv[1]) as t:
+    for m in sorted((m for m in t.getmembers() if m.isfile()), key=lambda m: -m.size)[:10]:
+        print('         %12d  %s' % (m.size, m.name))
+" "$SDIST"
     restore_version
     exit 1
 fi
-echo "  sdist clean ($(tar -tzf "$SDIST" | wc -l | tr -d ' ') entries, ${SDIST_MB} MB)."
+SDIST_RAW_H=$(python3 -c "
+import tarfile, sys
+with tarfile.open(sys.argv[1]) as t:
+    print('%.2f' % (sum(m.size for m in t.getmembers() if m.isfile()) / 1048576))
+" "$SDIST")
+echo "  sdist clean ($(tar -tzf "$SDIST" | wc -l | tr -d ' ') entries, ${SDIST_RAW_H} MB uncompressed)."
 
 # --- 5. If dry-run, stop here ---
 if [ "$MODE" = "--dry-run" ]; then

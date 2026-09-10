@@ -54,6 +54,13 @@ laue-index = "laue_index.cli:main"
 cmake.version = ">=3.20"
 cmake.source-dir = "."
 wheel.packages = ["laue_index"]
+# The local sdist is built from DISK, the published one by the workflow from a
+# clean checkout, so anything git-excluded sitting in this directory makes the
+# pre-flight artifact differ from the real one. median.bin is a 32 MB working
+# file that did exactly that: it landed in the local 0.7.0 sdist (32.93 MB
+# uncompressed) while the published 0.6.1 was 0.88 MB and clean. No .bin is
+# needed in a source distribution.
+sdist.exclude = ["*.bin", "build", "dist"]
 build-dir = "build/{wheel_tag}"
 # The C target returns early rather than erroring when a compiler or OpenMP is
 # absent, so `pip install` still succeeds Python-only and
