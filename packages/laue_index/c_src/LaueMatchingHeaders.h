@@ -1269,7 +1269,7 @@ static inline double autoCoarseSigma(double Lsd, double pxSize,
 // peak.  Without this, a seed whose spots land outside the sharp-image spot
 // blobs sits on a flat objective and the local optimizer cannot converge.
 static inline void gaussianBlurImage(const float *in, float *out, int nx,
-                                     int ny, double sigma) {
+                                     int ny, double sigma, int nThreads) {
   int rad = (int)(3.0 * sigma + 0.5);
   if (rad < 1)
     rad = 1;
@@ -1288,9 +1288,30 @@ static inline void gaussianBlurImage(const float *in, float *out, int nx,
   }
   for (int i = 0; i < klen; i++)
     kern[i] /= ksum;
+  // Both passes: parallel over rows, and the edge clamp hoisted out of the
+  // innermost loop.
+  //
+  // EXACTNESS. Each output pixel still accumulates the same klen products in
+  // the same k order, so every pixel is bit-identical to the serial version.
+  // Splitting off the border columns/rows does not reorder anything either --
+  // the interior branch is entered only where the clamp would never have
+  // fired. Parallelising over y is safe because `out` rows are disjoint and
+  // `in`/`tmp` are read-only within a pass.
+  //
+  // WHY. This was the whole streaming pipeline's bottleneck: one serial
+  // 47-tap separable pass pair over 4.2M pixels, once per image, ~394M
+  // multiply-adds with two clamp compares per tap, while the other 16 cores
+  // idled waiting for it.
+  if (nThreads < 1)
+    nThreads = 1;
   // Horizontal pass (clamped edges).
+#pragma omp parallel for num_threads(nThreads) schedule(static)
   for (int y = 0; y < ny; y++) {
-    for (int x = 0; x < nx; x++) {
+    const float *inRow = in + (size_t)y * nx;
+    float *tmpRow = tmp + (size_t)y * nx;
+    int xlo = rad < nx ? rad : nx;
+    int xhi = nx - rad > xlo ? nx - rad : xlo;
+    for (int x = 0; x < xlo; x++) {          // left border: clamp needed
       double acc = 0.0;
       for (int k = -rad; k <= rad; k++) {
         int xx = x + k;
@@ -1298,24 +1319,62 @@ static inline void gaussianBlurImage(const float *in, float *out, int nx,
           xx = 0;
         else if (xx >= nx)
           xx = nx - 1;
-        acc += kern[k + rad] * in[(size_t)y * nx + xx];
+        acc += kern[k + rad] * inRow[xx];
       }
-      tmp[(size_t)y * nx + x] = (float)acc;
+      tmpRow[x] = (float)acc;
     }
-  }
-  // Vertical pass (clamped edges).
-  for (int y = 0; y < ny; y++) {
-    for (int x = 0; x < nx; x++) {
+    for (int x = xlo; x < xhi; x++) {        // interior: no clamp can fire
+      double acc = 0.0;
+      const float *w = inRow + x - rad;
+      for (int k = 0; k < klen; k++)
+        acc += kern[k] * w[k];
+      tmpRow[x] = (float)acc;
+    }
+    for (int x = xhi; x < nx; x++) {         // right border: clamp needed
       double acc = 0.0;
       for (int k = -rad; k <= rad; k++) {
-        int yy = y + k;
-        if (yy < 0)
-          yy = 0;
-        else if (yy >= ny)
-          yy = ny - 1;
-        acc += kern[k + rad] * tmp[(size_t)yy * nx + x];
+        int xx = x + k;
+        if (xx < 0)
+          xx = 0;
+        else if (xx >= nx)
+          xx = nx - 1;
+        acc += kern[k + rad] * inRow[xx];
       }
-      out[(size_t)y * nx + x] = (float)acc;
+      tmpRow[x] = (float)acc;
+    }
+  }
+  // Vertical pass (clamped edges). Interior rows read a contiguous stack of
+  // rows, so the row pointers are hoisted and the inner loop walks k with a
+  // fixed stride instead of recomputing a clamped index per tap.
+  {
+    int ylo = rad < ny ? rad : ny;
+    int yhi = ny - rad > ylo ? ny - rad : ylo;
+#pragma omp parallel for num_threads(nThreads) schedule(static)
+    for (int y = 0; y < ny; y++) {
+      float *outRow = out + (size_t)y * nx;
+      if (y >= ylo && y < yhi) {
+        const float *base = tmp + (size_t)(y - rad) * nx;
+        for (int x = 0; x < nx; x++) {
+          double acc = 0.0;
+          const float *col = base + x;
+          for (int k = 0; k < klen; k++)
+            acc += kern[k] * col[(size_t)k * nx];
+          outRow[x] = (float)acc;
+        }
+      } else {
+        for (int x = 0; x < nx; x++) {
+          double acc = 0.0;
+          for (int k = -rad; k <= rad; k++) {
+            int yy = y + k;
+            if (yy < 0)
+              yy = 0;
+            else if (yy >= ny)
+              yy = ny - 1;
+            acc += kern[k + rad] * tmp[(size_t)yy * nx + x];
+          }
+          outRow[x] = (float)acc;
+        }
+      }
     }
   }
   free(tmp);
@@ -1341,7 +1400,21 @@ static inline void fitAndWriteOrientations(
   double coarseSigma = (coarseFitSigma > 0.0)
                            ? coarseFitSigma
                            : autoCoarseSigma(pArr[2], pxX, 0.4);
-  gaussianBlurImage(image, imageCoarse, nrPxX, nrPxY, coarseSigma);
+  // Timed because it is a FIXED per-image cost, independent of totalSols, and
+  // the streaming measurement put the whole pipeline's bottleneck here: of a
+  // median 464 ms/image in this function, 449 ms was this one blur, against
+  // 41 ms on the GPU (n=150, one run). The cost was flat from 1 to 93
+  // orientations, and anything that does not scale with totalSols is upstream
+  // of the parallel loop -- this is the only such work.
+  double _wtBlur = omp_get_wtime();
+  gaussianBlurImage(image, imageCoarse, nrPxX, nrPxY, coarseSigma, numProcs);
+  double _blurMs = (omp_get_wtime() - _wtBlur) * 1000.0;
+  if (imageNum > 0)
+    printf("[Image %d]   coarse blur: %.0f ms (sigma %.2f px, radius %d)\n",
+           imageNum, _blurMs, coarseSigma, (int)(3.0 * coarseSigma + 0.5));
+  else
+    printf("Coarse-fit blur: %.0f ms (sigma %.2f px, radius %d)\n",
+           _blurMs, coarseSigma, (int)(3.0 * coarseSigma + 0.5));
 #pragma omp parallel for num_threads(numProcs)
   for (iterNr = 0; iterNr < totalSols; iterNr++) {
     double orientBest[3][3], eulerBest[3], eulerFit[3], orientFit[3][3];
