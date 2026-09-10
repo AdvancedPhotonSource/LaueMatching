@@ -335,7 +335,7 @@ own state) is deliberately kept out of this public tree; see `RUNBOOK.md` §R1.
     inherits the SNR of what is inside it.
 
 23. **The forward model is 2θ-agnostic; the things built around it are not.**
-    `kf = ki − 2(q̂·ki)q̂` (`LaueMatchingHeaders.h:449-469`) is the general Bragg mirror and
+    `kf = ki − 2(q̂·ki)q̂` (`LaueMatchingHeaders.h:598-601`) is the general Bragg mirror and
     works unchanged in transmission — the beam is along +Z either way, only the *detector*
     moves. But `GenerateHKLs.py` took θ_max from the **top-centre pixel** in the Y–Z plane,
     which is right only for a panel edge-on above the sample. In transmission the largest 2θ

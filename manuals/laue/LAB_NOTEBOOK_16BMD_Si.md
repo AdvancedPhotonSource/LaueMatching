@@ -76,7 +76,7 @@ a **mono** calibration and the white beam sits off it at the sample. Predicted r
 
 **`R_Array` is a rotation vector in RADIANS**, θ·axis — not Rodrigues and not degrees,
 whatever `GenerateHKLs --help` and `params_alpha.template.txt` say. Both
-`DetectorType.__init__` and `LaueMatchingCPU.c:239` take `rotang = norm(R)` and feed it to
+`DetectorType.__init__` and `LaueMatchingCPU.c:252` take `rotang = norm(R)` and feed it to
 `cos()`. Taking it from the docs puts the detector 30° out, silently.
 
 **`Elo` can be measured, not guessed.** The Pilatus header carries

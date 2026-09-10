@@ -31,7 +31,8 @@ Design decisions (see plan file ``cozy-kindling-meadow.md``):
 
 * Per-spot energy is computed in Python from the fit's reciprocal lattice
   matrix and the hkl indices — matches the C formula at
-  ``LaueMatchingHeaders.h:609`` but avoids touching the indexer binaries.
+  ``LaueMatchingHeaders.h:616-617`` (``sinTheta``/``E`` in ``calcOverlap``) but
+  avoids touching the indexer binaries.
 * Per-spot ``err(deg)`` uses the angle between the fit-predicted Qhat
   (stored in ``spots.txt`` cols 8–10) and the Qhat obtained by inverting
   the observed pixel coordinates through the detector geometry — so a
@@ -124,7 +125,7 @@ def energy_from_recip_and_hkl(
 ) -> float:
     """Energy (keV) of a Laue spot at orientation-rotated Q = recip_lattice · hkl.
 
-    Mirrors the C formula at ``LaueMatchingHeaders.h:609``:
+    Mirrors the C formula at ``LaueMatchingHeaders.h:616-617``:
 
         E = hc_keVnm * |Q| / (4π sinθ),  sinθ = -Q̂_z
 

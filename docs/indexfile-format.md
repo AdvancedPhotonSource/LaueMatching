@@ -84,7 +84,7 @@ $arrayN  <N>  <N>     G^             (hkl)   intens     E(keV)    err(deg)   PkI
 | per-spot `G^`           | Cols 8–10 of `spots.txt` (Qhat, fit-predicted). |
 | per-spot `(hkl)`        | Cols 3–5 of `spots.txt`. |
 | per-spot `intens`       | Col 11 of `spots.txt` (observed pixel value). |
-| per-spot `E(keV)`       | **Computed**: `hc * |Q| / (4π · -Q̂_z)` with `Q = recip_lattice @ hkl`. Mirrors the C formula at `LaueMatchingHeaders.h:609`. |
+| per-spot `E(keV)`       | **Computed**: `hc * |Q| / (4π · -Q̂_z)` with `Q = recip_lattice @ hkl`. Mirrors the C formula at `LaueMatchingHeaders.h:616-617` (in `calcOverlap`). |
 | per-spot `err(deg)`     | **Computed**: angle between fit-predicted G-hat (spots.txt) and observed G-hat obtained by inverting the observed pixel `(X, Y)` through the detector geometry. |
 | per-spot `PkIndex`      | Nearest-neighbour lookup against `/entry/data/component_centers` in the HDF5 output, with a small distance threshold. `-1` if no center is within 5 px. |
 
