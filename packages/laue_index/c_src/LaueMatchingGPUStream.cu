@@ -1058,6 +1058,26 @@ int main(int argc, char *argv[]) {
     outArrOnGPU = 1;
     chunkSize = nrOrients;
     printf("Forward simulation uploaded to GPU: %.1f GB\n", outArrBytes / 1e9);
+    // The device now holds the only copy anything reads: the per-image
+    // re-upload further down is guarded by `!outArrOnGPU`, so in this branch
+    // the host copy is dead the moment the cudaMemcpy returns -- and it is
+    // 12.2 GB at 100M orientations, held for the daemon's entire life.
+    //
+    // Released HERE rather than by editing the cleanup block at the end of
+    // main(). That `if (outArrMapped) munmap / else free` pairing is exactly
+    // where an inserted statement once re-parented the `else` and gave
+    // LaueMatchingCPU a silent SIGSEGV at exit for two months. Clearing the
+    // flag and the pointer makes the existing cleanup a no-op -- free(NULL) is
+    // defined -- without that block being touched at all.
+    if (outArrMapped) {
+      munmap(outArr, szArr * sizeof(uint16_t));
+      outArrMapped = 0;
+    } else {
+      free(outArr);
+    }
+    outArr = NULL;
+    printf("Host copy of the forward simulation released: %.1f GB\n",
+           outArrBytes / 1e9);
   } else {
     // Need chunking — cap at 4 GB per chunk
     size_t margin = freeMem / 5;
