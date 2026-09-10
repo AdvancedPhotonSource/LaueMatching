@@ -419,6 +419,18 @@ int main(int argc, char *argv[]) {
   int global_iterator, nrResults = 0;
   double recip[3][3];
   calcRecipArray(LatticeParameter, sg_num, recip);
+  // Loop-invariant: hoisted out of the ~1e12-iteration forward loop.
+  const double halfNrPxX = 0.5 * (nrPxX - 1);
+  const double halfNrPxY = 0.5 * (nrPxY - 1);
+  // hkls as doubles once: the int->double conversion otherwise runs
+  // ~1e12 times for nhkls distinct values.
+  double *hklsD = (double *)malloc((size_t)nhkls * 3 * sizeof(double));
+  if (hklsD == NULL) {
+    fprintf(stderr, "FATAL: could not allocate hklsD.\n");
+    return 1;
+  }
+  for (int _h = 0; _h < nhkls * 3; _h++)
+    hklsD[_h] = (double)hkls[_h];
 
   // Check if forward file already exists
   if (doFwd == 0) {
@@ -431,18 +443,10 @@ int main(int argc, char *argv[]) {
   uint16_t *outArr = NULL;
   size_t outArrMapLen = 0;  // tracked so it can be munmap'd at cleanup
   LowNr = 1;
-  bool *pxImgAll = NULL;
 
   // Open the forward file once before the parallel region (if writing)
   int fwdFd = -1;
   if (doFwd == 1) {
-    pxImgAll = calloc((size_t)nrPxX * nrPxY * numProcs, sizeof(*pxImgAll));
-    if (pxImgAll == NULL) {
-      fprintf(stderr,
-              "FATAL: could not allocate pxImgAll (%zu bytes for %d threads).\n",
-              (size_t)nrPxX * nrPxY * numProcs * sizeof(*pxImgAll), numProcs);
-      return 1;
-    }
     // No O_SYNC: with batched pwrites we'd otherwise sync per-batch,
     // serializing writes against compute and inflating wallclock by ~5x.
     // We fsync once at the very end of the parallel region instead.
@@ -507,11 +511,6 @@ int main(int argc, char *argv[]) {
               batchSize, maxNrSpots);
       exit(EXIT_FAILURE);
     }
-    double *qhatarr = calloc((size_t)maxNrSpots * 3, sizeof(*qhatarr));
-    if (qhatarr == NULL) {
-      fprintf(stderr, "FATAL: thread %d failed to allocate qhatarr.\n", procNr);
-      exit(EXIT_FAILURE);
-    }
 
     // Open the cache file for read once per thread (doFwd==0 + non-/dev/shm).
     int rfd = -1;
@@ -568,114 +567,81 @@ int main(int argc, char *argv[]) {
 
       // ── Inner orientation loop (within the batch) ────────────────────
       int ipx, ipy;
-      double thisInt;
       double tO[3][3], thisOrient[3][3];
       int i, j;
       int hklnr, badSpot;
-      double hkl[3], qvec[3], qlen, qhat[3], dot, kf[3], xyz[3], xp, yp,
-          sinTheta, E;
+      double qvec[3], q2, sFac, kf[3], xyz[3], xp, yp, E;
       double ki[3] = {0, 0, 1.0};
-      int spotNr, iterNr;
+      int spotNr;
       int nSpots;
       double totInt;
-      size_t loc;
       for (size_t orientNr = batchStart; orientNr < batchEnd; orientNr++) {
         nSpots = 0;
         totInt = 0;
         size_t local = orientNr - batchStart; // index within the batch buffer
         if (doFwd == 1) {
-          bool *pxImg;
-          size_t offstBoolImg = (size_t)nrPxX * nrPxY * (size_t)procNr;
-          pxImg = &pxImgAll[offstBoolImg];
           spotNr = 0;
           for (i = 0; i < 3; i++)
             for (j = 0; j < 3; j++)
               tO[i][j] = orients[orientNr * 9 + (size_t)i * 3 + (size_t)j];
           MatrixMultF33(tO, recip, thisOrient);
           for (hklnr = 0; hklnr < nhkls; hklnr++) {
-            hkl[0] = hkls[hklnr * 3 + 0];
-            hkl[1] = hkls[hklnr * 3 + 1];
-            hkl[2] = hkls[hklnr * 3 + 2];
-            MatrixMultF(thisOrient, hkl, qvec);
-            qlen = CalcLength(qvec[0], qvec[1], qvec[2]);
-            if (qlen == 0)
+            MatrixMultF(thisOrient, &hklsD[hklnr * 3], qvec);
+            // |q|^2 for THIS orientation. No sqrt: kf and E both need only
+            // |q|^2. Deliberately NOT precomputed from recip -- the shipped
+            // orientation DB is orthonormal only to ~1e-5, so |tO.recip.hkl|
+            // is not |recip.hkl| and assuming so shifts spots by ~0.011 px.
+            q2 = qvec[0] * qvec[0] + qvec[1] * qvec[1] + qvec[2] * qvec[2];
+            if (q2 == 0.0)
               continue;
-            qhat[0] = qvec[0] / qlen;
-            qhat[1] = qvec[1] / qlen;
-            qhat[2] = qvec[2] / qlen;
-            dot = qhat[2];
-            kf[0] = ki[0] - 2 * dot * qhat[0];
-            kf[1] = ki[1] - 2 * dot * qhat[1];
-            kf[2] = ki[2] - 2 * dot * qhat[2];
-            MatrixMultF(rotTranspose, kf, xyz);
+            sFac = 2.0 * qvec[2] / q2;
+            kf[0] = ki[0] - sFac * qvec[0];
+            kf[1] = ki[1] - sFac * qvec[1];
+            kf[2] = ki[2] - sFac * qvec[2];
+            // Row 2 alone: `xyz[2] <= 0` rejects ~50% of all iterations and the other
+            // two rows are dead work for every one of them. Same accumulation order as
+            // MatrixMultF's r[2], so bit-identical.
+            xyz[2] = rotTranspose[2][0] * kf[0] + rotTranspose[2][1] * kf[1] +
+                     rotTranspose[2][2] * kf[2];
             if (xyz[2] <= 0)
               continue;
+            xyz[0] = rotTranspose[0][0] * kf[0] + rotTranspose[0][1] * kf[1] +
+                     rotTranspose[0][2] * kf[2];
             xyz[0] = xyz[0] * pArr[2] / xyz[2];
-            xyz[1] = xyz[1] * pArr[2] / xyz[2];
-            xyz[2] = pArr[2];
             xp = xyz[0] - pArr[0];
-            yp = xyz[1] - pArr[1];
-            ipx = (int)((xp / pxX) + (0.5 * (nrPxX - 1)));
+            ipx = (int)((xp / pxX) + halfNrPxX);
             if (ipx < 0 || ipx > (nrPxX - 1))
               continue;
-            ipy = (int)((yp / pxY) + (0.5 * (nrPxY - 1)));
+            // ipx rejects a further ~42%; row 1 is dead work for those.
+            xyz[1] = rotTranspose[1][0] * kf[0] + rotTranspose[1][1] * kf[1] +
+                     rotTranspose[1][2] * kf[2];
+            xyz[1] = xyz[1] * pArr[2] / xyz[2];
+            yp = xyz[1] - pArr[1];
+            ipy = (int)((yp / pxY) + halfNrPxY);
             if (ipy < 0 || ipy > (nrPxY - 1))
               continue;
-            sinTheta = -qhat[2];
-            E = hc_keVnm * qlen / (4 * M_PI * sinTheta);
+            E = -hcOver4Pi * q2 / qvec[2];
             if (E < Elo || E > Ehi)
               continue;
             badSpot = 0;
-            if (pxImg[ipx * nrPxY + ipy])
+            if (pixelClaimed(&outArrBatch[local * entriesPerOrient + 1],
+                             spotNr, ipx, ipy))
               badSpot = 1;
             if (badSpot == 0) {
-              pxImg[ipx * nrPxY + ipy] = true;
-              qhatarr[3 * spotNr + 0] = qhat[0];
-              qhatarr[3 * spotNr + 1] = qhat[1];
-              qhatarr[3 * spotNr + 2] = qhat[2];
               outArrBatch[local * entriesPerOrient + 1 + 2 * spotNr + 0] =
                   (uint16_t)ipx;
               outArrBatch[local * entriesPerOrient + 1 + 2 * spotNr + 1] =
                   (uint16_t)ipy;
-              thisInt = image[ipy * nrPxX + ipx];
-              if (thisInt > minSpotIntensity) {
-                totInt += thisInt;
-                nSpots++;
-              }
               spotNr++;
               if (spotNr == maxNrSpots)
                 break;
             }
           }
-          // Clear the per-thread pixel-occupancy mask for this orientation
-          // so the next orientation starts clean.
-          for (iterNr = 0; iterNr < spotNr; iterNr++) {
-            pxImg[outArrBatch[local * entriesPerOrient + 1 + 2 * iterNr + 0] *
-                      nrPxY +
-                  outArrBatch[local * entriesPerOrient + 1 + 2 * iterNr + 1]] =
-                false;
-          }
           outArrBatch[local * entriesPerOrient + 0] = (uint16_t)spotNr;
-        } else {
-          loc = local * entriesPerOrient + 0;
-          spotNr = (int)outArrBatch[loc];
-          for (hklnr = 0; hklnr < spotNr; hklnr++) {
-            loc++;
-            ipx = outArrBatch[loc];
-            loc++;
-            ipy = outArrBatch[loc];
-            // Count on the true (double) image, identical to the fresh path
-            // (line ~606), so a cached run round-trips to the same nSpots and
-            // totInt.  The quantized image_u8 clamps faint pixels up to 1,
-            // inflating totInt and flipping the minIntensity test -> the cache
-            // path used to report more solutions than the fresh path.
-            double thisIntC = image[ipy * nrPxX + ipx];
-            if (thisIntC > minSpotIntensity) {
-              totInt += thisIntC;
-              nSpots++;
-            }
-          }
         }
+        // ONE comparison, both paths. See compareRowToImage().
+        compareRowToImage(&outArrBatch[local * entriesPerOrient], image,
+                          nrPxX, minSpotIntensity, &nSpots, &totInt);
         if (nSpots >= minNrSpots && totInt >= minIntensity) {
 #pragma omp critical
           {
@@ -710,7 +676,6 @@ int main(int argc, char *argv[]) {
     if (rfd >= 0)
       close(rfd);
     free(outArrBatch);
-    free(qhatarr);
   }
   if (fwdFd >= 0) {
     // Single fsync at end (instead of per-batch O_SYNC) so the cache
@@ -838,8 +803,6 @@ int main(int argc, char *argv[]) {
     free(orients);
   if (outArr != NULL && outArr != MAP_FAILED && outArrMapLen > 0)
     munmap(outArr, outArrMapLen); // cached-forward mmap
-  if (pxImgAll)
-    free(pxImgAll);
 
   double timef = omp_get_wtime() - start_time - time3;
   printf("Finished, time elapsed in fitting: %lf seconds.\n"

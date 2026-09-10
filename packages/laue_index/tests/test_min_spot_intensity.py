@@ -92,13 +92,44 @@ def test_all_three_stage2_sites_use_the_floor():
     assert n == 3, f"expected 3 stage-2 match sites using the floor, found {n}"
 
 
-def test_cpu_fresh_and_cached_paths_agree():
-    """The two CPU paths must apply the same floor. They diverged once already
-    (see the image_u8 comment in LaueMatchingCPU.c) and the symptom was the
-    cached path reporting MORE solutions than the fresh one."""
-    src = _read(CPU)
-    assert "thisInt > minSpotIntensity" in src, "CPU fresh path does not use the floor"
-    assert "thisIntC > minSpotIntensity" in src, "CPU cached path does not use the floor"
+def test_fresh_and_cached_paths_share_ONE_comparison():
+    """The fresh and cached paths cannot disagree, because there is only one
+    implementation of the comparison.
+
+    This test used to assert that two INLINED copies -- `thisInt >
+    minSpotIntensity` in the doFwd==1 branch and `thisIntC > minSpotIntensity`
+    in the doFwd==0 branch -- both carried the floor. That is the weak form: it
+    checks two copies exist and each looks right, which is exactly the state the
+    code was in when they DRIFTED (the quantized image_u8 clamped faint pixels
+    up to 1, inflating totInt, flipping the minIntensity test, and making the
+    cached path report MORE solutions than the fresh one).
+
+    The forward simulation now writes a spot row and `compareRowToImage()` reads
+    it. Both paths call that one function, so the invariant is structural rather
+    than asserted.
+    """
+    hdr = _read(HEADERS)
+    assert hdr.count("static inline void compareRowToImage(") == 1, (
+        "compareRowToImage must be defined exactly once, in the shared header")
+
+    for name in (CPU, GPU):
+        src = _read(name)
+        # Exactly one call site (the second textual hit is the comment above it).
+        calls = [ln for ln in src.splitlines()
+                 if "compareRowToImage(" in ln and not ln.lstrip().startswith("//")]
+        assert len(calls) == 1, (
+            f"{name}: expected exactly 1 call to compareRowToImage, found {len(calls)}")
+
+    # And no path may have grown its own inlined copy back.
+    for name in (CPU, GPU, STREAM):
+        src = _read(name)
+        offenders = [f"{name}:{i}: {ln.strip()}"
+                     for i, ln in enumerate(src.splitlines(), 1)
+                     if re.search(r"image\[[^]]*\]\s*>\s*minSpotIntensity", ln)
+                     or re.search(r"\b(thisInt|thisIntC)\s*>\s*minSpotIntensity", ln)]
+        assert not offenders, (
+            "an inlined image comparison has reappeared; it must go through "
+            "compareRowToImage():\n  " + "\n  ".join(offenders))
 
 
 def test_device_kernels_receive_the_floor_as_an_argument():

@@ -453,6 +453,18 @@ int main(int argc, char *argv[]) {
   size_t nrResults = 0;
   double recip[3][3];
   calcRecipArray(LatticeParameter, sg_num, recip);
+  // Loop-invariant: hoisted out of the ~1e12-iteration forward loop.
+  const double halfNrPxX = 0.5 * (nrPxX - 1);
+  const double halfNrPxY = 0.5 * (nrPxY - 1);
+  // hkls as doubles once: the int->double conversion otherwise runs
+  // ~1e12 times for nhkls distinct values.
+  double *hklsD = (double *)malloc((size_t)nhkls * 3 * sizeof(double));
+  if (hklsD == NULL) {
+    fprintf(stderr, "FATAL: could not allocate hklsD.\n");
+    return 1;
+  }
+  for (int _h = 0; _h < nhkls * 3; _h++)
+    hklsD[_h] = (double)hkls[_h];
 
   // Compact match results from GPU path (NULL if forward sim path)
   size_t *h_matchIdx = NULL;
@@ -470,13 +482,6 @@ int main(int argc, char *argv[]) {
 
   if (doFwd == 1) {
     // Forward simulation using OpenMP on CPUs, then save to file
-    bool *pxImgAll =
-        (bool *)calloc((size_t)nrPxX * nrPxY * numProcs, sizeof(*pxImgAll));
-    if (pxImgAll == NULL) {
-      fprintf(stderr, "FATAL: Could not allocate pxImgAll (%zu bytes).\n",
-              (size_t)nrPxX * nrPxY * numProcs * sizeof(*pxImgAll));
-      return 1;
-    }
     int fwdFd = open(outfn, O_CREAT | O_WRONLY,
                      S_IRUSR | S_IWUSR); // FIX: open once
     if (fwdFd < 0) {
@@ -507,23 +512,14 @@ int main(int argc, char *argv[]) {
                    sizeof(double) / (1024 * 1024));
       }
       int orientNr;
-      double *qhatarr = (double *)calloc(maxNrSpots * 3, sizeof(*qhatarr));
       int ipx, ipy; // FIX: int instead of uint16_t
-      double thisInt;
       double tO[3][3], thisOrient[3][3];
       int i, j;
       int hklnr, badSpot;
-      double hkl[3], qvec[3], qlen, qhat[3], dot, kf[3], xyz[3], xp, yp,
-          sinTheta, E;
-      int spotNr, iterNr;
+      double qvec[3], q2, sFac, kf[3], xyz[3], xp, yp, E;
+      int spotNr;
       int nSpots;
       double totInt;
-      bool *pxImg;
-      size_t offstBoolImg;
-      offstBoolImg = nrPxX;
-      offstBoolImg *= nrPxY;
-      offstBoolImg *= procNr;
-      pxImg = &pxImgAll[offstBoolImg];
       for (orientNr = startOrientNr; orientNr < endOrientNr; orientNr++) {
         nSpots = 0;
         totInt = 0;
@@ -533,69 +529,65 @@ int main(int argc, char *argv[]) {
             tO[i][j] = orients[orientNr * 9 + i * 3 + j];
         MatrixMultF33(tO, recip, thisOrient);
         for (hklnr = 0; hklnr < nhkls; hklnr++) {
-          hkl[0] = hkls[hklnr * 3 + 0];
-          hkl[1] = hkls[hklnr * 3 + 1];
-          hkl[2] = hkls[hklnr * 3 + 2];
-          MatrixMultF(thisOrient, hkl, qvec);
-          qlen = CalcLength(qvec[0], qvec[1], qvec[2]);
-          if (qlen == 0)
+          MatrixMultF(thisOrient, &hklsD[hklnr * 3], qvec);
+          // |q|^2 for THIS orientation. No sqrt: kf and E both need only
+          // |q|^2. Deliberately NOT precomputed from recip -- the shipped
+          // orientation DB is orthonormal only to ~1e-5, so |tO.recip.hkl|
+          // is not |recip.hkl| and assuming so shifts spots by ~0.011 px.
+          q2 = qvec[0] * qvec[0] + qvec[1] * qvec[1] + qvec[2] * qvec[2];
+          if (q2 == 0.0)
             continue;
-          qhat[0] = qvec[0] / qlen;
-          qhat[1] = qvec[1] / qlen;
-          qhat[2] = qvec[2] / qlen;
-          dot = qhat[2];
-          kf[0] = ki[0] - 2 * dot * qhat[0];
-          kf[1] = ki[1] - 2 * dot * qhat[1];
-          kf[2] = ki[2] - 2 * dot * qhat[2];
-          MatrixMultF(rotTranspose, kf, xyz);
+          sFac = 2.0 * qvec[2] / q2;
+          kf[0] = ki[0] - sFac * qvec[0];
+          kf[1] = ki[1] - sFac * qvec[1];
+          kf[2] = ki[2] - sFac * qvec[2];
+          // Row 2 alone: `xyz[2] <= 0` rejects ~50% of all iterations and the other
+          // two rows are dead work for every one of them. Same accumulation order as
+          // MatrixMultF's r[2], so bit-identical.
+          xyz[2] = rotTranspose[2][0] * kf[0] + rotTranspose[2][1] * kf[1] +
+                   rotTranspose[2][2] * kf[2];
           if (xyz[2] <= 0)
             continue;
+          xyz[0] = rotTranspose[0][0] * kf[0] + rotTranspose[0][1] * kf[1] +
+                   rotTranspose[0][2] * kf[2];
           xyz[0] = xyz[0] * pArr[2] / xyz[2];
-          xyz[1] = xyz[1] * pArr[2] / xyz[2];
-          xyz[2] = pArr[2];
           xp = xyz[0] - pArr[0];
-          yp = xyz[1] - pArr[1];
-          ipx = (int)((xp / pxX) + (0.5 * (nrPxX - 1)));
+          ipx = (int)((xp / pxX) + halfNrPxX);
           if (ipx < 0 || ipx > (nrPxX - 1))
             continue;
-          ipy = (int)((yp / pxY) + (0.5 * (nrPxY - 1)));
+          // ipx rejects a further ~42%; row 1 is dead work for those.
+          xyz[1] = rotTranspose[1][0] * kf[0] + rotTranspose[1][1] * kf[1] +
+                   rotTranspose[1][2] * kf[2];
+          xyz[1] = xyz[1] * pArr[2] / xyz[2];
+          yp = xyz[1] - pArr[1];
+          ipy = (int)((yp / pxY) + halfNrPxY);
           if (ipy < 0 || ipy > (nrPxY - 1))
             continue;
-          sinTheta = -qhat[2];
-          E = hc_keVnm * qlen / (4 * M_PI * sinTheta);
+          E = -hcOver4Pi * q2 / qvec[2];
           if (E < Elo || E > Ehi)
             continue;
           badSpot = 0;
-          if (pxImg[ipx * nrPxY + ipy])
+          if (pixelClaimed(
+                  &outArrThis[(orientNr - startOrientNr) * (1 + 2 * maxNrSpots) +
+                              1],
+                  spotNr, ipx, ipy))
             badSpot = 1;
           if (badSpot == 0) {
-            pxImg[ipx * nrPxY + ipy] = true;
-            qhatarr[3 * spotNr + 0] = qhat[0];
-            qhatarr[3 * spotNr + 1] = qhat[1];
-            qhatarr[3 * spotNr + 2] = qhat[2];
             outArrThis[(orientNr - startOrientNr) * (1 + 2 * maxNrSpots) + 1 +
                        2 * spotNr + 0] = (uint16_t)ipx;
             outArrThis[(orientNr - startOrientNr) * (1 + 2 * maxNrSpots) + 1 +
                        2 * spotNr + 1] = (uint16_t)ipy;
-            thisInt = image[ipy * nrPxX + ipx];
-            if (thisInt > minSpotIntensity) {
-              totInt += thisInt;
-              nSpots++;
-            }
             spotNr++;
             if (spotNr == maxNrSpots)
               break;
           }
         }
-        for (iterNr = 0; iterNr < spotNr; iterNr++) {
-          pxImg[outArrThis[(orientNr - startOrientNr) * (1 + 2 * maxNrSpots) +
-                           1 + 2 * iterNr + 0] *
-                    nrPxY +
-                outArrThis[(orientNr - startOrientNr) * (1 + 2 * maxNrSpots) +
-                           1 + 2 * iterNr + 1]] = false;
-        }
         outArrThis[(orientNr - startOrientNr) * (1 + 2 * maxNrSpots) + 0] =
             (uint16_t)spotNr;
+        // ONE comparison, shared with the cached path. See compareRowToImage().
+        compareRowToImage(
+            &outArrThis[(orientNr - startOrientNr) * (1 + 2 * maxNrSpots)],
+            image, nrPxX, minSpotIntensity, &nSpots, &totInt);
         if (nSpots >= minNrSpots && totInt >= minIntensity) {
 #pragma omp critical
           {
@@ -618,11 +610,9 @@ int main(int argc, char *argv[]) {
               "Second try didn't work either. Too big array. Update code.\n");
       }
       free(outArrThis);
-      free(qhatarr);
     }
     fsync(fwdFd);
     close(fwdFd);
-    free(pxImgAll);
   } else {
     // ── Read forward simulation ────────────────────────────────────────
     double wt0 = omp_get_wtime();

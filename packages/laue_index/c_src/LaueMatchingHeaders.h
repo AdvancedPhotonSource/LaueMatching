@@ -95,11 +95,73 @@ static inline bool forwardCacheUsable(const char *outfn, size_t nrOrients,
   return true;
 }
 
+// ── Comparison: one spot row against the image ──────────────────────────
+// The ONE place a predicted reflection is tested against the detector image.
+//
+// Both the fresh path (doFwd=1, spots just simulated) and the cached path
+// (doFwd=0, spots read back from the forward cache) call this. They used to
+// carry separate inlined copies and they DRIFTED: the quantized image_u8
+// clamped faint pixels up to 1, inflating totInt and flipping the minIntensity
+// test, so a cached run reported MORE solutions than a fresh one. The remedy at
+// the time was a comment asserting the two were "identical to the fresh path".
+// One function is the structural version of that comment.
+//
+// `row` points at the orientation's row in the cache layout:
+//     row[0]           = number of spots
+//     row[1 + 2*i + 0] = ipx of spot i
+//     row[1 + 2*i + 1] = ipy of spot i
+// Spots are visited in stored order, so totInt accumulates in the same order
+// the inlined versions used and the result is bit-identical.
+static inline void compareRowToImage(const uint16_t *row, const double *image,
+                                     int nrPxX, double minSpotIntensity,
+                                     int *nSpotsOut, double *totIntOut) {
+  int nSpots = 0;
+  double totInt = 0.0;
+  int nsp = (int)row[0];
+  for (int i = 0; i < nsp; i++) {
+    size_t ipx = (size_t)row[1 + 2 * i + 0];
+    size_t ipy = (size_t)row[1 + 2 * i + 1];
+    double v = image[ipy * (size_t)nrPxX + ipx];
+    if (v > minSpotIntensity) {
+      totInt += v;
+      nSpots++;
+    }
+  }
+  *nSpotsOut = nSpots;
+  *totIntOut = totInt;
+}
+
+// ── Per-orientation duplicate-pixel test ────────────────────────────────
+// Has an earlier reflection of THIS orientation already claimed this pixel?
+//
+// The claimed set never exceeds maxNrSpots (30 in the shipped Laue configs), so
+// a linear scan over the spots already written is EXACT and costs <= 30 integer
+// compares, against an hkl loop that runs thousands of times per orientation.
+//
+// This replaces a full nrPxX*nrPxY bool mask PER THREAD -- 4.2 MB each at
+// 2048^2, 67 MB of working set at 16 threads -- which was an O(1) membership
+// structure for a <= 30 element set. It also removes the only obstacle to
+// running the forward simulation on a GPU, where a per-thread mask of that size
+// is impossible (100k threads x 4.2 MB = 420 GB).
+//
+// `spots` points at the first (ipx, ipy) pair of this orientation's row, i.e.
+// one past the spot-count slot. Order is preserved: the FIRST reflection to
+// claim a pixel keeps it, exactly as the mask behaved.
+static inline int pixelClaimed(const uint16_t *spots, int spotNr, int ipx,
+                               int ipy) {
+  for (int i = 0; i < spotNr; i++)
+    if ((int)spots[2 * i] == ipx && (int)spots[2 * i + 1] == ipy)
+      return 1;
+  return 0;
+}
+
 static inline double CalcLength(double x, double y, double z) {
   return sqrt(x * x + y * y + z * z);
 }
 
 #define hc_keVnm 1.2398419739
+// hc/(4 pi): E = hc|q|/(4 pi sin(theta)) = -hcOver4Pi*|q|^2/q_z
+#define hcOver4Pi (hc_keVnm / (4.0 * M_PI))
 #define EPS 1E-12
 
 // ── Global state (defined once per translation unit) ────────────────────
@@ -436,6 +498,7 @@ static inline void MatrixMultF(double m[3][3], double v[3], double r[3]) {
     for (j = 0; j < 3; j++)
       r[i] += m[i][j] * v[j];
 }
+
 
 static inline void calcV(double LatC[6]) {
   double ca = cos(LatC[3] * deg2rad);
