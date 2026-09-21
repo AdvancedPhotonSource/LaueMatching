@@ -113,6 +113,9 @@ class ImageProcessingConfig:
     threshold_value: float = 0.0       # Used only if threshold_method is 'fixed'
     threshold_percentile: float = 90.0 # Used only if threshold_method is 'percentile'
     min_area: int = 10
+    # Cap (px) on the automatic matching-blur sigma, 0 = none. Applied by
+    # laue_index.preprocess (streaming) and RunImage. See config_schema.
+    gauss_sigma_max: float = 0.0
     # 0 = choose automatically (laue_index.workers). See config_schema.
     preprocess_workers: int = 0
     # Detector positions whose spots must not count as evidence (a known substrate,
@@ -178,12 +181,16 @@ class LaueConfig:
     lattice_parameter: str = "0.3615 0.3615 0.3615 90 90 90"
     r_array: str = "-1.2 -1.2 -1.2"
     p_array: str = "0.02 0.002 0.513"
+    # Exclusive-spot floor for the orientation filter: WINNER-TAKE-ALL across
+    # the frame's orientations (laue_index.filtering.calculate_unique_spots),
+    # not a count of distinct observed peaks.
     min_good_spots: int = 5
     max_laue_spots: int = 7
     min_nr_spots: int = 5
-    # Twin/CSL-aware robust orientation filter (default on). When True, real
-    # Sigma3 twins are not deleted by the unique-spot dedup; set False for the
-    # legacy unique-spot-only filter.
+    # Twin/CSL-aware robust orientation filter (default on). When True, a real
+    # Sigma3 twin is not deleted just because the winner-take-all assignment
+    # gave its shared reflections to the parent; set False for the legacy
+    # filter (exclusive-spot count only).
     robust_filter: bool = True
     # Per-thread orientation batch size for the indexer.  Bounds memory:
     # peak RAM ~= numProcs * batch_size * (1 + 2*max_laue_spots) * 2 bytes.
@@ -207,6 +214,11 @@ class LaueConfig:
     elo: float = 5.0
     ehi: float = 30.0
     maxAngle: float = 2.0
+    # Read by the C binaries straight from the params file; mirrored here so
+    # config_schema validates them (FRACTIONS in [0, 1)) and a rewrite keeps them.
+    min_spot_intensity: float = 0.0
+    tol_lat_c: str = "0 0 0 0 0 0"
+    tol_c_over_a: float = 0.0
 
     # Processing parameters
     do_forward: bool = True
@@ -309,6 +321,10 @@ class ConfigurationManager:
 
             logger.info(f"Configuration loaded from {self.config_file}")
 
+            # Whole-file checks that one line cannot decide (tol_LatC depends
+            # on tol_c_over_a, which may come later in the file).
+            _schema.validate_tolerances(self.config)
+
             # Sync potentially inconsistent parameters
             self._sync_parameters()
 
@@ -340,6 +356,13 @@ class ConfigurationManager:
              if line_content and not line_content.startswith('#'):
                 try:
                     self._parse_classic_config_line(line_content)
+                except _schema.FatalConfigError as e:
+                    # No safe default (config_schema.FATAL_KEYS: SpaceGroup,
+                    # Symmetry, LatticeParameter, P_Array, R_Array, Elo, Ehi):
+                    # stop here -- _load_config exits non-zero
+                    # -- instead of running on the built-in Ni geometry.
+                    raise _schema.FatalConfigError(
+                        f"line {line_num + 1} of {self.config_file}: {e}") from e
                 except Exception as e:
                     logger.error(f"Error parsing line {line_num + 1} in {self.config_file}: '{line_content}' - {str(e)}")
 

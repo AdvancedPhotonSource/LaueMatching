@@ -56,6 +56,33 @@ futures queue is ``FUTURES_QUEUE_DEPTH`` deep and each completed result carries
 a dense float32 frame, so the parent can hold depth x 4 bytes x pixels of
 finished work. At the shipped 512 x 2048^2 that is 8.6 GB, which is the bulk of
 the ~17 GB RSS seen on a 13k-frame shard -- the workers were never the problem.
+
+SIBLING SHARDS AND THE PROCESS LIMIT. Everything above sizes ONE server against
+the whole host. That is wrong as soon as several shards share a host, and it
+failed on a 112-core node with ``ulimit -u`` 8192: two shards each sized
+themselves to 112 workers, each worker let OpenCV start its own thread pool,
+and the user ran out of threads. OpenCV reported ``res = 11`` (EAGAIN), the GPU
+daemon reported a misleading ``GPUassert: device busy or unavailable``, and the
+dispatcher could no longer fork to launch the remaining shards. So the chooser
+now also takes:
+
+  * ``LAUE_SHARDS_PER_HOST``  -- how many servers share this host. The CPU
+    count, the memory budget and the thread budget are each divided by it.
+  * ``LAUE_DAEMON_NCPUS``     -- the co-resident daemon's ``ncpus``, ONLY when
+    the caller sets it (nothing sets it automatically, so an unset variable is
+    0.7.1 behaviour). Subtracted from this shard's CPU share, but never below
+    HALF of that share: ``max(share - daemon, share // 2, 1)``. Core contention
+    was not the failure being fixed (the thread limit was), so it may trim the
+    pool, never collapse it. A warning says when the half-share floor binds.
+  * ``RLIMIT_NPROC``          -- on Linux it counts THREADS per user, not
+    processes. Half of it is budgeted to preprocessing, at
+    ``THREADS_PER_WORKER`` threads per worker. Both numbers are stated
+    assumptions, not measurements: the pool initializer pins the BLAS/OpenMP/
+    OpenCV pools to one thread, but a worker still has its main thread and
+    whatever a library starts that the initializer cannot reach.
+
+``LAUE_PREPROCESS_WORKERS`` still wins over all of it (it is how an operator who
+has measured the host says so), with a warning if it exceeds the thread budget.
 """
 from __future__ import annotations
 
@@ -67,6 +94,7 @@ __all__ = [
     "usable_cpu_count", "available_memory_bytes", "worker_peak_bytes",
     "choose_preprocess_workers", "describe_machine", "benchmark_workers",
     "BYTES_PER_PIXEL_PER_WORKER", "WORKER_BASE_BYTES",
+    "THREADS_PER_WORKER", "NPROC_BUDGET_FRACTION",
 ]
 
 logger = logging.getLogger("LaueStream")
@@ -88,6 +116,13 @@ DEFAULT_MEMORY_RESERVE = 0.25
 # Memory and the usable CPU count are real bounds and still apply; a site that
 # has measured its own knee sets PreprocessWorkers or LAUE_PREPROCESS_WORKERS.
 DEFAULT_WORKER_CEILING = None
+
+# Thread budget under RLIMIT_NPROC (see the module docstring). Assumptions, not
+# fits: a worker is charged 4 threads even after its pools are pinned to one,
+# and preprocessing may use half the per-user limit -- the rest belongs to the
+# daemon, the parent's threads, the shell, and anything else the user runs.
+THREADS_PER_WORKER = 4
+NPROC_BUDGET_FRACTION = 0.5
 
 
 def _read_int(path: str) -> Optional[int]:
@@ -137,8 +172,11 @@ def usable_cpu_count() -> int:
     if not n:
         n = os.cpu_count() or 1
     quota = _cgroup_cpu_quota()
-    if quota is not None and quota >= 1:
-        n = min(n, int(quota))
+    if quota is not None and quota > 0:
+        # A fractional quota (e.g. 0.5 CPU) is still a limit: it means ONE
+        # worker, not "ignore the quota and use every CPU on the host", which is
+        # what the old `quota >= 1` test did.
+        n = min(n, max(1, int(quota)))
     return max(1, n)
 
 
@@ -192,6 +230,47 @@ def available_memory_bytes() -> Optional[int]:
     return min(candidates) if candidates else None
 
 
+def _rlimit_nproc() -> Optional[int]:
+    """Soft RLIMIT_NPROC, or None if unlimited or not available (Windows)."""
+    try:
+        import resource
+        soft, _hard = resource.getrlimit(resource.RLIMIT_NPROC)
+    except (ImportError, AttributeError, ValueError, OSError):
+        return None
+    if soft == resource.RLIM_INFINITY or soft <= 0:
+        return None
+    return int(soft)
+
+
+def _env_positive_int(name: str) -> Optional[int]:
+    """A positive integer from the environment, or None (warning if malformed)."""
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return None
+    try:
+        v = int(raw)
+    except ValueError:
+        v = 0
+    if v < 1:
+        logger.warning("Ignoring %s=%r: not a positive integer", name, raw)
+        return None
+    return v
+
+
+def _env_nonneg_int(name: str) -> Optional[int]:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return None
+    try:
+        v = int(raw)
+    except ValueError:
+        v = -1
+    if v < 0:
+        logger.warning("Ignoring %s=%r: not a non-negative integer", name, raw)
+        return None
+    return v
+
+
 def worker_peak_bytes(pixels: int) -> int:
     """Peak RSS of one preprocessing worker for a frame of *pixels* pixels."""
     return int(BYTES_PER_PIXEL_PER_WORKER * pixels + WORKER_BASE_BYTES)
@@ -206,12 +285,17 @@ def choose_preprocess_workers(
     memory_reserve: float = DEFAULT_MEMORY_RESERVE,
     ceiling: Optional[int] = DEFAULT_WORKER_CEILING,
     env_var: str = "LAUE_PREPROCESS_WORKERS",
+    shards_per_host: Optional[int] = None,
+    daemon_ncpus: Optional[int] = None,
 ) -> Tuple[int, Dict[str, Any]]:
     """Pick a preprocessing worker count for this machine and this frame size.
 
-    Bounded by, in order: an explicit override, the CPUs we may use, the memory
-    left after the parent's queue is paid for, an optional caller cap, and a
-    ceiling past which the measured curve is flat.
+    Bounded by, in order: an explicit override (which wins outright), this
+    shard's share of the CPUs we may use less the co-resident daemon's
+    ``ncpus``, this shard's share of the memory left after its parent's queue is
+    paid for, this shard's share of the RLIMIT_NPROC thread budget, an optional
+    caller cap, and an optional absolute ceiling (``None`` by default -- see
+    ``DEFAULT_WORKER_CEILING`` for why there is no longer a default one).
 
     Args:
         nr_px_x, nr_px_y: frame dimensions -- the memory cost is per pixel, so
@@ -224,6 +308,12 @@ def choose_preprocess_workers(
         ceiling: absolute cap; None to disable.
         env_var: environment override. Wins over everything, including memory,
             so an operator who knows their machine is never argued with.
+        shards_per_host: servers sharing this host; CPUs, memory budget and
+            thread budget are divided by it. None reads LAUE_SHARDS_PER_HOST
+            (default 1).
+        daemon_ncpus: the co-resident daemon's ncpus, subtracted from this
+            shard's CPU share but never below half of it. None reads
+            LAUE_DAEMON_NCPUS (unset: 0, nothing subtracted -- 0.7.1).
 
     Returns:
         ``(workers, decision)`` -- decision records every bound that was
@@ -235,13 +325,28 @@ def choose_preprocess_workers(
     avail = available_memory_bytes()
     per_worker = worker_peak_bytes(pixels)
     queue_bytes = int(queue_depth) * pixels * 4      # float32 on the wire
+    if shards_per_host is None:
+        shards_per_host = _env_positive_int("LAUE_SHARDS_PER_HOST") or 1
+    shards = max(1, int(shards_per_host))
+    if daemon_ncpus is None:
+        daemon_ncpus = _env_nonneg_int("LAUE_DAEMON_NCPUS") or 0
+    daemon_ncpus = max(0, int(daemon_ncpus))
+    nproc = _rlimit_nproc()
+    by_nproc = None
+    if nproc is not None:
+        by_nproc = max(1, int(nproc * NPROC_BUDGET_FRACTION)
+                       // THREADS_PER_WORKER // shards)
 
     decision: Dict[str, Any] = {
         "pixels": pixels,
         "usable_cpus": cpus,
+        "shards_per_host": shards,
+        "daemon_ncpus": daemon_ncpus,
         "available_memory_bytes": avail,
         "per_worker_bytes": per_worker,
         "queue_bytes": queue_bytes,
+        "rlimit_nproc": nproc,
+        "workers_by_nproc": by_nproc,
         "bound_by": None,
     }
 
@@ -252,17 +357,32 @@ def choose_preprocess_workers(
             if n >= 1:
                 decision["bound_by"] = env_var
                 decision["workers"] = n
+                if by_nproc is not None and n > by_nproc:
+                    logger.warning(
+                        "%s=%d exceeds this shard's thread budget of %d workers "
+                        "(RLIMIT_NPROC %d, %d shard(s) per host, %d threads per "
+                        "worker). Honoured because it was set explicitly; if the "
+                        "pool fails to start threads (OpenCV 'res = 11'), lower it.",
+                        env_var, n, by_nproc, nproc, shards, THREADS_PER_WORKER)
                 return n, decision
             raise ValueError(override)
         except ValueError:
             logger.warning("Ignoring %s=%r: not a positive integer",
                            env_var, override)
 
-    n = cpus
+    # This shard's share of the CPUs, less the daemon's fit threads.
+    share = max(1, cpus // shards)
+    n = max(share - daemon_ncpus, share // 2, 1)
+    if daemon_ncpus and share - daemon_ncpus < share // 2:
+        logger.warning(
+            "LAUE_DAEMON_NCPUS=%d would leave %d of this shard's %d CPUs; "
+            "keeping half the share (%d) instead.",
+            daemon_ncpus, max(share - daemon_ncpus, 0), share, n)
+    decision["cpus_for_workers"] = n
     decision["bound_by"] = "usable_cpus"
 
     if avail is not None:
-        budget = int(avail * (1.0 - memory_reserve)) - queue_bytes
+        budget = int(avail * (1.0 - memory_reserve)) // shards - queue_bytes
         by_mem = budget // per_worker
         decision["memory_budget_bytes"] = budget
         decision["workers_by_memory"] = int(by_mem)
@@ -271,15 +391,20 @@ def choose_preprocess_workers(
             # worker and a warning beats a pool that gets OOM-killed mid-scan.
             logger.warning(
                 "Memory budget leaves no room for a preprocessing worker "
-                "(available %.1f GB, queue %.1f GB, worker %.1f GB). Using 1; "
-                "reduce the futures queue depth or the frame size.",
-                avail / 1e9, queue_bytes / 1e9, per_worker / 1e9)
+                "(available %.1f GB over %d shard(s), queue %.1f GB, worker "
+                "%.1f GB). Using 1; reduce the futures queue depth or the "
+                "frame size.",
+                avail / 1e9, shards, queue_bytes / 1e9, per_worker / 1e9)
             decision["bound_by"] = "memory"
             decision["workers"] = 1
             return 1, decision
         if by_mem < n:
             n = int(by_mem)
             decision["bound_by"] = "memory"
+
+    if by_nproc is not None and by_nproc < n:
+        n = by_nproc
+        decision["bound_by"] = "nproc"
 
     if max_workers is not None and max_workers >= 1 and max_workers < n:
         n = int(max_workers)
@@ -304,6 +429,11 @@ def describe_machine(nr_px_x: int = 2048, nr_px_y: int = 2048,
         "  frame                %d x %d  (%d pixels)" % (nr_px_x, nr_px_y, d["pixels"]),
         "  usable CPUs          %d" % d["usable_cpus"],
         "  os.cpu_count()       %s" % (os.cpu_count(),),
+        "  shards per host      %d   (LAUE_SHARDS_PER_HOST)" % d["shards_per_host"],
+        "  daemon ncpus         %d   (LAUE_DAEMON_NCPUS)" % d["daemon_ncpus"],
+        "  RLIMIT_NPROC         %s" % (
+            "unlimited" if d["rlimit_nproc"] is None else
+            "%d  -> at most %d workers" % (d["rlimit_nproc"], d["workers_by_nproc"])),
         "  available memory     %s" % (
             "%.1f GB" % (avail / 1e9) if avail is not None else "unknown"),
         "  per-worker peak      %.0f MB   (fitted: %.2f B/px + %.1f MB)" % (
@@ -319,14 +449,15 @@ def describe_machine(nr_px_x: int = 2048, nr_px_y: int = 2048,
 
 
 # ---------------------------------------------------------------------------
-# Measuring this machine, rather than trusting the ceiling
+# Measuring this machine, rather than extrapolating one host's curve
 # ---------------------------------------------------------------------------
 #
-# choose_preprocess_workers() answers from CPU count and memory alone, which is
-# what a server start-up can afford. On a big node that leaves DEFAULT_WORKER_
-# CEILING deciding -- and that constant came from one machine's curve, so it is
-# the weakest number here. benchmark_workers() replaces it with a measurement of
-# the machine actually in front of you.
+# choose_preprocess_workers() answers from CPU count, memory and the thread
+# limit alone, which is what a server start-up can afford. There is no default
+# ceiling any more (DEFAULT_WORKER_CEILING is None), so on a big node the CPU
+# count decides -- and whether throughput is still climbing there was measured
+# only up to 40 cores. benchmark_workers() measures the machine actually in
+# front of you instead of extrapolating that curve onto it.
 
 def _synthetic_frame(nr_px_x: int, nr_px_y: int, n_spots: int = 150,
                      seed: int = 0):
@@ -429,7 +560,7 @@ if __name__ == "__main__":  # pragma: no cover
     ap.add_argument("--nr-px-y", type=int, default=2048)
     ap.add_argument("--queue-depth", type=int, default=0)
     ap.add_argument("--benchmark", action="store_true",
-                    help="measure this machine instead of trusting the ceiling")
+                    help="measure this machine instead of extrapolating the shipped curve")
     ap.add_argument("--frames", type=int, default=40,
                     help="frames per worker-count point (default 40)")
     a = ap.parse_args()

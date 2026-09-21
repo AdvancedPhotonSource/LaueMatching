@@ -7,7 +7,9 @@ Provides:
   - H5 image loading
   - Image preprocessing pipeline (background, threshold, components, blur)
   - Output file parsing (solutions.txt, spots.txt with ImageNr column)
-  - Orientation filtering by unique-spot count
+  - Orientation filtering (re-exported from laue_index.filtering; the "unique"
+    spot count there is WINNER-TAKE-ALL across one frame's orientations, not a
+    count of distinct observed peaks)
   - TCP / networking helpers
 
 These are extracted from RunImage.py so that
@@ -37,6 +39,9 @@ import scipy.ndimage as ndimg
 _INSTALL_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _INSTALL_PATH not in sys.path:
     sys.path.insert(0, _INSTALL_PATH)
+
+# Shared parsing rules (SpaceGroup, Symmetry) so both config readers agree.
+from laue_index import config_schema as _schema  # noqa: E402
 
 # Optional heavy imports — gracefully degrade
 try:
@@ -123,9 +128,21 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "denoise_image":    False,
     "denoise_strength": 1.0,
     "edge_enhancement": False,
+    # Preprocessing pool cap; 0 = let laue_index.workers decide. Read by
+    # laue_image_server (the streaming path). LAUE_PREPROCESS_WORKERS overrides.
+    "preprocess_workers": 0,
     # Matching
     "min_intensity":    0.0,
+    # Exclusive-spot floor for the orientation filter (winner-take-all label
+    # count). laue_postprocess uses it unless --min-unique is given. 2 when
+    # absent = 0.7.1 streaming's effective floor (its --min-unique default).
     "min_good_spots":   2,
+    # 1 = twin/CSL-aware filter, 0 = legacy. None = the key is ABSENT from the
+    # params file: laue_postprocess then keeps 0.7.1 streaming behaviour (the
+    # legacy filter) so an existing config re-runs to the same result, and says
+    # so once at startup. RunImage's default for an absent key is 1 (robust);
+    # an explicit key means the same thing on both paths.
+    "robust_filter":    None,
     "min_nr_spots":     5,
     "max_angle":        2.0,
     "max_laue_spots":   400,
@@ -141,12 +158,32 @@ DEFAULT_CONFIG: Dict[str, Any] = {
 }
 
 
+# Keys whose DEFAULT_CONFIG value is another experiment's (the Ni lattice, a
+# 0.513 m detector): a malformed line for one of these raises instead of being
+# skipped with a warning, so a template's literal __SET_ME__ cannot run as Ni.
+_FATAL_KEYS = ("SpaceGroup", "Symmetry", "LatticeParameter", "R_Array", "P_Array",
+               "Elo", "Ehi")
+
+
+def _floats(key: str, rest: List[str], n: int) -> List[float]:
+    """First *n* values as floats. Same token-count rule as the C and as
+    config_schema: too few is an error, extra tokens warn and are ignored."""
+    if len(rest) < n:
+        raise ValueError(f"{key} needs {n} values, got {len(rest)}")
+    if len(rest) > n:
+        logger.warning(f"{key}: {len(rest)} values given, using the first {n} "
+                       f"(as the C does); the rest are ignored.")
+    return [float(v) for v in rest[:n]]
+
+
 def parse_config(config_file: str) -> Dict[str, Any]:
     """
     Parse a classic LaueMatching text config file into a flat dictionary.
 
     Returns a dict with the same keys as DEFAULT_CONFIG, overridden by
-    values found in the file.
+    values found in the file. A malformed SpaceGroup, Symmetry,
+    LatticeParameter, R_Array, P_Array, Elo or Ehi raises ValueError naming
+    the key and the value; other malformed lines are skipped with a warning.
     """
     cfg = dict(DEFAULT_CONFIG)
     if not os.path.exists(config_file):
@@ -168,16 +205,20 @@ def parse_config(config_file: str) -> Dict[str, Any]:
 
             try:
                 if key == "SpaceGroup":
-                    cfg["space_group"] = int(rest[0])
+                    cfg["space_group"] = _schema.parse_space_group(rest[0])
                 elif key == "Symmetry":
+                    if len(rest[0]) != 1 or rest[0] not in _schema.SYMMETRY_LETTERS:
+                        raise ValueError(_schema.SYMMETRY_RULE)
                     cfg["symmetry"] = rest[0]
-                elif key == "LatticeParameter" and len(rest) >= 6:
+                elif key == "LatticeParameter":
+                    _floats(key, rest, 6)
                     cfg["lattice_parameter"] = " ".join(rest[:6])
-                elif key == "R_Array" and len(rest) >= 3:
+                elif key == "R_Array":
+                    _floats(key, rest, 3)
                     cfg["r_array"] = " ".join(rest[:3])
-                elif key == "P_Array" and len(rest) >= 3:
+                elif key == "P_Array":
+                    cfg["distance"] = _floats(key, rest, 3)[2]
                     cfg["p_array"] = " ".join(rest[:3])
-                    cfg["distance"] = float(rest[2])
                 elif key == "NrPxX":
                     cfg["nr_px_x"] = int(rest[0])
                 elif key == "NrPxY":
@@ -194,6 +235,10 @@ def parse_config(config_file: str) -> Dict[str, Any]:
                     cfg["min_intensity"] = float(rest[0])
                 elif key == "MinGoodSpots":
                     cfg["min_good_spots"] = int(rest[0])
+                elif key == "RobustFilter":
+                    cfg["robust_filter"] = bool(int(rest[0]))
+                elif key == "PreprocessWorkers":
+                    cfg["preprocess_workers"] = int(rest[0])
                 elif key == "MinNrSpots":
                     cfg["min_nr_spots"] = int(rest[0])
                 elif key == "MaxAngle":
@@ -243,6 +288,11 @@ def parse_config(config_file: str) -> Dict[str, Any]:
                 elif key == "H5Location":
                     cfg["h5_location"] = rest[0]
             except (ValueError, IndexError) as e:
+                if key in _FATAL_KEYS:
+                    raise ValueError(
+                        f"{config_file}: {key} {' '.join(rest)!r} is not valid "
+                        f"({e}). {key} has no safe default -- set it for this "
+                        f"experiment.") from e
                 logger.warning(f"Skipping malformed config line '{line}': {e}")
 
     return cfg

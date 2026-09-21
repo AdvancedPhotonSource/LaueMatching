@@ -4,9 +4,11 @@ REFACTOR_PLAN §3.  ``Tensor``-free, state-free, I/O-free numpy functions lifted
 verbatim from ``laue_stream_utils`` so they have a single home that
 ``filtering.py`` depends on (and the legacy ``lsu`` re-exports for back-compat).
 
-Cubic point group only today; generalise via point-group ops keyed on the
-config space group (REFACTOR_PLAN §4b) — ``midas_stress.orientation.make_symmetries``
-is space-group-aware and would deliver that.
+Cubic (m-3m) and hexagonal (6/mmm) proper rotation groups; the CSL table is
+cubic only. Other point groups are not tabulated here -- generalise via
+point-group ops keyed on the config space group (REFACTOR_PLAN §4b);
+``midas_stress.orientation.make_symmetries`` is space-group-aware and would
+deliver that.
 
 ``# TODO(unify-after-publish)``: the canonical orientation/quat/misorientation
 primitives live in ``midas_stress.orientation`` (make_symmetries,
@@ -24,7 +26,8 @@ import itertools as _it
 import numpy as np
 
 __all__ = [
-    "cubic_proper_ops", "CUBIC_OPS", "CSL_TABLE",
+    "cubic_proper_ops", "CUBIC_OPS", "hexagonal_proper_ops", "HEX_OPS",
+    "proper_ops_for_space_group", "CSL_TABLE",
     "disorientation_deg_axis", "is_csl_related",
 ]
 
@@ -43,6 +46,47 @@ def cubic_proper_ops() -> np.ndarray:
 
 
 CUBIC_OPS = cubic_proper_ops()
+
+
+def hexagonal_proper_ops() -> np.ndarray:
+    """12 proper rotations of the hexagonal point group 6/mmm (group 622).
+
+    In the indexer's crystal Cartesian frame ``c`` is along z (``calcRecipArray``
+    in LaueMatchingHeaders.h puts a along x, b in the xy plane and c along z for
+    alpha = beta = 90), so the group is the six rotations by k*60 deg about z
+    plus six two-folds about in-plane axes at j*30 deg. That set of axes is the
+    same whether a or a* is taken along x, so it does not depend on the in-plane
+    convention.
+    """
+    ops = []
+    for k in range(6):
+        t = np.radians(60.0 * k)
+        c, s = np.cos(t), np.sin(t)
+        ops.append(np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]]))
+    for j in range(6):
+        t = np.radians(30.0 * j)
+        n = np.array([np.cos(t), np.sin(t), 0.0])
+        ops.append(2.0 * np.outer(n, n) - np.eye(3))
+    return np.array(ops)
+
+
+HEX_OPS = hexagonal_proper_ops()
+
+
+def proper_ops_for_space_group(space_group: int):
+    """Proper rotation ops for the groups tabulated here, else None.
+
+    Cubic (195-230) and hexagonal (168-194). Trigonal groups are NOT mapped to
+    the hexagonal ops: in the rhombohedral setting the indexer uses a different
+    Cartesian frame (``calcRecipArray``'s rhomb branch), so reusing them would
+    be wrong rather than merely incomplete.
+    """
+    sg = int(space_group or 0)
+    if 195 <= sg <= 230:
+        return CUBIC_OPS
+    if 168 <= sg <= 194:
+        return HEX_OPS
+    return None
 
 # CSL boundaries for cubic: Sigma -> (disorientation angle deg, sorted-|axis|).
 CSL_TABLE = {

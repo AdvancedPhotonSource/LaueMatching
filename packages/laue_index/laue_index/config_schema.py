@@ -23,7 +23,28 @@ from dataclasses import dataclass
 
 logger = logging.getLogger("LaueMatching")
 
-__all__ = ["Param", "SCHEMA", "SCHEMA_BY_KEY", "parse_line", "render_text"]
+__all__ = ["Param", "SCHEMA", "SCHEMA_BY_KEY", "parse_line", "render_text",
+           "FatalConfigError", "FATAL_KEYS", "validate_tolerances",
+           "parse_space_group", "SYMMETRY_LETTERS", "SYMMETRY_RULE"]
+
+
+class FatalConfigError(ValueError):
+    """A key with no safe default carries a value that cannot be parsed.
+
+    Raised instead of the per-line ValueError so ConfigurationManager does not
+    log it and carry on with the built-in default (SpaceGroup 225, the Ni
+    lattice, a 0.513 m detector distance): a run on those is a run on someone
+    else's geometry that looks like it worked.
+    """
+
+
+# Keys whose built-in default is another experiment's value, so a malformed line
+# (e.g. the templates' literal ``__SET_ME__``) must stop the run, not fall back.
+# Elo/Ehi: the band's 5/30 keV default is not this beamline's either; the C
+# reads them with an unchecked sscanf, so an unparseable value silently keeps
+# 5/30 there.
+FATAL_KEYS = frozenset({"SpaceGroup", "Symmetry", "LatticeParameter",
+                        "P_Array", "R_Array", "Elo", "Ehi"})
 
 
 @dataclass(frozen=True)
@@ -37,7 +58,7 @@ class Param:
     doc: str = ""          # inline write comment + docs
     nvals: int = 1         # >1: join this many tokens into a space-separated string
     write: bool = True     # emit in render_text()
-    kind: str = "scalar"   # scalar | multi | symmetry | threshold_method | atom_desc
+    kind: str = "scalar"   # scalar | multi | fraction | symmetry | threshold_method | atom_desc
 
 
 # Section order = write order.
@@ -78,11 +99,36 @@ SCHEMA = [
     Param("MaxAngle", "maxAngle", float, 2.0, "config", _IDX),
     Param("MinIntensity", "min_intensity", float, 50.0, "config", _IDX,
           doc="(May be deprecated by threshold methods)"),
+    Param("MinSpotIntensity", "min_spot_intensity", float, 0.0, "config", _IDX,
+          doc="Fit stage: a predicted spot counts only if the blurred image "
+              "exceeds this at its pixel. 0 = the C default"),
+    # Crystal-fit tolerances. FRACTIONS, not percent: the C forms the bounds as
+    # value * (1 -/+ tol), so 1.0 would put the lower bound at zero. Validated
+    # here like the C does (validateCrystalFitTolerances in
+    # LaueMatchingHeaders.h): >= 1 (or negative / NaN) is rejected, > 0.1 warns.
+    # The C reads these keys from the params file itself; the rows exist so the
+    # Python side validates them, keeps them on a rewrite, and records them in
+    # provenance instead of logging "unknown configuration key".
+    Param("tol_LatC", "tol_lat_c", str, "0 0 0 0 0 0", "config", _IDX,
+          doc="Lattice-fit tolerance per a b c alpha beta gamma, as FRACTIONS "
+              "(0.01 = 1%); 0 holds that parameter fixed. Ignored by the C "
+              "when tol_c_over_a is non-zero",
+          nvals=6, kind="fraction"),
+    Param("tol_c_over_a", "tol_c_over_a", float, 0.0, "config", _IDX,
+          doc="c/a fit at constant volume, as a FRACTION (0.01 = 1%); "
+              "0 disables. Overrides tol_LatC",
+          kind="fraction"),
     # --- Filtering ---
     Param("MinGoodSpots", "min_good_spots", int, 5, "config", _FILT,
-          doc="Min unique spots to keep orientation"),
+          doc="Min EXCLUSIVE spots to keep an orientation: winner-take-all "
+              "across the frame's orientations (a spot claimed by a better "
+              "orientation does not count), not distinct observed peaks"),
+    # Default 1 on the RunImage path. The STREAMING path treats an absent key as
+    # 0 (0.7.1 behaviour) and says so at startup; an explicit key is honoured on
+    # both. See laue_postprocess._robust_in_force.
     Param("RobustFilter", "robust_filter", bool, True, "config", _FILT,
-          doc="1=twin/CSL-aware filter (keep Sigma3 twins), 0=legacy unique-spot only"),
+          doc="1=twin/CSL-aware filter (keep Sigma3 twins), 0=legacy exclusive "
+              "(winner-take-all) spot count only"),
     # --- Image Processing ---
     Param("ThresholdMethod", "threshold_method", str, "adaptive", "image_processing", _IMG,
           doc="options: adaptive, otsu, fixed, percentile", kind="threshold_method"),
@@ -91,6 +137,9 @@ SCHEMA = [
     Param("ThresholdPercentile", "threshold_percentile", float, 90.0, "image_processing", _IMG,
           doc="Used only if ThresholdMethod is 'percentile'"),
     Param("MinArea", "min_area", int, 10, "image_processing", _IMG),
+    Param("GaussSigmaMax", "gauss_sigma_max", float, 0.0, "image_processing", _IMG,
+          doc="Cap (px) on the automatic matching-blur sigma; 0 = no cap. "
+              "Applied on both the streaming and the RunImage path"),
     Param("PreprocessWorkers", "preprocess_workers", int, 0, "image_processing", _IMG,
           doc="Upper bound on parallel preprocessing worker processes. 0 (default) "
               "lets laue_index.workers.choose_preprocess_workers decide from the "
@@ -154,6 +203,86 @@ _IGNORED = {"AStar", "SimulationSmoothingWidth"}
 SCHEMA_BY_KEY = {p.key: p for p in SCHEMA}
 
 
+# Crystal-fit tolerance limits, mirroring validateCrystalFitTolerances in
+# LaueMatchingHeaders.h: a fraction >= 1 cannot be an elastic refinement bound
+# (it is almost always a percent written where a fraction was meant); above 0.1
+# is legal but suspicious.
+FRACTION_MAX = 1.0
+FRACTION_WARN = 0.1
+
+
+def _check_fractions(key: str, values) -> None:
+    """Reject a tolerance that is not a fraction in [0, 1); warn above 0.1."""
+    for i, v in enumerate(values):
+        tag = key if len(values) == 1 else f"{key}[{i}]"
+        if not (0.0 <= v < FRACTION_MAX):          # also rejects NaN
+            logger.error(
+                f"{tag} = {v:g} is not a valid FRACTION: it must satisfy "
+                f"0 <= tol < 1. If you meant one percent, write 0.01, not 1.0.")
+            raise ValueError(f"{tag} must be a fraction in [0, 1)")
+        if v > FRACTION_WARN:
+            logger.warning(
+                f"{tag} = {v:g} is a FRACTION: +-{100.0 * v:g}%. "
+                f"If you meant {v:g}%, write {v / 100.0:g}.")
+
+
+# Symmetry is not read by the C binaries at all; its consumer is GenerateHKLs,
+# which accepts exactly one UPPERCASE letter. Both Python parsers therefore
+# refuse a lowercase letter rather than guess.
+SYMMETRY_LETTERS = "FICARPB"
+SYMMETRY_RULE = ("Symmetry must be ONE uppercase letter from F I C A R P B. It "
+                 "is case-sensitive: the C does not read it, and GenerateHKLs, "
+                 "which does, rejects lowercase.")
+
+
+def parse_space_group(token: str) -> int:
+    """SpaceGroup as the C reads it (sscanf %d), minus its silent truncation:
+    an integral float such as ``225.0`` is accepted, ``225.5`` is not."""
+    try:
+        v = int(token)
+    except ValueError:
+        f = float(token)                      # raises for non-numbers
+        if not f.is_integer():
+            raise ValueError(f"SpaceGroup {token} is not an integer")
+        v = int(f)
+    if not 1 <= v <= 230:
+        raise ValueError(f"SpaceGroup {v} outside 1-230")
+    return v
+
+
+def _check_token_count(key: str, got: int, need: int) -> None:
+    """Token-count rule shared with the C (sscanf reads the first N): too few is
+    an error, extra trailing tokens are ignored with a warning."""
+    if got < need:
+        logger.error(f"Incorrect number of values for {key}. "
+                     f"Expected {need}, got {got}.")
+        raise ValueError(f"{key} needs {need} values, got {got}")
+    if got > need:
+        logger.warning(f"{key}: {got} values given, using the first {need} "
+                       f"(as the C does); the rest are ignored.")
+
+
+def validate_tolerances(config) -> None:
+    """Whole-file tolerance check, mirroring validateCrystalFitTolerances.
+
+    When tol_c_over_a is non-zero the C ignores tol_LatC and does not validate
+    it; so here a NOTE is logged and the value is kept as written. Otherwise an
+    out-of-range tol_LatC is logged as an error and not kept (reset to zeros),
+    as a bad tol_c_over_a line is at parse time.
+    """
+    raw = str(getattr(config, "tol_lat_c", "0 0 0 0 0 0"))
+    vals = [float(v) for v in raw.split()]
+    if float(getattr(config, "tol_c_over_a", 0.0) or 0.0) != 0.0:
+        if any(v != 0.0 for v in vals):
+            logger.info(f"NOTE: tol_c_over_a is set, so it overrides tol_LatC; "
+                        f"tol_LatC ({raw}) is ignored and not validated.")
+        return
+    try:
+        _check_fractions("tol_LatC", vals)
+    except ValueError:
+        config.tol_lat_c = SCHEMA_BY_KEY["tol_LatC"].default
+
+
 def _coerce(value: str, typ: type):
     if typ is bool:
         return bool(int(value))
@@ -170,8 +299,26 @@ def parse_line(config, line: str) -> bool:
     Reproduces the legacy ``_parse_classic_config_line`` semantics (value
     coercion, multi-value join, Symmetry / ThresholdMethod validation,
     P_Array->distance handled by the caller's _sync, AtomDescription rest-of-line,
-    ignored keys), raising ValueError on malformed required values.
+    ignored keys), raising ValueError on malformed values. For a key in
+    :data:`FATAL_KEYS` the error is a :class:`FatalConfigError`, which callers
+    must not swallow.
     """
+    try:
+        return _parse_line(config, line)
+    except FatalConfigError:
+        raise
+    except ValueError as exc:
+        body = line[:line.index("#")] if "#" in line else line
+        parts = body.split()
+        key = _ALIASES.get(parts[0], parts[0]) if parts else ""
+        if key in FATAL_KEYS:
+            raise FatalConfigError(
+                f"{key} has an invalid value {' '.join(parts[1:])!r} ({exc}). "
+                f"{key} has no safe default -- set it for this experiment.") from exc
+        raise
+
+
+def _parse_line(config, line: str) -> bool:
     if "#" in line:
         line = line[:line.index("#")].strip()
     parts = line.split()
@@ -191,11 +338,33 @@ def parse_line(config, line: str) -> bool:
         setattr(config, param.field, line.split(None, 1)[1] if n > 1 else "")
         return True
 
+    if param.kind == "fraction":
+        _check_token_count(key, n - 1, param.nvals)
+        try:
+            vals = [float(v) for v in parts[1:param.nvals + 1]]
+        except ValueError:
+            logger.error(f"Invalid value format for {key} on line: '{line}'. "
+                         f"Expected {param.nvals} float(s).")
+            raise ValueError(f"Invalid format for {key}")
+        # tol_LatC's range is checked after the whole file is read
+        # (validate_tolerances): the C ignores it when tol_c_over_a is set, and
+        # that line may come later in the file.
+        if key != "tol_LatC":
+            _check_fractions(key, vals)
+        value = " ".join(parts[1:param.nvals + 1]) if param.nvals > 1 else vals[0]
+        setattr(_target(config, param), param.field, value)
+        return True
+
     if param.kind == "multi":
-        if n != param.nvals + 1:
-            logger.error(f"Incorrect number of values for {key}. "
-                         f"Expected {param.nvals}, got {n - 1}.")
-            raise ValueError(f"Incorrect {key} format")
+        _check_token_count(key, n - 1, param.nvals)
+        # Every multi-value key is numeric. Stored as the original tokens (the
+        # C re-reads the file), but a non-number -- e.g. a template's
+        # __SET_ME__ -- must not be accepted as a lattice or a detector pose.
+        try:
+            [float(v) for v in parts[1:param.nvals + 1]]
+        except ValueError:
+            logger.error(f"Non-numeric value for {key} on line: '{line}'.")
+            raise ValueError(f"Non-numeric {key}")
         setattr(_target(config, param), param.field, " ".join(parts[1:param.nvals + 1]))
         return True
 
@@ -206,9 +375,9 @@ def parse_line(config, line: str) -> bool:
 
     if param.kind == "symmetry":
         sym = parts[1]
-        if sym not in 'FICARPB' or len(sym) != 1:
-            logger.error('Invalid value for Symmetry, must be one character from F,I,C,A,R,P,B')
-            raise ValueError('Invalid Symmetry')
+        if len(sym) != 1 or sym not in SYMMETRY_LETTERS:
+            logger.error(SYMMETRY_RULE)
+            raise ValueError(f"Invalid Symmetry {sym!r}")
         config.symmetry = sym
         return True
 
@@ -222,7 +391,10 @@ def parse_line(config, line: str) -> bool:
         return True
 
     try:
-        value = _coerce(parts[1], param.type)
+        if key == "SpaceGroup":
+            value = parse_space_group(parts[1])
+        else:
+            value = _coerce(parts[1], param.type)
     except (ValueError, IndexError):
         logger.error(f"Invalid value format for {key} on line: '{line}'. "
                      f"Expected {param.type}.")

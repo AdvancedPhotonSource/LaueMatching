@@ -8,6 +8,22 @@ EnhancedImageProcessor class.
 
 All functions are pure (no ``self``); they receive data and configuration as
 explicit arguments.
+
+Three different spot counts appear in these figures; do not read one as another:
+
+* "Total" -- the solution's ``NMatches``: predicted reflections landing on a lit
+  pixel (q-hat deduplicated in the C, so harmonics do not stack).
+* "Exclusive (WTA)" -- ``unique_label_count`` from
+  ``laue_index.filtering.calculate_unique_spots``: labels this orientation
+  claimed that no better-quality orientation on the same frame claimed first
+  (winner-take-all). Stored as ``unique_spots_per_orientation`` /
+  ``Unique_Spots``. A real twin sharing its reflections with its parent can
+  score 0 here.
+* ``<output>.unique_spot_counts.txt`` (written by
+  :func:`create_simulation_comparison_visualization`) -- the number of
+  DISTINCT integer (x, y) pixel positions among each kept grain's matched
+  spots. No exclusivity across grains: a pixel shared by two grains counts for
+  both. The file and column names say "unique" for compatibility.
 """
 
 import logging
@@ -239,7 +255,7 @@ def create_quality_map(
     qm = ndimg.gaussian_filter(quality_map, sigma=3) if np.any(quality_map > 0) else quality_map
 
     im = ax_qual.imshow(qm, cmap="viridis", origin="upper", vmin=0, vmax=max_q if max_q > 0 else 1)
-    plt.colorbar(im, ax=ax_qual, label="Indexing Quality (Score × Unique Spot Boost)")
+    plt.colorbar(im, ax=ax_qual, label="Indexing Quality (Score × (1 + 0.1 × exclusive WTA spots))")
     ax_qual.set_title("Orientation Indexing Quality Map")
     ax_qual.set_xlabel("X Pixel")
     ax_qual.set_ylabel("Y Pixel")
@@ -334,12 +350,12 @@ def create_interactive_visualization(
                 fig.add_trace(
                     go.Scatter(
                         x=os_[:, 5], y=os_[:, 6],
-                        mode="markers", name=f"Grain {gn} ({uc} unique)",
+                        mode="markers", name=f"Grain {gn} ({uc} exclusive)",
                         legendgroup=f"grain_{gn}",
                         marker=dict(color=color, size=7, symbol="circle-open", line=dict(width=1.5)),
                         hovertext=[
                             f"Grain: {gn}<br>HKL: ({int(s[2])},{int(s[3])},{int(s[4])})<br>"
-                            f"Pos: ({s[5]:.1f}, {s[6]:.1f})<br>Unique: {uc}"
+                            f"Pos: ({s[5]:.1f}, {s[6]:.1f})<br>Exclusive (WTA): {uc}"
                             for s in os_
                         ],
                         hoverinfo="text",
@@ -536,7 +552,7 @@ def create_analysis_report(
         <h2>Orientation Summary (Filtered)</h2>
         <table>
             <thead><tr>
-                <th>Grain Nr</th><th>Quality</th><th>Total Spots</th><th>Unique Spots</th><th>Orientation Matrix [Lab <- Crystal]</th>
+                <th>Grain Nr</th><th>Quality</th><th>Total Spots (NMatches)</th><th>Exclusive Spots (winner-take-all)</th><th>Orientation Matrix [Lab <- Crystal]</th>
             </tr></thead>
             <tbody>
     """
@@ -591,7 +607,7 @@ def create_analysis_report(
                         {{ label: 'Total Spots Matched',
                            data: [{", ".join(str(spo.get(g, 0)) for g in grain_numbers)}],
                            backgroundColor: 'rgba(54, 162, 235, 0.6)', borderColor: 'rgba(54, 162, 235, 1)', borderWidth: 1 }},
-                        {{ label: 'Unique Spots (Labels)',
+                        {{ label: 'Exclusive Spots (winner-take-all labels)',
                            data: [{", ".join(str(uso.get(g, 0)) for g in grain_numbers)}],
                            backgroundColor: 'rgba(255, 99, 132, 0.6)', borderColor: 'rgba(255, 99, 132, 1)', borderWidth: 1 }}
                     ]
@@ -649,7 +665,7 @@ def create_analysis_report(
                 ("Denoise", cfg.image_processing.denoise_image),
                 ("Edge Enhance", cfg.image_processing.edge_enhancement),
             ]),
-            ("Filtering", [("Min Unique Spots", cfg.min_good_spots)]),
+            ("Filtering", [("Min Exclusive Spots (MinGoodSpots)", cfg.min_good_spots)]),
             ("Indexing Executable", [
                 ("Processing Type", cfg.processing_type), ("CPUs Used", cfg.num_cpus),
                 ("Do Forward Sim?", cfg.do_forward), ("Min Nr Spots (Exec)", cfg.min_nr_spots),
@@ -919,7 +935,11 @@ def create_simulation_comparison_visualization(
     except Exception as e:
         logger.error(f"Could not save simulation comparison: {e}")
 
-    # Save unique spot counts
+    # Save per-grain DISTINCT matched-pixel counts. A third meaning of "unique"
+    # (see the module docstring): distinct integer (x, y) among one grain's
+    # matched spots, with NO exclusivity across grains -- unlike the
+    # winner-take-all Unique_Spots column. File and header names kept for
+    # compatibility.
     unique_exp_counts: Dict[int, int] = {}
     if exp_spots.size > 0:
         for gn_val in kept_grain_nrs:
@@ -932,6 +952,6 @@ def create_simulation_comparison_visualization(
             f.write("Grain_Nr\tUnique_Experimental_Spots\n")
             for gn_val, cnt in sorted(unique_exp_counts.items()):
                 f.write(f"{gn_val}\t{cnt}\n")
-        logger.info(f"Unique experimental spot counts saved to {counts_file}")
+        logger.info(f"Distinct matched-pixel counts per grain saved to {counts_file}")
     except Exception as e:
         logger.error(f"Could not save unique spot counts: {e}")

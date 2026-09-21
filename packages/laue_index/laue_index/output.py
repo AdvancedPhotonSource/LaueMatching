@@ -43,7 +43,10 @@ def store_txt_files_in_h5(
         f"{output_path}.bin.LaueMatching_stdout.txt": "/entry/logs/stdout",
         f"{output_path}.bin.LaueMatching_stderr.txt": "/entry/logs/stderr",
         f"{output_path}.simulation_stdout.txt":       "/entry/logs/simulation_stdout",
-        f"{output_path}.bin.unique_spot_counts.txt":  "/entry/results/unique_spot_counts_text",
+        # Written by laue_visualization as f"{output_path}.unique_spot_counts.txt"
+        # (no ".bin"): the old ".bin." key here never matched, so the counts
+        # were never stored in the HDF5.
+        f"{output_path}.unique_spot_counts.txt":      "/entry/results/unique_spot_counts_text",
     }
 
     # Ensure parent groups exist
@@ -103,13 +106,22 @@ def store_binary_headers_in_h5(
         except Exception as e:
             logger.warning(f"Error adding header to {dataset_path}: {e}")
 
-    # Unique spots dataset
+    # Winner-take-all spot counts. The column is called Unique_Spots for
+    # compatibility, but the value is the number of segmentation labels this
+    # orientation claimed that no better-scoring orientation on the same frame
+    # claimed first (filtering.calculate_unique_spots, unique_label_count). It
+    # is NOT the number of distinct observed peaks, and not NMatches.
     usp = "/entry/results/unique_spots_per_orientation"
     if usp in h5_file:
         try:
             ds = h5_file[usp]
             ds.attrs["header"] = "Grain_Nr Unique_Spots"
             ds.attrs["columns"] = ["Grain_Nr", "Unique_Spots"]
+            ds.attrs["description"] = (
+                "Unique_Spots = WINNER-TAKE-ALL exclusive label count: labels "
+                "this orientation claimed that no better-quality orientation on "
+                "the same frame claimed first. Not distinct observed peaks; "
+                "not NMatches (use the solutions table for total evidence).")
         except Exception as e:
             logger.warning(f"Error adding header to {usp}: {e}")
 

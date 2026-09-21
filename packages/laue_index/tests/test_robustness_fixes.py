@@ -10,6 +10,10 @@ robustness fixes:
 Standalone: `python tests/test_robustness_fixes.py` or `pytest`.  Only needs
 numpy + laue_index/pipeline/laue_stream_utils.py (no external fixtures).  When the library
 is refactored, keep these as behaviour anchors and re-point the import.
+
+Import path: under pytest, conftest.py puts laue_index/pipeline/ on sys.path.
+For a standalone run the same directory is added below -- NOT the repo's
+scripts/, which holds same-named one-line shims (see conftest.py).
 """
 import math
 import os
@@ -19,7 +23,9 @@ import numpy as np
 
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 _HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(_HERE, os.pardir, "scripts"))
+_PIPELINE = os.path.abspath(os.path.join(_HERE, os.pardir, "laue_index", "pipeline"))
+if os.path.isdir(_PIPELINE) and _PIPELINE not in sys.path:
+    sys.path.insert(0, _PIPELINE)
 import laue_stream_utils as lsu  # noqa: E402
 
 

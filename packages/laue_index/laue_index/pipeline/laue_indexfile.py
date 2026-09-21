@@ -30,15 +30,27 @@ Integration points:
 Design decisions (see plan file ``cozy-kindling-meadow.md``):
 
 * Per-spot energy is computed in Python from the fit's reciprocal lattice
-  matrix and the hkl indices — matches the C formula at
-  ``LaueMatchingHeaders.h:616-617`` (``sinTheta``/``E`` in ``calcOverlap``) but
-  avoids touching the indexer binaries.
-* Per-spot ``err(deg)`` uses the angle between the fit-predicted Qhat
-  (stored in ``spots.txt`` cols 8–10) and the Qhat obtained by inverting
-  the observed pixel coordinates through the detector geometry — so a
-  perfect fit would give err ≈ 0.
+  matrix and the hkl indices -- the same formula as the C
+  (``sinTheta = -qhat[2]; E = hc_keVnm * qlen / (4 * M_PI * sinTheta)`` in
+  ``calcOverlap`` / ``writeCalcOverlap``, ``LaueMatchingHeaders.h``; cited by
+  function, not line, because that header is still being edited) but avoids
+  touching the indexer binaries.
+* Per-spot ``err(deg)`` is NOT a fit residual. ``spots.txt`` carries, for each
+  spot, the PREDICTED Qhat and the PREDICTED pixel truncated to an integer
+  (``writeCalcOverlap`` prints ``(int)px, (int)py`` -- the pixel at which the
+  image was sampled, not a measured centroid). ``err(deg)`` is the angle
+  between that predicted Qhat and the Qhat re-derived from its own truncated
+  pixel, i.e. integer-pixel quantisation of the prediction: bounded by about
+  one pixel's angular size, and ~0 only by accident. No observed centroid
+  reaches this writer on either pipeline, so there is nothing honest to
+  compare against; ``$rms_error`` is the rms of this quantisation, and the
+  file header says so.
 * Per-spot ``PkIndex`` comes from a nearest-neighbour lookup against
   ``/entry/data/component_centers`` in the HDF5 output.
+* ``$NiData`` ("total number of data spots") is the number of segmented peaks
+  on the frame: the rows of ``/entry/data/component_centers`` when present,
+  else the ``n_spots`` the image server recorded in the frame mapping, else 0
+  (unknown).
 """
 
 from __future__ import annotations
@@ -125,7 +137,8 @@ def energy_from_recip_and_hkl(
 ) -> float:
     """Energy (keV) of a Laue spot at orientation-rotated Q = recip_lattice · hkl.
 
-    Mirrors the C formula at ``LaueMatchingHeaders.h:616-617``:
+    Mirrors the C formula in ``calcOverlap`` / ``writeCalcOverlap``
+    (``LaueMatchingHeaders.h``):
 
         E = hc_keVnm * |Q| / (4π sinθ),  sinθ = -Q̂_z
 
@@ -345,6 +358,10 @@ def write_indexfile(
         f"indexed {header.n_indexed} out of {header.n_input_data} spots "
         f"in {_format_exec_time(header.execution_time_sec)}"
     )
+    lines.append("// NOTE (LaueMatching): err(deg) and rms_error are the angle between each "
+                 "PREDICTED Qhat and the Qhat of its own integer-truncated predicted pixel -- "
+                 "pixel quantisation, not a (measured - predicted) fit residual. "
+                 "G^ is the predicted Qhat.")
     lines.append("// " + "-" * 60)
 
     def _kv(k: str, v: Any, comment: str = "") -> None:
@@ -430,7 +447,7 @@ def write_indexfile(
             f"\t// Euler angles for this pattern (deg)"
         )
         lines.append(f"$goodness{idx}\t\t{pat.goodness:g}\t\t\t\t\t\t// goodness of the this pattern")
-        lines.append(f"$rms_error{idx}\t\t{pat.rms_error_deg:g}\t\t\t\t\t// rms error of (measured-predicted) (deg)")
+        lines.append(f"$rms_error{idx}\t\t{pat.rms_error_deg:g}\t\t\t\t\t// rms of integer-pixel quantisation of the prediction, NOT (measured-predicted) (deg)")
         lines.append(f"$rotation_matrix{idx}\t\t{_fmt_matrix3(pat.rotation_matrix)}")
         lines.extend(_matrix_commentary(pat.rotation_matrix, "rotation"))
         lines.append(f"$recip_lattice{idx}\t\t{_fmt_matrix3(pat.recip_lattice)}")
@@ -622,6 +639,21 @@ def build_from_h5(
     patterns: List[IndexFilePattern] = []
 
     with h5py.File(h5_path, "r") as hf:
+        component_centers = None
+        if "/entry/data/component_centers" in hf:
+            component_centers = hf["/entry/data/component_centers"][()]
+
+        # $NiData: segmented peaks on the frame (see module docstring). Set
+        # before the nothing-indexed return: a frame with 40 peaks and no
+        # solution is "0 of 40", not "0 of 0".
+        if component_centers is not None and np.ndim(component_centers) == 2:
+            header.n_input_data = int(component_centers.shape[0])
+        else:
+            try:
+                header.n_input_data = int(mapping_entry.get("n_spots", 0) or 0)
+            except (TypeError, ValueError):
+                header.n_input_data = 0
+
         if "/entry/results/filtered_orientations" not in hf:
             # Nothing indexed; return an empty index file.
             header.n_patterns_found = 0
@@ -636,10 +668,6 @@ def build_from_h5(
         # 12 cols (spots). Batch format is 34/11.
         has_imgnr_orient = filt_orient.shape[1] >= 35 if filt_orient.ndim == 2 else False
         has_imgnr_spots = filt_spots.shape[1] >= 12 if filt_spots.ndim == 2 else False
-
-        component_centers = None
-        if "/entry/data/component_centers" in hf:
-            component_centers = hf["/entry/data/component_centers"][()]
 
         # Group spots by grain_nr for O(N+M) matching.
         spots_by_grain: Dict[int, List[np.ndarray]] = {}
@@ -659,13 +687,16 @@ def build_from_h5(
                 errs = []
                 for sp in spots_by_grain.get(o["grain_nr"], []):
                     qhat_pred = sp["qhat"]
-                    qhat_obs = pixel_to_qhat(
+                    # sp["px"], sp["py"] are the PREDICTED pixel truncated to
+                    # int by the C writer, not an observed centroid; this is the
+                    # quantisation of the prediction (see module docstring).
+                    qhat_pix = pixel_to_qhat(
                         sp["px"], sp["py"],
                         r_array=r_array, p_array=p_array,
                         px_x=px_x, px_y=px_y,
                         nr_px_x=nr_px_x, nr_px_y=nr_px_y,
                     )
-                    err = angular_error_deg(qhat_pred, qhat_obs)
+                    err = angular_error_deg(qhat_pred, qhat_pix)
                     if math.isnan(err):
                         err = 0.0
                     errs.append(err)

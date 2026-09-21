@@ -284,6 +284,11 @@ class EnhancedImageProcessor:
             self.config.get("distance", 0.513),
             self.config.get("orientation_spacing", 0.4)
         )
+        # GaussSigmaMax: the same optional cap laue_index.preprocess applies on
+        # the streaming path (0 = no cap). RunImage used to ignore the key.
+        smax = float(self.config.get("gauss_sigma_max", 0.0) or 0.0)
+        if smax > 0:
+            gauss_sigma = min(gauss_sigma, smax)
         blurred_image = ndimg.gaussian_filter(filtered_thresholded_image.astype(np.double), gauss_sigma)
         data_group.create_dataset('input_blurred', data=blurred_image)
 
@@ -515,6 +520,17 @@ class EnhancedImageProcessor:
                 # self.config is the ConfigurationManager; its .config attr
                 # is the LaueConfig dataclass with the to_dict() method that
                 # laue_provenance knows how to serialize.
+                # The binary run_indexer resolves for this compute type, so the
+                # record names the file that ran, not only the CPU binary's
+                # neighbours (see laue_provenance._collect_build).
+                try:
+                    from laue_index.indexer import binary_path as _binary_path
+                    _exe = str(_binary_path(
+                        str(self.config.get("processing_type", "CPU")).upper(),
+                        bool(self.config.get("do_forward", False)),
+                        os.path.dirname(os.path.dirname(os.path.realpath(__file__)))))
+                except Exception:
+                    _exe = None
                 prov = _lp.collect(
                     config=getattr(self.config, "config", self.config),
                     input_files=prov_inputs,
@@ -522,6 +538,7 @@ class EnhancedImageProcessor:
                         "processing_time_sec": time.time() - start_time,
                         "output_path": output_path,
                     },
+                    executable=_exe,
                 )
                 _lp.write_to_h5(hf_out, prov, group="/entry/provenance")
             except Exception as prov_exc:
@@ -608,7 +625,7 @@ class EnhancedImageProcessor:
 
         # Ensure orientation database exists (copy default if needed).
         # INSTALL_PATH is the repo root in a checkout, but inside an installed
-        # package it points at site-packages, where nobody keeps a 6.7 GB file.
+        # package it points at site-packages, where nobody keeps a 7.2 GB (6.7 GiB) file.
         # LAUEMATCHING_ORIENT_DB is how a pip user says where theirs lives;
         # `laue-index fetch-db` prints exactly that line.
         if not os.path.exists(orient_db_file):
@@ -1297,7 +1314,9 @@ def _load_h5_datasets(h5_file_path: str):
                 spots = np.array(hf[key][()])
                 break
 
-        # Unique spot counts
+        # Winner-take-all exclusive label counts per orientation (what
+        # unique_spots_per_orientation stores; see
+        # laue_index.filtering.calculate_unique_spots). NOT distinct peaks.
         unique_spots_data = None
         if '/entry/results/unique_spots_per_orientation' in hf:
             uca = np.array(hf['/entry/results/unique_spots_per_orientation'][()])

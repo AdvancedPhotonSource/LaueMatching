@@ -34,6 +34,7 @@ import subprocess
 import sys
 import time
 from datetime import datetime
+from typing import Optional
 
 import laue_stream_utils as lsu
 
@@ -94,6 +95,19 @@ def _find_daemon_binary() -> str:
         "LaueMatchingGPUStream binary not found. Build it first "
         "(cmake --build build/) or add it to PATH."
     )
+
+
+def _server_env() -> dict:
+    """Environment for the image server: the caller's, unchanged.
+
+    Deliberately does NOT set LAUE_DAEMON_NCPUS from --ncpus. Doing so (as an
+    earlier 0.7.2 draft did) took the daemon's cores out of the preprocessing
+    pool on every orchestrated run: run_laue.sh defaults NCPUS=32, which left 1
+    worker on a 32-CPU host. The thread limit, not core contention, was the
+    failure being fixed. A caller who wants the subtraction sets the variable
+    itself, and it is passed through untouched.
+    """
+    return os.environ.copy()
 
 
 def _wait_for_daemon_port(
@@ -237,7 +251,7 @@ def run_pipeline(
     port: int = lsu.LAUE_STREAM_PORT,
     port_timeout: float = 900.0,
     flush_time: float = 5.0,
-    min_unique: int = 2,
+    min_unique: Optional[int] = None,
     write_indexfile: bool = True,
     indexfile_dir: str = "",
     watch: bool = False,
@@ -261,7 +275,9 @@ def run_pipeline(
         port_timeout: Max seconds to wait for the daemon port while the
                       daemon is still alive (a dead daemon aborts immediately).
         flush_time:   Seconds to wait after server finishes before killing daemon.
-        min_unique:   Minimum unique spots for orientation filtering.
+        min_unique:   Minimum EXCLUSIVE (winner-take-all) spots for orientation
+                      filtering. None (default) lets postprocess use MinGoodSpots
+                      from the config, as the non-streaming path does.
     """
     t_pipeline_start = time.time()
 
@@ -337,6 +353,17 @@ def run_pipeline(
     logger.info(f"Output directory: {output_dir}")
     logger.info(f"Daemon output  : {daemon_out_dir}")
 
+    # Resolve the daemon binary BEFORE stamping provenance, so the record names
+    # the executable that actually runs. _find_daemon_binary can fall back to
+    # <project_root>/build/, which is not the directory laue_provenance hashes
+    # by default. A missing binary is still fatal -- just after the stamp, so a
+    # failed launch leaves a record too.
+    daemon_bin_error = None
+    try:
+        daemon_bin = _find_daemon_binary()
+    except FileNotFoundError as exc:
+        daemon_bin, daemon_bin_error = None, exc
+
     # --- 1b. Stamp run-level provenance up-front ---
     # Written now (rather than at end-of-run) so a crashed/killed run still
     # leaves a record of which commit + config was in play.
@@ -350,7 +377,9 @@ def run_pipeline(
                 "folder": folder,
                 "ncpus": ncpus,
                 "port": port,
+                "daemon_bin": daemon_bin or f"NOT FOUND: {daemon_bin_error}",
             },
+            executable=daemon_bin,
         )
         _lp.write_sidecar_json(os.path.join(output_dir, "provenance.json"), run_prov)
         logger.info(f"Wrote run provenance: {os.path.join(output_dir, 'provenance.json')}")
@@ -358,7 +387,8 @@ def run_pipeline(
         logger.warning(f"Could not write run provenance: {prov_exc}")
 
     # --- 2. Start GPU daemon ---
-    daemon_bin = _find_daemon_binary()
+    if daemon_bin is None:
+        raise daemon_bin_error
     daemon_cmd = [
         daemon_bin,
         config_file,
@@ -417,6 +447,7 @@ def run_pipeline(
         stdout=server_logf,
         stderr=subprocess.STDOUT,
         cwd=output_dir,
+        env=_server_env(),
     )
     logger.info(f"Image server started (pid {server_proc.pid}), log → {server_log}")
 
@@ -502,9 +533,10 @@ def run_pipeline(
         "--mapping", os.path.abspath(mapping_file),
         "--labels", os.path.abspath(labels_file),
         "--folder", os.path.abspath(folder),
-        "--min-unique", str(min_unique),
         "--nprocs", str(ncpus),
     ]
+    if min_unique is not None:
+        pp_cmd += ["--min-unique", str(min_unique)]
     if not write_indexfile:
         pp_cmd.append("--no-indexfile")
     elif indexfile_dir:
@@ -513,11 +545,17 @@ def run_pipeline(
     pp_result = subprocess.run(pp_cmd, capture_output=True, text=True)
 
     if pp_result.returncode != 0:
+        # Fail the run. This used to log the error and then "Pipeline complete"
+        # and exit 0, and pipeline/dispatch/wait_static.sh keys on that line --
+        # so a run with no per-image results read as finished.
         logger.error(f"Post-processing failed (code {pp_result.returncode})")
         if pp_result.stderr:
             logger.error(pp_result.stderr[-2000:])
-    else:
-        logger.info("Post-processing complete.")
+        logger.error("Pipeline FAILED at post-processing after "
+                     f"{time.time() - t_pipeline_start:.1f}s; daemon output is in "
+                     f"{daemon_out_dir}, results (incomplete) in {results_dir}")
+        sys.exit(pp_result.returncode if pp_result.returncode > 0 else 1)
+    logger.info("Post-processing complete.")
 
     # --- 9. Summary ---
     elapsed = time.time() - t_pipeline_start
@@ -660,15 +698,16 @@ def main() -> None:
     )
     parser.add_argument(
         "--port-timeout", type=float, default=900.0,
-        help="Max seconds to wait for daemon port (default: 180)"
+        help="Max seconds to wait for daemon port (default: 900)"
     )
     parser.add_argument(
         "--flush-time", type=float, default=5.0,
         help="Seconds to wait after server finishes before killing daemon (default: 5)"
     )
     parser.add_argument(
-        "--min-unique", type=int, default=2,
-        help="Minimum unique spots for orientation filtering (default: 2)"
+        "--min-unique", type=int, default=None,
+        help="Minimum exclusive (winner-take-all) spots for orientation "
+             "filtering. Default: MinGoodSpots from --config"
     )
     parser.add_argument(
         "--orient-file", default="",

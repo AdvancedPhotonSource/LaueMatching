@@ -67,6 +67,80 @@ def _setup_logging(level: str = "INFO") -> None:
 # Top-level worker for multiprocessing (must be picklable)
 # ---------------------------------------------------------------------------
 
+# Thread pools a preprocessing worker must NOT grow. The pool already runs one
+# worker per usable CPU, so a library that also starts one thread per CPU inside
+# every worker multiplies the thread count by the core count. On a 112-core host
+# with `ulimit -u` 8192 that is what ran the user out of threads: OpenCV failed
+# with `res = 11`, the GPU daemon reported a misleading "GPUassert: device busy
+# or unavailable", and the dispatcher could not fork the next shard.
+_SINGLE_THREAD_ENV = (
+    "OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS",
+    "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "OPENCV_NUM_THREADS",
+)
+
+
+def _pin_library_threads():
+    """Pin every already-loaded library thread pool of THIS process to one thread.
+
+    Called in the PARENT immediately before the preprocessing pool is created,
+    never inside a worker. The pool forks (the Linux default), and a forked
+    child inherits these settings with the rest of the parent's memory, so the
+    workers come up single-threaded without calling into OpenCV, OpenMP or BLAS
+    after fork. Calling them after fork is what must not happen: libgomp and
+    OpenCV's thread pool are not fork-safe, and a child that touches them while
+    a parent thread held one of their locks at the moment of fork blocks
+    forever. That hang was measured, on Linux: an earlier version of this code
+    pinned the pools from the worker initializer, and the first worker of a
+    pytest process that already had library threads running sat in futex_wait
+    for two hours. (macOS spawns rather than forks, which is why it never showed
+    there.)
+
+    The parent is only a coordinator once the pool exists (it sends frames and
+    collects results), so pinning its own pools costs nothing.
+    """
+    for _k in _SINGLE_THREAD_ENV:
+        os.environ[_k] = "1"
+    try:
+        import cv2
+        cv2.setNumThreads(1)
+        # Some parallel backends ignore 1 (measured: the macOS GCD build still
+        # reports 10 threads after setNumThreads(1)); 0 means "run sequentially"
+        # on every backend, so fall back to it when 1 did not take.
+        if cv2.getNumThreads() > 1:
+            cv2.setNumThreads(0)
+    except Exception:
+        pass
+    try:
+        from threadpoolctl import threadpool_limits
+        threadpool_limits(1)
+    except Exception:
+        pass
+    try:
+        import diplib
+        diplib.SetNumberOfThreads(1)
+    except Exception:
+        pass
+
+
+def _init_preprocess_worker(start_method="fork"):
+    """ProcessPoolExecutor initializer.
+
+    FORKED worker (the Linux default): set the thread-count environment
+    variables only, and make no library calls -- see :func:`_pin_library_threads`
+    for why; the libraries the parent had loaded were pinned in the parent
+    before the fork, and the child inherited that. SPAWNED (or forkserver)
+    worker (the macOS default): a fresh interpreter inherits none of the
+    parent's settings and holds no inherited locks, so it pins its own pools
+    here, which is safe. Measured on macOS: without this a spawned worker ran
+    OpenCV at 10 threads despite OPENCV_NUM_THREADS=1.
+    """
+    if start_method == "fork":
+        for _k in _SINGLE_THREAD_ENV:
+            os.environ[_k] = "1"
+    else:
+        _pin_library_threads()
+
+
 def _preprocess_one(h5_path, h5loc, frame_idx, nr_px_y, nr_px_x, cfg, background):
     """Load and preprocess a single frame. Runs in a worker process."""
     try:
@@ -96,6 +170,29 @@ def _preprocess_one(h5_path, h5loc, frame_idx, nr_px_y, nr_px_x, cfg, background
     pixels_bytes = np.ascontiguousarray(blurred, dtype=np.float32).tobytes()
     return {"pixels_bytes": pixels_bytes, "filt_labels": filt_labels,
             "n_spots": len(centers)}
+
+
+def _choose_workers(cfg, queue_depth):
+    """Worker count for this config: the params file's PreprocessWorkers is the
+    caller cap (0 = none), everything else is laue_index.workers."""
+    return choose_preprocess_workers(
+        cfg["nr_px_x"], cfg["nr_px_y"],
+        queue_depth=queue_depth,
+        max_workers=cfg.get("preprocess_workers") or None,
+    )
+
+
+def _make_pool(n_workers):
+    """The preprocessing pool. Pins the parent's library thread pools first, so
+    forked workers inherit one thread each; every worker then runs
+    _init_preprocess_worker, told the start method so a spawned worker pins its
+    own pools."""
+    import multiprocessing as _mp
+    ctx = _mp.get_context()
+    _pin_library_threads()
+    return ProcessPoolExecutor(max_workers=n_workers, mp_context=ctx,
+                               initializer=_init_preprocess_worker,
+                               initargs=(ctx.get_start_method(),))
 
 
 # ---------------------------------------------------------------------------
@@ -254,12 +351,12 @@ def serve_images(
     # measured curve is near-linear to 8 and 8 -> 16 is a further +37% -- and
     # cpu_count() over-reports under taskset, a cpuset cgroup or a container CPU
     # quota. See laue_index.workers for the measurement and the fitted memory
-    # model. LAUE_PREPROCESS_WORKERS overrides.
-    PREPROCESS_WORKERS, _worker_decision = choose_preprocess_workers(
-        nr_px_x, nr_px_y,
-        queue_depth=FUTURES_QUEUE_DEPTH,
-        max_workers=cfg.get("preprocess_workers") or None,
-    )
+    # model. LAUE_PREPROCESS_WORKERS overrides. When several servers share the
+    # host, LAUE_SHARDS_PER_HOST divides the CPUs, memory and thread budget;
+    # LAUE_DAEMON_NCPUS, if the caller sets it, takes the daemon's cores out
+    # (never below half this shard's CPU share; see laue_index.workers).
+    PREPROCESS_WORKERS, _worker_decision = _choose_workers(
+        cfg, queue_depth=FUTURES_QUEUE_DEPTH)
     send_q: queue.Queue = queue.Queue(maxsize=SEND_QUEUE_SIZE)
     send_error: list = []  # shared error flag
 
@@ -330,17 +427,18 @@ def serve_images(
 
     logger.info(
         "Using %d parallel preprocessing workers (bound by %s; "
-        "%d usable CPUs, %s available, %.0f MB per worker, "
-        "%.1f GB of futures queue)",
+        "%d usable CPUs, %d shard(s) per host, daemon ncpus %d, %s available, "
+        "%.0f MB per worker, %.1f GB of futures queue)",
         PREPROCESS_WORKERS, _worker_decision["bound_by"],
         _worker_decision["usable_cpus"],
+        _worker_decision["shards_per_host"], _worker_decision["daemon_ncpus"],
         ("%.1f GB" % (_worker_decision["available_memory_bytes"] / 1e9))
         if _worker_decision["available_memory_bytes"] is not None else "unknown",
         _worker_decision["per_worker_bytes"] / 1e6,
         _worker_decision["queue_bytes"] / 1e9)
 
     try:
-        with ProcessPoolExecutor(max_workers=PREPROCESS_WORKERS) as pool:
+        with _make_pool(PREPROCESS_WORKERS) as pool:
             # Stage 1: Producer — submit frames to the pool as files are known.
             # Single-pass mode: submit the initial batch and finish.
             # Watch mode: keep rescanning the folder for new (settled) files.

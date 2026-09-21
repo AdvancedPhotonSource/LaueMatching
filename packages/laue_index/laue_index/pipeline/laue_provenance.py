@@ -7,7 +7,7 @@ the input files that went into its creation.
 
 Public API:
 
-    collect(config=None, input_files=(), extra=None) -> dict
+    collect(config=None, input_files=(), extra=None, *, executable=None) -> dict
     write_to_h5(h5_obj, prov, group="provenance") -> None
     read_from_h5(h5_obj, group="provenance") -> dict
     header_lines(prov, comment="#") -> list[str]
@@ -15,7 +15,7 @@ Public API:
     file_fingerprint(path, strong=False) -> dict
 
 File fingerprints default to a weak ``sha256_head`` (first 1 MiB + last
-1 MiB + size) because full SHA-256 of the 6.7 GB orientation database
+1 MiB + size) because full SHA-256 of the 7.2 GB (6.7 GiB) orientation database
 takes ~40 s. Pass ``strong=True`` for a true SHA-256.
 """
 
@@ -46,7 +46,17 @@ logger = logging.getLogger("LaueMatching")
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _WEAK_HASH_WINDOW = 1 << 20  # 1 MiB head + tail
-_PROVENANCE_SCHEMA_VERSION = "1"
+# Schema history:
+#   "1"  git, laue_version (the stale pipeline/_version.py string), config,
+#        inputs, extra.
+#   "2"  adds ``build``: laue_index version, the CMake manifest and its
+#        c_src_sha256, a full SHA-256 of each binary beside the default one, and
+#        -- when the caller says which binary it ran -- ``build.executable``
+#        (kind + path + SHA-256 of THAT file). Adds ``config_notes`` when the
+#        config snapshot carries ``processing_type``, which is a config label
+#        (RunImage's -g flag; "CPU" by default, including on a GPUStream run),
+#        not a record of the binary.
+_PROVENANCE_SCHEMA_VERSION = "2"
 
 
 # ---------------------------------------------------------------------------
@@ -89,6 +99,94 @@ def _collect_git(cwd: Path = _REPO_ROOT) -> dict[str, Any]:
         "branch": branch,
         "remote": remote,
     }
+
+
+# ---------------------------------------------------------------------------
+# Build identity -- WHICH CODE RAN
+# ---------------------------------------------------------------------------
+#
+# Added 2026-09-21. Before this, every provenance record on a pip-installed
+# pipeline read `git.commit: "unknown"` and `laue_version: "2.2.0"`:
+#
+#   * `git rev-parse` runs in THIS package's directory, which is a git checkout
+#     only for an editable/dev install. For `pip install laue-index` -- the
+#     production case -- it is site-packages, so the commit is always unknown.
+#   * `laue_version` is `pipeline/_version.py`, a hand-maintained string that
+#     stayed at 2.2.0 across at least 84 commits and several laue-index releases.
+#
+# So two indexing runs of the same scan a month apart, which differed in ~3% of
+# their solutions, could not be attributed to a build from their own metadata --
+# the question "which code produced the July sampleH result" was unanswerable, and
+# rebuilding it was not possible. The information existed the whole time: CMake
+# writes `_build_info.json` (see laue_index.buildmeta) with the installed version
+# and a SHA-256 of the C sources. It was just never read here.
+#
+# Both identities are recorded, because they answer different questions:
+#
+#   c_src_sha256    "was it built from the same SOURCE?"  Stable across rebuilds.
+#   binary sha256   "is it the same EXECUTABLE?"          NOT stable across
+#                   rebuilds of identical source: nvcc embeds a PID-derived
+#                   tmpxft_<pid> filename, so two CUDA builds of unchanged code
+#                   differ. Use c_src_sha256 to compare builds; use the binary
+#                   hash only to prove two runs used the very same file.
+
+_BINARIES = ("LaueMatchingCPU", "LaueMatchingGPU", "LaueMatchingGPUStream")
+
+
+def _executable_record(executable: str | os.PathLike) -> dict[str, Any]:
+    """Kind + full fingerprint of the binary a caller actually ran.
+
+    The ``binaries`` block hashes whatever sits beside ``indexer.binary_path()``
+    (the CPU binary's directory). The streaming orchestrator can run a daemon
+    from ``<project_root>/build/`` instead, so without this the binary that ran
+    and the binary recorded could differ.
+    """
+    p = Path(executable)
+    rec = file_fingerprint(p, strong=True)
+    rec["kind"] = p.name
+    try:
+        rec["realpath"] = str(p.resolve())
+    except OSError:
+        pass
+    return rec
+
+
+def _collect_build(executable: str | os.PathLike | None = None) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    if executable:
+        # First, so it is recorded even when laue_index itself is not importable.
+        out["executable"] = _executable_record(executable)
+    try:
+        import laue_index  # noqa: WPS433 -- deliberate lazy import
+        out["laue_index_version"] = getattr(laue_index, "__version__", "unknown")
+    except Exception as exc:  # the pipeline can run outside the package
+        out["laue_index_version"] = "unknown"
+        out["error"] = f"laue_index not importable: {exc}"
+        return out
+    try:
+        info = laue_index.build_info()
+        out["manifest"] = info
+        out["c_src_sha256"] = info.get("c_src_sha256", "unknown")
+        out["manifest_version"] = info.get("version", "unknown")
+    except Exception as exc:
+        out["manifest"] = {"available": False, "reason": str(exc)}
+        out["c_src_sha256"] = "unknown"
+    bins: dict[str, Any] = {}
+    try:
+        from laue_index import indexer
+        bindir = Path(indexer.binary_path()).resolve().parent
+        for name in _BINARIES:
+            p = bindir / name
+            if p.is_file():
+                # ~1 MB each, so a full hash costs nothing
+                bins[name] = file_fingerprint(p, strong=True)
+            else:
+                bins[name] = {"path": str(p), "missing": True}
+        out["bindir"] = str(bindir)
+    except Exception as exc:
+        bins["error"] = str(exc)
+    out["binaries"] = bins
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -182,6 +280,7 @@ def collect(
     extra: Mapping[str, Any] | None = None,
     *,
     strong_hash: bool = False,
+    executable: str | os.PathLike | None = None,
 ) -> dict[str, Any]:
     """Gather a provenance dict.
 
@@ -192,6 +291,9 @@ def collect(
             image). Each is fingerprinted.
         extra: caller-specific fields (e.g. ``{"n_orientations": 100_000_000}``).
         strong_hash: use full SHA-256 instead of weak head+tail hash.
+        executable: the indexer binary this run actually executes (daemon or
+            single-image). Recorded under ``build.executable`` with its kind and
+            full SHA-256. Pass it whenever it is known.
     """
     now = datetime.now(tz=timezone.utc).isoformat()
     prov: dict[str, Any] = {
@@ -206,10 +308,21 @@ def collect(
             "argv": list(sys.argv),
         },
         "git": _collect_git(),
+        # WHICH CODE RAN. See _collect_build: on a pip install `git` above is
+        # always "unknown" and `laue_version` is a stale string -- this is the
+        # field that actually identifies the build.
+        "build": _collect_build(executable),
     }
     snapshot = _config_snapshot(config)
     if snapshot is not None:
         prov["config"] = _sanitize_for_json(snapshot)
+        if "processing_type" in snapshot:
+            prov["config_notes"] = {
+                "processing_type": (
+                    "config label only (RunImage -g sets it; the default is "
+                    "'CPU' even on a GPUStream run). The binary that ran is "
+                    "build.executable, when the caller recorded it."),
+            }
     prov["inputs"] = [file_fingerprint(p, strong=strong_hash) for p in input_files]
     if extra:
         prov["extra"] = _sanitize_for_json(dict(extra))
@@ -306,7 +419,25 @@ def header_lines(prov: Mapping[str, Any], comment: str = "#") -> list[str]:
     git = prov.get("git", {}) or {}
     lines.append(f"{comment} LaueMatching provenance (schema {prov.get('schema_version', _PROVENANCE_SCHEMA_VERSION)})")
     lines.append(f"{comment}   generated_at_utc: {prov.get('timestamp_utc', 'unknown')}")
-    lines.append(f"{comment}   laue_version:     {prov.get('laue_version', 'unknown')}")
+    build = prov.get("build", {}) or {}
+    lines.append(f"{comment}   laue_index:       {build.get('laue_index_version', 'unknown')}")
+    lines.append(f"{comment}   c_src_sha256:     {build.get('c_src_sha256', 'unknown')}")
+    exe = build.get("executable") or {}
+    if exe:
+        lines.append(f"{comment}   executable:       {exe.get('kind', '?')} "
+                     f"{exe.get('path', '?')}"
+                     + ("  (MISSING)" if exe.get("missing") else ""))
+        if exe.get("sha256"):
+            lines.append(f"{comment}   executable sha256: {exe['sha256']}")
+    for name, rec in sorted((build.get("binaries") or {}).items()):
+        if not isinstance(rec, Mapping):
+            continue
+        if rec.get("sha256"):
+            lines.append(f"{comment}   binary {name}: sha256={rec['sha256']}")
+        elif rec.get("missing"):
+            lines.append(f"{comment}   binary {name}: missing ({rec.get('path')})")
+    lines.append(f"{comment}   laue_version:     {prov.get('laue_version', 'unknown')}  "
+                 f"(stale script string -- use laue_index / c_src_sha256)")
     lines.append(f"{comment}   git_commit:       {git.get('commit', 'unknown')}{'  (dirty)' if git.get('dirty') else ''}")
     lines.append(f"{comment}   git_branch:       {git.get('branch', 'unknown')}")
     lines.append(f"{comment}   host:             {prov.get('host', 'unknown')}")

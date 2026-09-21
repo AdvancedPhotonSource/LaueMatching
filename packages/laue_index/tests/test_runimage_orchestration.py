@@ -1,6 +1,6 @@
 """RunImage orchestration coverage WITHOUT the C indexer or orientation DB.
 
-The gated e2e (test_char_e2e) needs the real binary + 6.7 GB DB.  This test
+The gated e2e (test_char_e2e) needs the real binary + 7.2 GB (6.7 GiB) DB.  This test
 mocks the Indexer stage (run_indexer) so the rest of RunImage's per-image
 pipeline — load -> background -> threshold -> connected-components -> blur ->
 [mock index] -> PostProcessor -> HDF5 output — runs in CI on a synthetic frame.

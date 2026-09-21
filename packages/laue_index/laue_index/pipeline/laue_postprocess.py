@@ -3,7 +3,11 @@
 laue_postprocess.py — Post-processing for LaueMatchingGPUStream results
 
 Reads the daemon's appended output files (solutions.txt, spots.txt),
-splits them by ImageNr, applies unique-spot filtering, and generates
+splits them by ImageNr, applies the config-selected orientation filter
+(RobustFilter, MinGoodSpots, MinNrSpots, MaxAngle -- the same PostProcessor and
+the same keys as the non-streaming RunImage path; an explicit key means the
+same on both paths, an ABSENT RobustFilter keeps the 0.7.1 streaming legacy
+filter), and generates
 per-image HDF5 output + an interactive HTML visualization with an image
 selector dropdown.
 
@@ -15,7 +19,13 @@ Usage:
         --config params.txt \
         --output-dir results/ \
         [--image-nr 0]           # 0 = all images, N = specific image
-        [--min-unique 2]         # Minimum unique spots to keep orientation
+        [--min-unique N]         # override MinGoodSpots: minimum EXCLUSIVE
+                                 # (winner-take-all) spots to keep an orientation
+
+"Unique" throughout this module is the winner-take-all count of
+laue_index.filtering.calculate_unique_spots: spots an orientation claims that no
+better-scoring orientation on the same frame claimed first. It is NOT a count of
+distinct observed peaks, and it is not the solution's total evidence (NMatches).
 """
 
 import argparse
@@ -71,7 +81,7 @@ def process_single_image(
     spots: np.ndarray,
     cfg: Dict[str, Any],
     output_dir: str,
-    min_unique: int = 2,
+    min_unique: Optional[int] = None,
     mapping_info: Optional[Dict] = None,
     labels: Optional[np.ndarray] = None,
     folder: str = "",
@@ -82,8 +92,13 @@ def process_single_image(
     Process results for a single image number.
 
     1. Use real image segmentation labels (if provided), else build dummy labels.
-    2. Calculate unique spots per orientation.
-    3. Filter orientations by minimum unique spots.
+    2. Calculate winner-take-all (exclusive) spots per orientation.
+    3. Filter orientations with the config-selected filter: ``RobustFilter``
+       1 (twin/CSL-aware) or 0 (legacy); ABSENT = legacy, as in 0.7.1
+       streaming (RunImage's absent default is 1). ``MinGoodSpots`` (or
+       *min_unique* when given; 2 when absent) is the exclusive-label floor.
+       The robust filter also uses ``MinNrSpots`` (floor on own winner-take-all
+       pixels) and ``MaxAngle`` (near-duplicate angle); legacy uses neither.
     4. Sort filtered orientations by quality (descending).
     5. Save per-image H5 output (with raw/processed image data if folder given).
     6. Return summary dict.
@@ -115,8 +130,8 @@ def process_single_image(
         logger.warning(f"Image {image_nr}: no orientations or spots to process")
         return result
 
-    # Build a simple label image from spot positions for unique-spot calc.
-    # Each unique (x,y) location gets a distinct label.
+    # Build a simple label image from spot positions for the winner-take-all
+    # calc. Each distinct (x,y) location gets its own label.
     # Use a compact array covering just the bounding box of spot positions
     # to avoid allocating a full 2048×2048 image (16MB) per frame.
     # Determine column indices for spots and orientations.
@@ -150,9 +165,25 @@ def process_single_image(
                 labels[y, x] = label_counter
                 label_counter += 1
 
-    # Core (unique-spots -> legacy filter -> spot-filter -> sort) via the shared
-    # PostProcessor stage (REFACTOR_PLAN §6.5b reuse — same impl as RunImage).
-    ppr = PostProcessor(robust=False, min_unique=min_unique,
+    # Core (winner-take-all spots -> filter -> spot-filter -> sort) via the
+    # shared PostProcessor stage, configured from the SAME keys RunImage uses.
+    # This used to be hard-wired to robust=False (the legacy filter, which
+    # deletes real Sigma3 twins), ignoring RobustFilter, and never applied
+    # MinNrSpots in Python, so streaming and non-streaming runs of one frame
+    # could keep different orientations.
+    #
+    # Explicit keys are honoured exactly as RunImage honours them; ABSENT keys
+    # keep 0.7.1 streaming behaviour so an existing config reproduces its
+    # result: RobustFilter absent (None) -> legacy, MinGoodSpots absent -> 2.
+    # MinNrSpots / MaxAngle are used only by the robust filter (the legacy
+    # filter, on either path, reads neither), so with RobustFilter absent they
+    # change nothing, as in 0.7.1.
+    if min_unique is None:
+        min_unique = int(cfg.get("min_good_spots", 2))
+    robust = _robust_in_force(cfg)
+    ppr = PostProcessor(robust=robust, min_unique=min_unique,
+                        min_total_spots=int(cfg.get("min_nr_spots", 5)),
+                        max_angle_deg=float(cfg.get("max_angle", 2.0)),
                         space_group=int(cfg.get("space_group", 225) or 225),
                         fmt=sol_fmt)(orientations, spots, labels)
     filtered_orient = ppr.filtered_orientations
@@ -166,7 +197,8 @@ def process_single_image(
 
     logger.info(
         f"Image {image_nr}: {len(orientations)} orient → "
-        f"{len(filtered_orient)} kept (≥{min_unique} unique spots), "
+        f"{len(filtered_orient)} kept ({'robust' if robust else 'legacy'} filter, "
+        f">={min_unique} exclusive spots), "
         f"{len(filtered_spots)} spots"
     )
 
@@ -197,6 +229,13 @@ def process_single_image(
     return result
 
 
+def _robust_in_force(cfg: Dict[str, Any]) -> bool:
+    """RobustFilter as the streaming path applies it: an explicit value is
+    honoured; an absent key (None) means legacy, the 0.7.1 streaming filter."""
+    rf = cfg.get("robust_filter")
+    return False if rf is None else bool(rf)
+
+
 def _save_image_h5(
     image_nr: int,
     output_dir: str,
@@ -212,7 +251,8 @@ def _save_image_h5(
     """Save per-image results + image data to HDF5 file."""
     h5_path = os.path.join(output_dir, f"image_{image_nr:05d}.output.h5")
 
-    # Build unique counts array [GrainNr, UniqueLabels]
+    # [GrainNr, UniqueLabels]: the WINNER-TAKE-ALL exclusive label count per
+    # orientation (see calculate_unique_spots), not distinct observed peaks.
     unique_counts = []
     for gn, info in unique_info.items():
         unique_counts.append([gn, info.get("unique_label_count", 0)])
@@ -360,7 +400,7 @@ def postprocess(
     labels_file: str = "",
     folder: str = "",
     image_nr: int = 0,
-    min_unique: int = 2,
+    min_unique: Optional[int] = None,
     nprocs: int = 1,
     write_indexfile: bool = True,
     indexfile_dir: str = "",
@@ -378,11 +418,19 @@ def postprocess(
         folder:         Path to folder containing source H5 images (for
                         embedding raw/processed data in output H5).
         image_nr:       0 = process all images, N = specific image only.
-        min_unique:     Minimum unique spots to keep an orientation.
+        min_unique:     Minimum EXCLUSIVE (winner-take-all) spots to keep an
+                        orientation. None (default) = MinGoodSpots from the
+                        config, as on the non-streaming path.
         nprocs:         Number of parallel processes (default: 1 = serial).
     """
     cfg = lsu.parse_config(config_file)
     os.makedirs(output_dir, exist_ok=True)
+    if cfg.get("robust_filter") is None:
+        logger.warning(
+            "RobustFilter is not set in %s: streaming uses RobustFilter 0 "
+            "(legacy filter, as in 0.7.1). RunImage's default for an absent key "
+            "is 1 (twin/CSL-aware); add 'RobustFilter 0' or 'RobustFilter 1' to "
+            "make the two paths agree.", config_file)
 
     # Load frame mapping
     frame_mapping = lsu.load_frame_mapping(mapping_file)
@@ -559,8 +607,9 @@ def main() -> None:
         help="Process specific image number (0 = all, default: 0)"
     )
     parser.add_argument(
-        "--min-unique", type=int, default=2,
-        help="Minimum unique spots to keep orientation (default: 2)"
+        "--min-unique", type=int, default=None,
+        help="Minimum exclusive (winner-take-all) spots to keep an orientation. "
+             "Default: MinGoodSpots from --config"
     )
     parser.add_argument(
         "--log-level", default="INFO",

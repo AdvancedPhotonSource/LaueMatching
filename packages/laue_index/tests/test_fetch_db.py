@@ -1,6 +1,6 @@
 """`laue-index fetch-db` — the orientation database, without build.sh.
 
-A pip user has no build.sh, so this is the only route to the 6.7 GB database
+A pip user has no build.sh, so this is the only route to the 7.2 GB (6.7 GiB) database
 the indexer matches against. The network is faked: what is being tested is the
 reassembly, the size arithmetic, and the refusal to hand back a corrupt file --
 not GitHub.

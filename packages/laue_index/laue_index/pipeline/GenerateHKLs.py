@@ -296,7 +296,8 @@ class DetectorType:
         Parameters:
         Nx, Ny: Number of pixels in X and Y directions
         dx, dy: Pixel size in X and Y directions [m]
-        R: Rotation array describing detector orientation [degrees]
+        R: Rotation vector describing detector orientation [radians]: its
+           direction is the axis and its norm the angle (Rodrigues, below)
         P: Translation array describing detector position [m]
         name: Detector name (optional)
         """
@@ -419,7 +420,7 @@ def main():
     parser.add_argument('-latticeParameter', type=float, nargs=6, required=True, 
                       help='Lattice Parameter a,b,c,alpha,beta,gamma [nm, nm, nm, degrees, degrees, degrees].')
     parser.add_argument('-RArray', type=float, nargs=3, required=True, 
-                      help='Rotation array describing detector orientation. 3 values.[degrees]')
+                      help='Rotation vector describing detector orientation: axis = direction, angle = norm. 3 values.[radians]')
     parser.add_argument('-PArray', type=float, nargs=3, required=True, 
                       help='Translation array describing detector position. 3 values.[m]')
     parser.add_argument('-NumPxX', type=float, required=False, default=2048, 

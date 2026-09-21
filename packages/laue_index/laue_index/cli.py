@@ -190,7 +190,7 @@ def _download(url: str, dest, expected: int | None = None) -> int:
 def _cmd_fetch_db(args: argparse.Namespace) -> int:
     """Download and reassemble the orientation database.
 
-    `pip install laue-index` ships the binaries but not the 6.7 GB database
+    `pip install laue-index` ships the binaries but not the 7.2 GB (6.7 GiB) database
     they index against, and a pip user has no build.sh to fetch it. This is
     that step, and nothing more: it does not decide where the database should
     live, it reports where it put it.
@@ -275,7 +275,7 @@ def main(argv: list[str] | None = None) -> int:
         "run", add_help=False,
         help="run the full pipeline (RunImage): laue-index run process -c ... -i ...")
 
-    pd = sub.add_parser("fetch-db", help="download the 6.7 GB orientation database")
+    pd = sub.add_parser("fetch-db", help="download the 7.2 GB (6.7 GiB) orientation database")
     pd.add_argument("--dest", default=".",
                     help="file, or a directory to write 100MilOrients.bin into")
     pd.add_argument("--parts-dir", dest="parts_dir", default="",

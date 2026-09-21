@@ -1,5 +1,8 @@
 """PostProcessor stage — solutions -> unique-spots -> filter -> spot-filter.
 
+("unique-spots" = the winner-take-all exclusive count of
+``filtering.calculate_unique_spots``, not a count of distinct observed peaks.)
+
 REFACTOR_PLAN §3 / §6.5.  The result-processing core that was inlined in
 RunImage._process_indexing_results (and duplicated in laue_postprocess): given
 parsed orientation + spot arrays and the segmentation labels, compute per-
@@ -18,6 +21,7 @@ import numpy as np
 
 from .filtering import (calculate_unique_spots, LegacyUniqueSpotFilter,
                         RobustCSLAwareFilter)
+from .geometry import proper_ops_for_space_group
 from .records import SOLUTION_FORMATS, SolutionFormat
 
 __all__ = ["PostProcessResult", "PostProcessor", "sort_by_quality"]
@@ -52,11 +56,15 @@ class PostProcessor:
                  fmt: SolutionFormat = SOLUTION_FORMATS["runimage"]):
         self.fmt = fmt
         self.is_cubic = 195 <= space_group <= 230
+        # Non-cubic groups with tabulated ops (hexagonal) get near-duplicate
+        # removal under their own symmetry; the CSL exemption stays cubic-only.
+        self.ops = None if self.is_cubic else proper_ops_for_space_group(space_group)
         if robust:
             self.ofilter = RobustCSLAwareFilter(
                 min_unique=min_unique, min_total_spots=min_total_spots,
                 max_angle_deg=max_angle_deg, csl_sigmas=csl_sigmas,
-                csl_tol_deg=csl_tol_deg, cubic=self.is_cubic, fmt=fmt)
+                csl_tol_deg=csl_tol_deg, cubic=self.is_cubic, fmt=fmt,
+                ops=self.ops)
         else:
             self.ofilter = LegacyUniqueSpotFilter(min_unique=min_unique, fmt=fmt)
 

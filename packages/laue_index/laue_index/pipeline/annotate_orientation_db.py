@@ -2,7 +2,7 @@
 """annotate_orientation_db.py — write a provenance sidecar next to an
 orientation binary (``100MilOrients.bin``).
 
-The 6.7 GB ``100MilOrients.bin`` that ships with LaueMatching was generated
+The 7.2 GB (6.7 GiB) ``100MilOrients.bin`` that ships with LaueMatching was generated
 before this repository kept generator provenance. This script writes a
 ``<orient_file>.meta.json`` sidecar so downstream runs can record at least
 the file's fingerprint, size, record count, and what we *think* we know
@@ -86,7 +86,7 @@ def main() -> int:
                    help="Orientation binary to annotate (default: 100MilOrients.bin)")
     p.add_argument("--notes", default=None, help="Extra notes to embed in the sidecar")
     p.add_argument("--strong-hash", action="store_true",
-                   help="Compute a full SHA-256 (slow: ~40s for 6.7GB) instead of the weak head+tail hash")
+                   help="Compute a full SHA-256 (slow: ~40s for 7.2 GB) instead of the weak head+tail hash")
     args = p.parse_args()
 
     try:

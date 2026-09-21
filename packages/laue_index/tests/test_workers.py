@@ -14,6 +14,17 @@ import pytest
 from laue_index import workers as W
 
 
+@pytest.fixture(autouse=True)
+def _isolate_host(monkeypatch):
+    """These tests pin the CPU/memory arithmetic. The host's own RLIMIT_NPROC
+    and any shard/daemon variables in the developer's shell must not leak in;
+    the tests that exercise those set them explicitly
+    (test_workers_sibling_shards.py)."""
+    monkeypatch.setattr(W, "_rlimit_nproc", lambda: None)
+    for k in ("LAUE_SHARDS_PER_HOST", "LAUE_DAEMON_NCPUS"):
+        monkeypatch.delenv(k, raising=False)
+
+
 # ---------------------------------------------------------------------------
 # usable_cpu_count
 # ---------------------------------------------------------------------------
@@ -202,7 +213,37 @@ def test_config_schema_and_dataclass_agree():
         "be parsed and silently dropped")
 
 
-def test_server_no_longer_hardcodes_eight():
+def test_streaming_parser_reads_preprocess_workers(tmp_path):
+    """The server that actually sizes the pool (laue_image_server) reads the
+    STREAMING parser, lsu.parse_config, not ConfigurationManager. It never parsed
+    PreprocessWorkers, so the documented key did nothing on the production path
+    and only the environment variable worked. The test above checked the other
+    parser, which is why this went unnoticed."""
+    import laue_stream_utils as lsu
+    assert lsu.parse_config(str(tmp_path / "absent.txt"))["preprocess_workers"] == 0
+    p = tmp_path / "params.txt"
+    p.write_text("NrPxX 2048\nPreprocessWorkers 7   # cap\n")
+    assert lsu.parse_config(str(p))["preprocess_workers"] == 7
+
+
+def test_server_passes_the_parsed_cap_to_the_chooser():
+    """Behavioural: the server's chooser, given a parsed config, caps at its
+    PreprocessWorkers and otherwise uses the machine (40 > the old 8)."""
+    from laue_index.pipeline import laue_image_server as srv
+    with mock.patch.object(W, "usable_cpu_count", lambda: 40), \
+         mock.patch.object(W, "available_memory_bytes", lambda: 256 * 10**9):
+        os.environ.pop("LAUE_PREPROCESS_WORKERS", None)
+        cfg = {"nr_px_x": 2048, "nr_px_y": 2048, "preprocess_workers": 3}
+        n, d = srv._choose_workers(cfg, queue_depth=0)
+        assert n == 3 and d["bound_by"] == "max_workers"
+        cfg["preprocess_workers"] = 0
+        assert srv._choose_workers(cfg, queue_depth=0)[0] == 40
+
+
+def test_serve_images_uses_the_tested_helpers():
+    """Source check, kept as a grep because running serve_images needs a live
+    daemon on a TCP port: it must size and build its pool through the two
+    helpers the behavioural tests exercise, and the cap of 8 must not return."""
     import inspect
     from laue_index.pipeline import laue_image_server as srv
     src = inspect.getsource(srv.serve_images)
@@ -210,4 +251,5 @@ def test_server_no_longer_hardcodes_eight():
                      if not ln.lstrip().startswith("#"))
     assert "min(os.cpu_count() or 4, 8)" not in code, (
         "the hard-coded cap of 8 is back")
-    assert "choose_preprocess_workers" in code
+    assert "_choose_workers(" in code
+    assert "_make_pool(" in code
