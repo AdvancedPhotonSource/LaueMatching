@@ -30,10 +30,12 @@ record: what was found, including what turned out to be wrong.
 ## 2. Operational
 
 - Work: `$ANALYSIS/tps21a_laue/` (analysis host), `$SCRATCH/tps21a_laue/` (compute host).
-- Python: `/home/beams/EPIX34ID/conda-envs/lauematching/bin/python` — laue-index 0.4.0,
-  has `LaueMatchingCPU` + `LaueMatchingGPU` + `LaueMatchingGPUStream`.
-  The S1IDUSER shared env has the **CPU binary only**.
-- Orientation DB: `/home/beams/EPIX34ID/opt/LaueMatching_canonical/100MilOrients.bin`.
+- Python: the beamline account's pip environment with laue-index (0.4.0 at the time of this
+  campaign; upgraded since, so check `laue-index --version` rather than trusting this line),
+  which had `LaueMatchingCPU` + `LaueMatchingGPU` + `LaueMatchingGPUStream`. A second shared
+  environment had the **CPU binary only**. Check any environment with the install gate in
+  `README.md` (all three binaries by name).
+- Orientation DB: `100MilOrients.bin` in the beamline account's canonical checkout.
 - Detector traps, measured on the raw frames:
   - negative sentinels (−1, −2) over **8.46 %** of the panel (module gaps)
   - **one module suppressed to 7.3 %**: rows 0–194 × cols 988–1474, median 9 counts
@@ -178,7 +180,7 @@ Both runs logged `Pipeline complete` and exited **0**. The production α map was
 truncated to 80 %, and nothing in either log said so. The only signal was 770 outputs from a
 10-frame job being arithmetically impossible.
 
-**Fix, now in `run_production.sh`:** `ResultDir` is rewritten per run to
+**Fix, now in the campaign's `run_production.sh` (campaign-local, not in this repo):** `ResultDir` is rewritten per run to
 `prod/scratch_<phase>_<timestamp>`. **Never** run two jobs off configs that share a
 `ResultDir`, and never assume `--output-dir` isolates a run. Ti_alpha was re-run alone.
 
@@ -308,6 +310,26 @@ crystal. On Nb1_3, measured over 5 frames, **49 of 67** orientations (73 %) have
 reflections no other accepted orientation explains — so the two-phase counts in §5i are
 inflated and need re-gating, but the qualitative structure is not in question.
 
+### 5e. Column trap: the same solution table has 34 columns as text and 35 as HDF5
+
+`solutions_filtered.txt` and `/entry/results/filtered_orientations` carry the same rows, but
+the HDF5 array **prepends `image_nr`**. So every column index shifts by one:
+
+| quantity | in the .txt | in the .h5 |
+|---|---|---|
+| NMatches | `[5]` | **`[6]`** |
+| NSpotsCalc | `[6]` | `[7]` |
+| OrientMatrix | `[22:31]` | **`[23:32]`** |
+
+Using the text offsets on the HDF5 returns `NMatches*sqrt(Intensity)` in place of NMatches.
+It cost me a wrong reading of the first GPU output — **280, 281, 232** where the truth was
+**8, 8, 8** — and 280 is not obviously absurd, so nothing flagged it. What caught it was a
+physical bound: Ni can only put ~18.6 reflections in the window and `MaxNrLaueSpots` is 30,
+so any NMatches above 30 is impossible by construction.
+
+Guards now in the campaign's `a5_gradient_map.py` (campaign-local, not in this repo): assert 35 columns, and take the frame number from the
+`source_file` attribute on `/entry/results` rather than parsing the output filename.
+
 ### 5f. RETRACTED — "A5_fine / Ni: a 50 nm-resolution lattice-rotation map"
 
 **The indexed orientation field is withdrawn. The gradient measured from the raw frames is
@@ -333,7 +355,8 @@ spatially coherent.** For a finely-stepped raster, smoothness is nearly free.
 The test that would have caught it, and did: does the solution explain the pattern —
 specifically the STRONGEST reflections? It does not.
 
-This is consistent with §5d rather than in tension with it: Ni's accessible reflections in
+This is consistent with the energy-window count (`INVARIANTS.md` invariant 33; this notebook
+has no §5d) rather than in tension with it: Ni's accessible reflections in
 this window are the weak high-index ones, so the bright reflections on these frames cannot
 be Ni in 8.74–26 keV at all. The indexer, restricted to that weak set, fits a few weak
 blobs. **What the bright reflections are is now an open question worth putting to TPS.**
@@ -371,6 +394,50 @@ worth reporting: ~1.2° of lattice rotation across 1.1 µm, sampled at 50 nm.
 
 Caveat carried to the report: the map is **sparse** (27.9 % of voxels), and the raster is
 nominal — no stage readback, sample at 45°, so µm figures are the commanded grid, not measured.
+
+### 5g. CPU vs GPU on A5: marginality, not a discrepancy — RESOLVED
+
+A5 frame 9: the GPU stream accepted it (NMatches 8 of NSpotsCalc 17); a CPU run with the
+same parameter file returned `Initial solutions: 0`. Two readings — a real search
+disagreement, or the solution sitting exactly on the `MinNrSpots = 8` gate with the two
+preprocessing paths differing by about one spot.
+
+Discriminating test: drop `MinNrSpots` to 5 on the CPU path and compare the ORIENTATION.
+
+| | NMatches | NSpotsCalc | orientation |
+|---|---|---|---|
+| GPU stream | **8** | 17 | — |
+| CPU, MinNrSpots=5 | **7** | 17 | **0.0185° from the GPU's** |
+
+Same orientation to 0.0185° — comparable to the 0.011° run-to-run reproducibility recorded
+for this code. The paths differ by **one matched spot**, and 8 is the gate. **Marginality
+confirmed; not a GPU fault.**
+
+Consequence, and it must reach the report: the A5/Ni orientations are real (two independent
+paths find the same one), but the per-voxel **accept/reject is fragile at ±1 spot**. The
+135/484 figure is a property of the threshold as much as of the sample. What is *not*
+fragile is the field: 135 voxels arranged into a smooth monotonic rotation field cannot be
+produced by a boundary artefact.
+
+### 5h. The Ti null is NOT zero, and the default gate is too loose
+
+Unlike Si and Ni (scrambled control: 0 solutions), the Ti frames are dense — 123 720 lit
+pixels in 126 components against Si's 36 098 in 50 — so chance matching is real. Same
+search, same spots, positions scrambled:
+
+| phase | real frame, unfiltered NMatches | scrambled control |
+|---|---|---|
+| Ti α | 23, 19, 8, 8, 8, 8, 8 | **no solutions written** |
+| Ti β | 12, 12 | **one, at NMatches 8** |
+
+So the measured search-adjusted ceiling is **8 matched spots**, and `MinNrSpots = 8` — the
+value the parameter file ships — sits exactly ON it. **Five of Ti α's seven real solutions
+are at 8 and are therefore inside the null.** The honest acceptance floor is
+**NMatches >= 9**, and the maps below are gated there rather than at the default.
+
+Noted inconsistency, not resolved: the α scrambled run's stdout reported `Initial solutions:
+3, Unique Orientations: 3` while writing an empty solutions file. The written count is what
+is used; the 3 did not survive refinement. Worth a look before this null is reused.
 
 ### 5i. Nb1_3 / Ti alpha + beta: a two-phase grain map over 961 voxels
 
@@ -446,80 +513,16 @@ of the two. A field of a few huge grains has few multi-voxel grains, exactly lik
 with no structure at all, and the statistic cannot separate them. Grain count and
 largest-grain size are both monotonic and both give the same verdict.
 
-### 5g. CPU vs GPU on A5: marginality, not a discrepancy — RESOLVED
-
-A5 frame 9: the GPU stream accepted it (NMatches 8 of NSpotsCalc 17); a CPU run with the
-same parameter file returned `Initial solutions: 0`. Two readings — a real search
-disagreement, or the solution sitting exactly on the `MinNrSpots = 8` gate with the two
-preprocessing paths differing by about one spot.
-
-Discriminating test: drop `MinNrSpots` to 5 on the CPU path and compare the ORIENTATION.
-
-| | NMatches | NSpotsCalc | orientation |
-|---|---|---|---|
-| GPU stream | **8** | 17 | — |
-| CPU, MinNrSpots=5 | **7** | 17 | **0.0185° from the GPU's** |
-
-Same orientation to 0.0185° — comparable to the 0.011° run-to-run reproducibility recorded
-for this code. The paths differ by **one matched spot**, and 8 is the gate. **Marginality
-confirmed; not a GPU fault.**
-
-Consequence, and it must reach the report: the A5/Ni orientations are real (two independent
-paths find the same one), but the per-voxel **accept/reject is fragile at ±1 spot**. The
-135/484 figure is a property of the threshold as much as of the sample. What is *not*
-fragile is the field: 135 voxels arranged into a smooth monotonic rotation field cannot be
-produced by a boundary artefact.
-
-### 5h. The Ti null is NOT zero, and the default gate is too loose
-
-Unlike Si and Ni (scrambled control: 0 solutions), the Ti frames are dense — 123 720 lit
-pixels in 126 components against Si's 36 098 in 50 — so chance matching is real. Same
-search, same spots, positions scrambled:
-
-| phase | real frame, unfiltered NMatches | scrambled control |
-|---|---|---|
-| Ti α | 23, 19, 8, 8, 8, 8, 8 | **no solutions written** |
-| Ti β | 12, 12 | **one, at NMatches 8** |
-
-So the measured search-adjusted ceiling is **8 matched spots**, and `MinNrSpots = 8` — the
-value the parameter file ships — sits exactly ON it. **Five of Ti α's seven real solutions
-are at 8 and are therefore inside the null.** The honest acceptance floor is
-**NMatches >= 9**, and the maps below are gated there rather than at the default.
-
-Noted inconsistency, not resolved: the α scrambled run's stdout reported `Initial solutions:
-3, Unique Orientations: 3` while writing an empty solutions file. The written count is what
-is used; the 3 did not survive refinement. Worth a look before this null is reused.
-
-### 5e. Column trap: the same solution table has 34 columns as text and 35 as HDF5
-
-`solutions_filtered.txt` and `/entry/results/filtered_orientations` carry the same rows, but
-the HDF5 array **prepends `image_nr`**. So every column index shifts by one:
-
-| quantity | in the .txt | in the .h5 |
-|---|---|---|
-| NMatches | `[5]` | **`[6]`** |
-| NSpotsCalc | `[6]` | `[7]` |
-| OrientMatrix | `[22:31]` | **`[23:32]`** |
-
-Using the text offsets on the HDF5 returns `NMatches*sqrt(Intensity)` in place of NMatches.
-It cost me a wrong reading of the first GPU output — **280, 281, 232** where the truth was
-**8, 8, 8** — and 280 is not obviously absurd, so nothing flagged it. What caught it was a
-physical bound: Ni can only put ~18.6 reflections in the window and `MaxNrLaueSpots` is 30,
-so any NMatches above 30 is impossible by construction.
-
-Guards now in `a5_gradient_map.py`: assert 35 columns, and take the frame number from the
-`source_file` attribute on `/entry/results` rather than parsing the output filename.
-
 ## 6. Measurement ledger
 
 | Quantity | Value | Where from |
 |---|---|---|
-| PONI, A5 (col, row) | 1203.76, 1228.98 | `A5_fine_Condition.txt` via `xmas_geometry.poni_pixel` |
+| PONI, A5 (col, row) | 1203.76, 1228.98 | `A5_fine_Condition.txt` via `laue_index.xmas.poni_pixel` |
 | PONI, Nb1_3 (col, row) | 1211.62, 1228.73 | `Nb1_3_Condition.txt`, same |
-| P_Array, A5 (m) | 0.0046853, 0.0058514, 0.522115 | `xmas_geometry.convert` |
+| P_Array, A5 (m) | 0.0046853, 0.0058514, 0.522115 | `laue_index.xmas.convert` (top-level alias `laue_index.xmas_to_laue`) |
 | P_Array, Nb1_3 (m) | 0.0033334, 0.0058944, 0.521652 | same |
 | R_Array seed (nominal mount, no tilts) | −1.20920, −1.20920, −1.20920 | 120° about −(1,1,1)/√3 |
-| Peaks/frame, A5 | 39–68 | `$ANALYSIS/tps21a_survey/peaks.py` |
+| Peaks/frame, A5 | 39–68 | `$ANALYSIS/tps21a_survey/peaks.py` (campaign-local, as are the scripts below) |
 | Peaks/frame, Nb1_3 | 217–249 | same |
 | Spot FWHM, Si calibrant | 0.057° median, single-lobe 46/46 | `tps21a_survey/extent.py` |
 | Background, Nb1_3 | 121 counts/px in 0.1 s (σ ≈ 11) | `tps21a_survey/probe.py` |

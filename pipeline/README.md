@@ -7,65 +7,76 @@ analysis scripts.
 
 Everything is driven by **one parameter file per crystallographic phase** plus a **data folder**.
 The **indexer** is not specific to any experiment — change only the geometry, lattice, and energy
-values in the parameter file to run on a different instrument or material. Several **analysis**
-scripts still carry hard-coded a two-phase hcp/bcc alloy lattice constants and `valid_hkls_Ti_*.csv` filenames;
-they are listed by file and line in the handbook below, and must be ported before
-the chain is run on another material.
+values in the parameter file to run on a different instrument or material. The **analysis**
+scripts read the material (lattice, reflection list, geometry, energy window, space group) from
+that same parameter file through `analysis/laue_material.py`, selected by `LAUE_PHASES` and
+`LAUE_PARAMS_<PHASE>`; symmetry follows the space group, never the phase name.
 
-**Starting on a dataset this pipeline has never seen?** Read
-[`Laue_Handbook.md`](Laue_Handbook.md) — survey the experiment folder, decide which analyses the
+**Starting on a dataset this pipeline has never seen?** Read the handbook,
+[`../manuals/laue/README.md`](../manuals/laue/README.md) — survey the experiment folder, decide which analyses the
 material system actually supports, index, analyse, report.
 
 The handbook says *what to do*; the **lab notebooks** say *what was found*, including what
-turned out to be wrong — one per geometry:
-[`LAB_NOTEBOOK.md`](../manuals/laue/LAB_NOTEBOOK.md) (reflection, 34-ID-E) and
+turned out to be wrong — one per geometry or station:
+[`LAB_NOTEBOOK.md`](../manuals/laue/LAB_NOTEBOOK.md) (reflection, 34-ID-E),
+[`LAB_NOTEBOOK_TPS21A.md`](../manuals/laue/LAB_NOTEBOOK_TPS21A.md) (reflection, TPS 21A, XMAS
+calibration) and
 [`LAB_NOTEBOOK_16BMD_Si.md`](../manuals/laue/LAB_NOTEBOOK_16BMD_Si.md) (transmission, 16-BM-D).
 
 ---
 
-## Quick start — this beamline (34-ID-E)
+## Quick start
 
-Everything is installed; the launch is one line, but **it must carry the site paths** — the
-CONFIG block ships with portable defaults (`WORK=$HOME/laue_run`, `PY=python`), *not* with
-34-ID-E's values baked in:
+The launch is one line, but **it must carry your paths**: the CONFIG block at the top of
+`run_laue.sh` ships with portable defaults (`WORK=$HOME/laue_run`, `PY=python`), not with any
+site's values. Two kinds of environment work:
+
+- a **pip environment** with `laue-index` installed (the C indexer is compiled in), plus a
+  checkout of this repo for `pipeline/`; or
+- an **editable checkout** (`pip install -e packages/laue_index`), for changing the code.
+
+Either way, name the python by its full path -- a login shell over ssh does not have your conda
+environment on `PATH`:
 
 ```bash
-WORK=$LAUE_WORK \
-PY=/home/beams/EPIX34ID/conda-envs/lauematching/bin/python \
-ALPHA_CONFIG=$LAUE_WORK/params/params_Ti_alpha.txt \
-BETA_CONFIG=$LAUE_WORK/params/params_Ti_beta.txt \
-/home/beams/EPIX34ID/opt/LaueMatching_canonical/pipeline/run_laue.sh /path/to/DATA_FOLDER
+CHECKOUT=/path/to/LaueMatching
+WORK=/path/to/work \
+PY=/path/to/env/bin/python \
+SCRIPTS=$CHECKOUT/scripts \
+ALPHA_CONFIG=/path/to/work/params/params_alpha.txt \
+BETA_CONFIG=/path/to/work/params/params_beta.txt \
+$CHECKOUT/pipeline/run_laue.sh /path/to/DATA_FOLDER
 touch /path/to/DATA_FOLDER/STOP_LAUE                  # stop a watch-mode run
 ```
 
-**The 34-ID-E install, as of 2026-08-30.** One checkout,
-`/home/beams/EPIX34ID/opt/LaueMatching_canonical`, and two conda environments
-beside the account's others, mirroring MIDAS's `midas` / `midas-dev`:
+Add `DRY_RUN=1` to print the resolved paths and stop without launching anything.
 
-| | |
+There is **one** single-host launcher, `pipeline/run_laue.sh`. Its **CONFIG block at the top** is
+where these live; each can be set per run in the environment (as above) or made permanent by
+editing the block:
+
+| CONFIG value | what it is |
 |---|---|
-| `~epix34id/conda-envs/lauematching` | **use this** — the three packages from PyPI, C indexer compiled in |
-| `~epix34id/conda-envs/lauematching_dev` | all three *editable* on the canonical checkout, for changing the code |
+| `SCRIPTS` | directory holding `laue_orchestrator.py`: the checkout's `scripts/`. If unset, `run_laue.sh` uses `../scripts` next to itself, else the installed package's `laue_index/pipeline/` (asked of `PY`). Either way it **checks** the file is there before launching. |
+| `PY` | python with `laue-index` installed |
+| `WORK` | working dir: results land in `$WORK/results/` |
+| `ALPHA_CONFIG` / `BETA_CONFIG` | the parameter files; `BETA_CONFIG=""` for a single phase |
 
-`laue_rt` was retired on 2026-08-30: it never had the laue packages installed at
-all, because the old workflow ran the scripts straight out of a flat checkout.
-
-There is **one** launcher — `pipeline/run_laue.sh`. Its **CONFIG block at the top** is where
-these live; every entry is `${VAR:-default}`, so each can be set per run in the environment (as
-above) or made permanent by editing the block:
-
-| CONFIG value | 34-ID-E value |
-|---|---|
-| `SCRIPTS` — LaueMatching install | `/home/beams/EPIX34ID/opt/LaueMatching/scripts` (auto-derived from the launcher's own path) |
-| `PY` — Python environment | `/home/beams/EPIX34ID/conda-envs/lauematching/bin/python` (see below) |
-| `WORK` — working dir | `$LAUE_WORK` (parameter files, database, results) |
-| `ALPHA_CONFIG` / `BETA_CONFIG` | `$WORK/params/params_Ti_alpha.txt` / `..._beta.txt` |
+`run_laue.sh` refuses to start if `SCRIPTS` has no orchestrator, a config is missing or still holds
+`__SET_ME__`, and after each detached launch it checks the orchestrator is still alive a few
+seconds later (printing the launch log's tail and exiting 1 if not). Alive at launch is not
+success: count the per-frame outputs when the run ends.
 
 If `WORK` is left unset the run lands in `$HOME/laue_run` and the parameter-file lookup fails
-there — a wrong path, not a missing one, so check the launcher's echoed paths before walking away.
+there -- a wrong path, not a missing one, so check the launcher's echoed paths before walking away.
+
+**Many shards across several hosts/GPUs:** use [`dispatch/`](dispatch/README.md) -- it makes
+row-aligned shards and a plan, checks the plan (unique ports and ResultDirs, a real background,
+the indexer present on every host), sizes the preprocessing pool per shard, and watches the runs
+to completion. `launch_shard.sh` is retired and only prints that pointer.
 
 The analysis scripts in `analysis/` are run with the same Python, e.g.
-`/home/beams/EPIX34ID/conda-envs/lauematching/bin/python analysis/parentbeta_reconstruct.py 30`.
+`$PY analysis/parentbeta_reconstruct.py 30`.
 
 ---
 
@@ -75,20 +86,27 @@ The analysis scripts in `analysis/` are run with the same Python, e.g.
 - A **refined detector geometry** (the `geoN_*.xml` from your calibration) → the `P_Array` / `R_Array`
   values in the parameter file.
 - The **crystal(s)**: space group + lattice parameters.
-- Built **once per material** with the packaged tools in `../`:
+- Built **once per material** with the packaged tools -- `$CHECKOUT/scripts/<tool>.py` in a
+  checkout (thin shims), or `python -c "from laue_index.pipeline import run_module; run_module('<tool>')" ...`
+  from an installed package (the modules live in `laue_index/pipeline/`):
   - `GenerateOrientations.py` → the 100-million-orientation database (`100MilOrients.bin`), shared by all phases.
   - `GenerateHKLs.py` → the allowed-reflection list per phase (`valid_hkls_<phase>.csv`).
   - `GenerateSimulation.py` → the forward-spot cache per phase (`forward_<phase>.bin`).
 
-Copy `params_alpha.template.txt` / `params_beta.template.txt`, fill in the marked values, and save as
-`params_alpha.txt` / `params_beta.txt`.
+Copy `params_alpha.template.txt` / `params_beta.template.txt`, replace **every** `__SET_ME__`, and
+save as `params_alpha.txt` / `params_beta.txt`. The placeholders are deliberately not numbers.
+From laue-index 0.7.2 the Python parsers refuse one in `SpaceGroup`, `Symmetry`,
+`LatticeParameter`, `P_Array` and `R_Array`, the C binaries in `LatticeParameter`, `P_Array` and
+`R_Array`, and `run_laue.sh` / `dispatch/mkrun.py` refuse any file that still holds one. (In
+0.7.1 the parsers fell back to built-in defaults, another experiment's values.) `R_Array` is a rotation vector with the angle in **radians**;
+`tol_LatC` / `tol_c_over_a` (optional lattice fit) are **fractions**, 0.001 = 0.1%.
 
 ---
 
 ## 1. Index — live or batch
 
 ```bash
-# edit the CONFIG block at the top of run_laue.sh (WORK, PY, ALPHA_CONFIG, BETA_CONFIG, GPUs)
+# set WORK, PY, SCRIPTS, ALPHA_CONFIG, BETA_CONFIG, GPUs (environment or the CONFIG block)
 ./run_laue.sh  /path/to/DATA_FOLDER  [/entry1/data/data]
 ```
 
@@ -115,9 +133,11 @@ No grain is reported without passing an independent statistical test. Run the an
 | `analysis/batch_peel_driver.py`    | **iterative peel** for dense frames: index → subtract each grain's full pattern → re-index the residual, until it stops finding grains |
 | `analysis/grain_extent_backfill.py`| **cross-frame backfill**: project every confirmed grain into every frame, add present-but-missed detections → grain-extent (shape) map |
 
-> **Set the paths first.** Each analysis script has a short config block at the very top
-> (`WORK`, `DATA`, and the results sub-folder). Point them at your run before executing. Every
-> reported number comes with its null.
+> **Set the paths first.** The analysis scripts read their paths and settings from the
+> environment. The one table of every variable, whether it is required, its default and which
+> scripts read it, is at the end of
+> [Phase 4](../manuals/laue/phase-4-analyse.md#environment-variables-of-the-analysis-scripts).
+> Every reported number comes with its null.
 
 ---
 
@@ -155,13 +175,36 @@ one indexed scan. Every path comes from the environment, so it runs on any host 
 scan:
 
 ```bash
-env LAUE_WORK=/path/to/work \
+env LAUE_PHASES=alpha,beta \
+    LAUE_WORK=/path/to/work \
     LAUE_SCAN_DATA=/path/to/raw/frames \
     LAUE_SCAN_ALPHA=/path/to/results/alpha_<ts> \
     LAUE_SCAN_BETA=/path/to/results/beta_<ts> \
     LAUE_OUT_PREFIX=myscan  NW=16 \
+    LAUE_PARAMS_ALPHA=/path/to/params_alpha.txt LAUE_PARAMS_BETA=/path/to/params_beta.txt \
+    LAUE_MOUNT_DEG=45 \
+    PY=/path/to/env/bin/python \
     bash analysis/run_analysis_chain.sh
 ```
+
+Every variable: the table at the end of
+[Phase 4](../manuals/laue/phase-4-analyse.md#environment-variables-of-the-analysis-scripts).
+
+`LAUE_PHASES` is required. Validation, the null and the gate run for every listed phase;
+steps 4-8 compare alpha with beta and run only when both are listed, and
+`validated_figures.py` only when every phase is named alpha or beta -- otherwise they are
+reported as SKIPPED. A single-phase scan: `LAUE_PHASES=zn LAUE_SCAN_ZN=... LAUE_PARAMS=...`
+(no `LAUE_SCAN_BETA`, no `LAUE_MOUNT_DEG`). Every variable the selected steps need is
+checked before the first step runs, and all missing ones are named together.
+
+Every step must succeed or the chain stops with `STEP FAILED`. `null_model.py` writes the
+measured null to `$LAUE_WORK/peel_map/<LAUE_OUT_PREFIX>_null.json`; the gating scripts
+(`regrain.py`, `empirical_gate.py`, `validated_figures.py`) read that JSON directly, and the
+chain also exports its maximum as `LAUE_NULLMAX_<PHASE>` (replacing any value inherited from
+your environment), so the gate always uses the null of the scan in hand.
+`LAUE_NULLMAX_<PHASE>` is only an override and must be the maximum of the statistic in force.
+The gates default to `nhit` (`LAUE_GATE_STAT=nhit_distinct` is available, not yet validated as
+a gate); the per-frame analytic Poisson gates use `nhit`.
 
 Order matters — each step depends on the one before:
 
@@ -187,7 +230,8 @@ grain counts), `tolerance_sensitivity.py`, `big_grain_diagnostic.py` /
 1. **Measure the null on the scan in hand.** The built-in `p<1e-4` gate assumes peaks are
    scattered uniformly. Real Laue peak fields are clustered, so the true null has much
    heavier tails and the analytic gate under-rejects. Across nine scans the measured α null
-   maximum ranged 14–17 and β 11–16 — a single inherited value misstates the others. On one
+   maximum ranged 14–17 and β 11–16 (source not in repo) — a single inherited value misstates
+   the others. On one
    dataset this changed the defensible β count by two orders of magnitude.
 2. **A grain is a *contiguous* region of consistent orientation.** Clustering on orientation
    alone merges regions that are spatially disjoint. `regrain.py` splits clusters into
@@ -203,6 +247,13 @@ grain counts), `tolerance_sensitivity.py`, `big_grain_diagnostic.py` /
 - **tcsh `noclobber` silently refuses `>` on an existing file.** Remote writes over ssh must
   go through `bash -s` (feed the script on stdin), not `ssh host "cmd > file"`. A refused
   write looks exactly like a successful one.
+- **Never combine `ssh -n` with `bash -s`.** `-n` points ssh's stdin at `/dev/null`, so the
+  remote `bash -s` receives an **empty script**, runs nothing and exits 0 -- which reads as a
+  failed or empty check ("no binary", "no process") rather than a broken one. Use `-n` only for
+  a remote command that reads nothing; feed scripts on stdin without it, and have every remote
+  check print a sentinel line whose absence you treat as an ssh failure.
+- **`ssh` inside a `while read` loop eats the loop's stdin** and silently drops the remaining
+  lines. Read the list into an array first and iterate with `for`.
 - **`ls dir/*.h5 | wc -l` returns 0 past ARG_MAX** (~40k files), and `ls -dt results/alpha_*`
   will happily return `alpha_<ts>.launch.log` because the log's mtime is newer than the run
   directory. Use `find`, and `-type d` when you mean a directory.

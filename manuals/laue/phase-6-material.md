@@ -14,7 +14,7 @@ against a different material's reflections than the indexing was.
 
 ```python
 from laue_material import Phase
-ph = Phase.load("zn")            # -> $LAUE_PARAMS_ZN, else $LAUE_PARAMS
+ph = Phase.load("zn")            # -> $LAUE_PARAMS_ZN, else $LAUE_PARAMS (single phase only)
 ph.B, ph.hkls, ph.sym_ops        # reciprocal matrix, reflections, proper rotations
 ph.project(OM, with_energy=True) # (n,3): px, py, E_keV
 ph.misorientation(A, Bs)         # DEGREES, symmetry-reduced
@@ -22,7 +22,11 @@ ph.misorientation(A, Bs)         # DEGREES, symmetry-reduced
 
 There is **no built-in default material**: failing to resolve `LAUE_PARAMS_<PHASE>` raises rather
 than falling back, because silently analysing one material with another's reflection list is the
-exact failure this module exists to prevent.
+exact failure this module exists to prevent. The generic `LAUE_PARAMS` names no phase, so from
+0.7.2 it is accepted **only when one phase is in use**, and two phase names that resolve to the
+same parameter file are refused: in 0.7.1 `Phase.load("alpha")` and `Phase.load("beta")` could
+silently both be the generic file, i.e. the same material. Set `LAUE_PARAMS_<PHASE>` per phase.
+All analysis-chain variables: the table at the end of Phase 4.
 
 **Orientation maths comes from `midas_stress`**, the canonical MIDAS implementation (a
 byte-for-byte port of the C `GetMisorientation.h`): `misorientation_om_batch` for misorientation
@@ -39,17 +43,18 @@ machine epsilon.
 Setting up a new material:
 
 ```bash
-python ../GenerateHKLs.py -resultFileName $WORK/params/valid_hkls_<M>.csv \
+python ../scripts/GenerateHKLs.py -resultFileName $WORK/params/valid_hkls_<M>.csv \
    -sym <F|I|C|A|R|P|B> -sgnum <SG> -latticeParameter a b c al be ga \
    -RArray ... -PArray ... -NumPxX 2048 -NumPxY 2048 -dx 200e-6 -dy 200e-6 -Ehi <keV>
-# then let the daemon build the forward cache once (~10 min), and
+# then let the daemon build the forward cache once (~10 min here, source not in repo;
+# the 16-BM-D Si cache took ~100 s, RUNBOOK R2), and
 export LAUE_PHASES=<m>  LAUE_PARAMS_<M>=$WORK/params/params_<M>.txt
 ```
 
 Still per-material and *not* automatic:
 
 - **The orientation relationship**, if one applies: `burgers_Cv()` in
-  `parentbeta_reconstruct.py:49`, returning a `(12,3,3)` variant set. Everything downstream is
+  `parentbeta_reconstruct.py`, returning a `(12,3,3)` variant set. Everything downstream is
   generic in that array. K-S gives `(24,3,3)`; the **accept threshold must be re-derived** —
   "11 of 12" is an empirical cut for Burgers, not a law.
 - The 100M-orientation database is **material-independent** (an SO(3) grid) — symlink it, never
@@ -106,9 +111,13 @@ ground truth, not on which flip maximises |corr|.)
 
 The most natural question about a deposit on a single-crystal substrate ("is there an orientation
 relationship?") is the one this pipeline answers *wrongly by construction*, and it answers it with
-a large, clean-looking effect. **Validation scores PREDICTED reflections**, not distinct observed
-peaks. So when a candidate orientation of the deposit can be rotated to overlay the substrate, it
-collects the substrate's peaks as evidence for itself.
+a large, clean-looking effect. **The validation that produced it (`nhit`) scored PREDICTED
+reflections**, not distinct observed peaks. So when a candidate orientation of the deposit can be
+rotated to overlay the substrate, it collects the substrate's peaks as evidence for itself.
+(What has changed since, per `INVARIANTS.md` invariant 15b: the indexer's `NMatches` never stacked
+harmonics, and `nhit_distinct`, 0.7.2 and later, removes the harmonic mechanism below from the
+analysis side too. The second mechanism, generic vector coincidence, collects *distinct*
+substrate peaks and is not removed by any dedup. The peel below is still required.)
 
 Two mechanisms, both measured on bt_34ide_jul26 sampleD (Zn electrodeposited on the fcc substrate):
 
@@ -152,5 +161,6 @@ in-plane relationship (e.g. Zn⟨11-20⟩‖Cu⟨110⟩) tests epitaxy.
 The peel also removes any genuine deposit reflection that coincides with a substrate one. That is
 unavoidable and it is the point: the test becomes **stricter**, which is the direction it must err.
 A relationship that survives is real; one that vanishes is consistent with either artefact or
-over-masking, and the mask fraction is what separates those. The real fix is to score distinct
-**observed** peaks.
+over-masking, and the mask fraction is what separates those. Scoring distinct **observed** peaks
+(`nhit_distinct`) fixes the harmonic half of the problem and not the coincidence half, so it does
+not replace the peel.

@@ -41,7 +41,7 @@ Record, per scan folder:
 | exposure | frame header / folder name, then confirm against counts | 0.25 s vs 1 s changes what is detectable |
 | still growing? | frame count twice, 120 s apart | never index a scan still being collected |
 | peaks on one frame | detect on a background-subtracted frame, SNR>8, **area ≥ 4 px** | density regime (below) |
-| hot pixels | pixels saturated in ≥90% of ~60 frames spread over the scan | Zn scan: **36 permanent** hot pixels; only ~8% of saturated pixels were real reflections. Every frame's `max` looked like signal and was not. |
+| hot pixels | pixels saturated in ≥90% of ~60 frames spread over the scan | Zn scan: **36 permanent** hot pixels (`LAB_NOTEBOOK.md` §2a counts 34 on the 34-ID-E panel; unreconciled, source not in repo); only ~8% of saturated pixels were real reflections. Every frame's `max` looked like signal and was not. |
 | background, decomposed | median of four detector **corners** (flat) vs a central box (halo) | the flat part is isotropic — but TEST whether it is fluorescence (tracks amount) or diffuse scattering (tracks grain-size/disorder); on Zn/Zn it was scattering, see §Same-phase and invariant on the background |
 | spot shape | blob aspect ratio, median **and** p95 | Zn *looked* heavily streaked; measured median AR was 1.6 with only ~10% above 3. The eye reads the p95 tail. |
 
@@ -75,8 +75,8 @@ folder name is wrong by a factor you will not notice.
 **Peak-count check, and why the area filter is not optional.** A bare SNR>8 local-maximum test on a
 weak frame returns single-pixel noise spikes as "peaks": on one Si calibration frame it gave 159,
 of which 47 were extended reflections. Requiring a connected area of ≥4 px above 4σ is what makes
-the count mean something. `pattern_complexity_figure.py` in the report scripts does exactly this
-for both frames it compares.
+the count mean something. `pattern_complexity_figure.py` in a campaign's report scripts (campaign-local, not in this
+repo) does exactly this for both frames it compares.
 
 **The area filter is necessary but NOT sufficient — a very bright spot breaks detection three
 different ways.** All three were found on the 34-ID-E Perkin Elmer panel and all three are handled

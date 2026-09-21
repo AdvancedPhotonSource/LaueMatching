@@ -12,7 +12,7 @@ reach them.
 | Phases 0–6 | [`../manuals/laue/phase-0-survey.md`](../manuals/laue/phase-0-survey.md) … [`../manuals/laue/phase-6-material.md`](../manuals/laue/phase-6-material.md) |
 | Invariants, Worked example, Done means | [`../manuals/laue/README.md`](../manuals/laue/README.md) |
 | `Laue_Lab_Notebook_bt_34ide_jul26.md` | [`../manuals/laue/LAB_NOTEBOOK.md`](../manuals/laue/LAB_NOTEBOOK.md) |
-| `Laue_Lab_Notebook_bt_34ide_jul26b.md` | merged into the same file — the public record is one notebook per *geometry*, not per campaign |
+| `Laue_Lab_Notebook_bt_34ide_jul26b.md` | merged into the same file: the PUBLIC record is one notebook per *geometry or station*, while each campaign keeps its own notebook in its own directory (`README.md` §Handbook vs lab notebook) |
 | — (new) | [`../manuals/laue/DIAGNOSIS.md`](../manuals/laue/DIAGNOSIS.md), [`../manuals/laue/RUNBOOK.md`](../manuals/laue/RUNBOOK.md) |
 
 **The phase text was moved, not rewritten.** The spine gained a scope gate, an install gate

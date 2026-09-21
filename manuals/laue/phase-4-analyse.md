@@ -9,12 +9,32 @@
 
 ```bash
 env LAUE_WORK=$WORK/analysis/<scan> \
+    LAUE_PHASES=alpha,beta \
+    LAUE_PARAMS_ALPHA=<params_alpha.txt> LAUE_PARAMS_BETA=<params_beta.txt> \
     LAUE_SCAN_DATA=<SCAN_FOLDER> \
     LAUE_SCAN_ALPHA=<results/alpha_TS> \
     LAUE_SCAN_BETA=<results/beta_TS> \
-    LAUE_OUT_PREFIX=<scan> NW=16 \
+    LAUE_OUT_PREFIX=<scan> LAUE_MOUNT_DEG=<mount angle, deg> NW=16 \
+    PY=<full path to the env's python> \
     bash analysis/run_analysis_chain.sh
 ```
+
+Every variable the analysis scripts read is in the table at the end of this phase.
+`run_analysis_chain.sh` (0.7.2 and later):
+
+- needs `PY` (a python that imports numpy, scipy, h5py and matplotlib; it checks) and refuses
+  to start without `LAUE_WORK`, `LAUE_SCAN_DATA`, `LAUE_SCAN_ALPHA`, `LAUE_SCAN_BETA` and
+  `LAUE_OUT_PREFIX`. It runs both `alpha` and `beta` steps, so as written it is a two-phase
+  chain; for a single phase run the scripts one by one.
+- **stops at the first failing step** (`STEP FAILED (exit N)`), instead of carrying on to
+  "analysis chain finished" as 0.7.1 did after an import crash.
+- after `null_model.py`, reads the measured null from `peel_map/<prefix>_null.json` (prefix =
+  `LAUE_OUT_PREFIX`; the scripts' own default is `scan`) and **exports
+  `LAUE_NULLMAX_<PHASE>`** for each phase in `LAUE_PHASES`, for the statistic in force
+  (`LAUE_GATE_STAT`). A value already in your environment is replaced by the measured one, and
+  the log says so.
+- step 1 (`parentbeta_validate.py`) **exits without writing** when nothing validates, rather
+  than printing "VALIDATED 0" and writing an empty npz for the next step to read.
 
 Steps 1–5 are the material-agnostic core; 6–8 run **only** if phase 1 said an orientation
 relationship applies; 9 is figures.
@@ -31,9 +51,42 @@ relationship applies; 9 is figures.
 | 8 | `variant_coherence.py` | only if step 6 ran |
 | 9 | `validated_figures.py` | any |
 
-Then, always: `regrain.py` (contiguity-aware counts — pass the scan's own measured null maximum via
-`LAUE_NULLMAX_<PHASE>`; it now **exits** rather than falling back to the Ti values),
+Then, always: `regrain.py` (contiguity-aware counts; it reads this scan's measured null from
+`peel_map/<prefix>_null.json`, `LAUE_NULLMAX_<PHASE>` only overriding it, and **exits** rather than
+falling back to the Ti values),
 `tolerance_sensitivity.py`, and `collect_scan_metrics.py` for the cross-scan JSON.
+
+**Every gate needs a null measured on this scan, and says which count it gates.** In 0.7.1,
+`empirical_gate.py` and `validated_figures.py` still carry a hard-coded null from an earlier Ti
+campaign and do not read `LAUE_NULLMAX_<PHASE>`: on 0.7.1, do not use their gate for any other
+scan. From 0.7.2 `regrain.py`, `empirical_gate.py` and `validated_figures.py` read the measured
+null from `peel_map/<prefix>_null.json` (written by `null_model.py` on this scan) and exit if
+neither that file nor the override below exists; there is no built-in fallback. `LAUE_NULLMAX_<PHASE>` is an **override** and must
+be the maximum of the statistic in force: a value equal to the OTHER statistic's maximum in the
+JSON is refused. Symmetry comes from the phase's **space group**, never its name.
+
+**Which count.** The validated npz carries `nhit` and `nhit_distinct` side by side (glossary:
+`INVARIANTS.md` invariant 15b). The gates default to **`nhit`**; `LAUE_GATE_STAT=nhit_distinct`
+switches, also selects the matching null, and every gate prints which it used.
+`nhit_distinct` is available but **not yet validated as a gate**: whether the extra grains it
+admits are real is untested (raw-image hit test on the newly admitted grains pending).
+Per-frame analytic Poisson gates stay on `nhit`, since the distinct count has no closed-form
+null, and say so at run time.
+
+**Winner per position.** Figures that keep one orientation per raster position rank by
+`nhit_distinct` (`raster.winner_per_position`), because `nhit` favours harmonic-rich low-index
+orientations; on an npz written before `nhit_distinct` existed they fall back to `nhit` with a
+warning. Ties are broken by `nhit`, then orientation, then instance index, so the pick no
+longer depends on iteration order.
+
+**Connectivity.** Grain and component counts use one shared connectivity,
+`pipeline/analysis/raster.py` (`LAUE_CONNECTIVITY`, default **8**). Before 0.7.2 the scripts
+disagreed; any quoted `variant_coherence` z or `big_grain_*` component count was computed with
+**4**-connectivity, and `LAUE_CONNECTIVITY=4` reproduces it.
+
+**Texture.** `texture_null.py` now builds directions from the direct lattice by space group. Any
+earlier "a-axis" texture it reported was a ⟨10-10⟩ pole density (both "a-axis" rows measured
+that family); c-axis rows are unaffected.
 
 **Clustering does not scale past a test scan.** The greedy loop inside `parentbeta_validate.py` is
 O(n_clusters x n_instances x n_sym): fine for the ~1e3–1e4 instances a test scan produces, but a
@@ -80,7 +133,7 @@ which is unique map-wide.
 1. **The analytic Poisson `p<1e-4` gate under-rejects on clustered peak fields.** Measured nulls
    reached 16 hits where Poisson forbids it. Across nine scans the measured α null maximum ranged
    14–17 and β 11–16 — one inherited value misstates the rest. On one dataset this changed the
-   defensible count by two orders of magnitude.
+   defensible count by two orders of magnitude. (Nine-scan figures: source not in repo.)
 2. **A grain is a *contiguous* region of consistent orientation.** Orientation-only clustering
    merges disjoint regions. On one scan, splitting into connected components moved α from 325 to
    614 and β from 40 to 27 — the two phases moving in *opposite* directions, which is what shows it
@@ -97,7 +150,9 @@ which is unique map-wide.
    On sampleH the analytic-Poisson counts made 99.5 look 1.34× better than 99.8 (794 vs 592), but after
    re-gating at the measured null max the two were **equal** (495 vs 486) for 2.3× the compute, and
    99.5's purity was far worse (62% of its "validated" instances survived, against 82%). The gate
-   admits instances down to nhit 5 while the measured null reaches 10–11, so the analytic-validated
+   admits instances down to nhit 5 while the measured null reaches 10–11 (sampleH's full-raster
+   `nhit` null is max 10 in 60,000 draws, INVARIANTS.md 15b; the "max 9" in the README worked example
+   is sampleG's), so the analytic-validated
    comparison is dominated by exactly the marginal instances the null rejects. Compare after
    `empirical_gate.py`, never before.
 5. **A texture null must be indexability-matched.** Detector coverage, the energy window and the
@@ -128,4 +183,44 @@ which is unique map-wide.
    instead of 1 µm covers 100× the area and ~20,000 grains at the same beamtime. Max step ≈ 2–3× the
    grain size before you skip the fine tail and bias toward the coarsest grains.
 
+### Environment variables of the analysis scripts
+
+**The one table.** Read from `os.environ` in `pipeline/analysis/*.py`, `raster.py`,
+`frame_peaks.py` and `laue_material.py` (0.7.2). "Required" means the script exits naming the
+variable when it is unset; nothing below silently falls back to another campaign's data.
+
+| variable | meaning | required / default | read by |
+|---|---|---|---|
+| `LAUE_WORK` | work root; `peel_map/`, `figures/`, `params/` under it | required | nearly every script; the chain |
+| `LAUE_PHASES` | comma-separated phases the null is measured and gated for | default `alpha,beta` (`null_model.py`, `empirical_gate.py`, the chain) | `laue_material.py`, `null_model.py`, `empirical_gate.py`, chain |
+| `LAUE_PARAMS_<PHASE>` | the indexing parameter file for that phase: lattice, hkl list, geometry, energy window, space group | required for any script that loads a `Phase` (or `LAUE_PARAMS`) | `laue_material.py` (every `Phase.load`) |
+| `LAUE_PARAMS` | generic parameter file | accepted **only when one phase is in use**; two phase names resolving to one file are refused (0.7.2) | `laue_material.py` |
+| `LAUE_PHASE` | the phase for single-phase tools | default `alpha` (`batch_peel_driver`, `map_validate_cluster`, `grain_extent_backfill`) or `zn` (`cluster_orientations`, `ipf_map`, `spot_energy`, `texture_null`) | those scripts |
+| `LAUE_SCAN_DATA` | folder of this scan's raw frames | required | validate, null, census, exclusion null, `beta_map_validate`, `map_validate_cluster`, `batch_peel_driver`, `grain_extent_backfill`, `exposure_signal_check`, `fullped`, `parentbeta_backfill`, `scan_map`, chain |
+| `LAUE_SCAN_<PHASE>` | indexing-run directory for that phase (holds `frame_mapping.json`) | required by `null_model.py`, `scan_map.py`, `parentbeta_validate.py` (scan `env`); `parentbeta_backfill.py` defaults to `$LAUE_WORK/results/parentbeta_<phase>`; the chain requires `_ALPHA` and `_BETA` | those |
+| `LAUE_SCAN_BETA` | the beta run directory, as above | required | `beta_map_validate.py`, chain |
+| `LAUE_REF_DATA` | raw frames of the longer-exposure reference scan | required | `exposure_signal_check.py` |
+| `LAUE_OUT_PREFIX` | basename prefix of every output, incl. `peel_map/<prefix>_null.json` | default `scan` (`frame_peaks.out_prefix`); the chain requires it set | `frame_peaks.py`, `null_model.py`, `empirical_gate.py`, `regrain.py`, `ipf_map.py`, `scan_map.py`, chain |
+| `LAUE_GATE_STAT` | `nhit` or `nhit_distinct`; selects the matching null too | default `nhit` | every gate, `null_model.py`, `parentbeta_validate.py`, `collect_scan_metrics.py`, chain |
+| `LAUE_NULLMAX_<PHASE>` | override of the measured null max; must be the max of the statistic in force | optional (the chain exports it from the JSON) | `frame_peaks.load_null` via `regrain`, `empirical_gate`, `validated_figures` (`collect_scan_metrics` deliberately ignores it: per-scan nulls only) |
+| `LAUE_CONNECTIVITY` | 4 or 8 for grain / component labelling | default `8`; `4` reproduces pre-0.7.2 numbers | `raster.py` via `regrain`, `variant_coherence`, `big_grain_*`, `collect_scan_metrics`, `substrate_deposit` |
+| `LAUE_NR` | frames per raster row = number of COLUMNS (fast axis) | required wherever positions come from frame numbers | `raster.py` via `ipf_map`, `optical_overlay`, `reg_refine`, `render_registered`, `separate_layers`, `substrate_deposit`, `zn_report_figures`, `hardening_fullmap`, `drift_control`, `fullped`, `within_grain` |
+| `LAUE_NROWS` | number of raster rows (slow axis) | required, as `LAUE_NR` | as `LAUE_NR` |
+| `LAUE_STEP_UM` | raster step, µm | required where used | `drift_control`, `ipf_map`, `optical_overlay`, `reg_refine`, `render_registered`, `zn_report_figures` |
+| `LAUE_MOUNT_DEG` | sample mount angle, degrees, in [0, 90) | required where used, **including by the chain** (`variant_coherence`, `validated_figures`) | also `catalog_figures`, `big_grain_*`, `collect_scan_metrics` |
+| `LAUE_OPTICAL_CX`, `_CY` | scan centre in optical-image pixels | required where used | `optical_overlay`, `reg_refine` |
+| `LAUE_OPTICAL_PX_PER_UM` | optical image scale | required where used | `optical_overlay`, `reg_refine` |
+| `LAUE_OPTICAL_FLIP_Y` | `+1` optical image vertically flipped vs the scan, `-1` not | required where used | `optical_overlay`, `reg_refine`, `render_registered` |
+| `LAUE_SCAN_LABEL` | label for the background maps | optional | `zn_report_figures.py` |
+| `LAUE_SHARD_GLOB` | glob matching the indexer's shard result directories | required | `separate_layers.py` |
+| `LAUE_SHARD_PROV_MATCH` | keep only shards whose `provenance.json` contains this string | optional | `separate_layers.py` |
+| `LAUE_FRAME_PREFIX` | only frames whose name starts with this | optional | `fullped.py` |
+| `LAUE_TESTSCANS` | root of the legacy named test scans | required only for those legacy scan keys | `parentbeta_validate.py`, `beta_alpha_exclusion_census.py` |
+| `LAUE_LM` | a LaueMatching checkout | default: the checkout holding the script | `batch_peel_driver.py` |
+| `LAUE_H5LOC` | image dataset inside each frame | default `/entry1/data/data` | `batch_peel_driver.py`, `map_validate_cluster.py` |
+| `LAUE_IN_NPZ` | explicit input npz | optional | `ipf_map.py` |
+| `LAUE_SKIP_CLUSTER` | `1` = stop after the validated npz | optional | `parentbeta_validate.py` |
+| `PY`, `SCRIPTDIR`, `NW` | python; the analysis scripts; worker count | `PY` default `python` (set a full path); `SCRIPTDIR` default the chain's own directory; `NW` default 16 | `run_analysis_chain.sh` |
+
 ---
+

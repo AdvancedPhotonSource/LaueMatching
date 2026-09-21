@@ -74,7 +74,7 @@ The `RunImage.py` script orchestrates a multi-stage workflow:
 4. **Spot Finding** — identifies connected components and filters by area
 5. **Blurring** — Gaussian blur to connect fragmented spots for robust matching
 6. **Indexing** — calls the compiled `LaueMatchingCPU` or `LaueMatchingGPU` binary
-7. **Post-Processing** — filters by unique spot count, refines orientations
+7. **Post-Processing** — filters by spots not already claimed by a stronger orientation in the frame (winner-take-all; see the three spot counts in `manuals/laue/INVARIANTS.md` 15b), refines orientations
 8. **Forward Simulation** — (optional) validates solutions against the original image
 9. **Output** — aggregates results, logs, and simulations into a comprehensive HDF5 file
 
@@ -82,7 +82,7 @@ The `RunImage.py` script orchestrates a multi-stage workflow:
 
 ## Streaming Pipeline (Multi-Image)
 
-For processing large datasets with many H5 images, LaueMatching provides a **streaming mode** that keeps the GPU daemon running and processes images via TCP — eliminating the overhead of reloading the 6.7 GB orientation database for each image.
+For processing large datasets with many H5 images, LaueMatching provides a **streaming mode** that keeps the GPU daemon running and processes images via TCP — eliminating the overhead of reloading the 7.2 GB (6.7 GiB) orientation database for each image.
 
 ```mermaid
 flowchart LR
@@ -101,14 +101,14 @@ flowchart LR
 
     subgraph Server ["laue_image_server.py<br/>(3-stage async pipeline)"]
         direction TB
-        H5["H5 files"] --> Pool["ProcessPoolExecutor<br/>(8 workers)"]
+        H5["H5 files"] --> Pool["ProcessPoolExecutor<br/>(sized from the host)"]
         Pool --> Consumer["Consumer thread<br/>(ordered drain)"]
         Consumer --> Send["Sender thread<br/>(TCP sendall)"]
     end
 
     subgraph PostProc ["laue_postprocess.py"]
         direction TB
-        Parse["Parse results"] --> Filter["Filter by<br/>unique spots"] --> Out["Per-image H5<br/>(results + image data)"]
+        Parse["Parse results"] --> Filter["Filter by<br/>winner-take-all spots"] --> Out["Per-image H5<br/>(results + image data)"]
     end
 
     Server -- "uint16 img_num + float[] pixels" --> Daemon
@@ -178,10 +178,11 @@ LaueMatching/
 ├── manuals/laue/                      # the doc set: spine + 7 phases, diagnosis, notebooks
 ├── pipeline/                          # many-grain campaign pipeline
 │   ├── run_laue.sh                    #   the one launcher (CONFIG block at the top)
-│   ├── launch_shard.sh                #   one orchestrator per GPU / host
-│   ├── params_*.template.txt          #   annotated parameter templates, one per phase
-│   └── analysis/                      #   analysis chain (carries hardcoded lattice
-│                                      #   constants — port before another material)
+│   ├── dispatch/                      #   multi-host sharding: mkrun, preflight, dispatch,
+│   │                                  #   watch, wait-for-static (see its README)
+│   ├── params_*.template.txt          #   parameter templates; every __SET_ME__ must be filled
+│   └── analysis/                      #   analysis chain; material, null and raster shape
+│                                      #   come from the environment, never defaults
 ├── scripts/                           # entry-point shims onto laue_index/pipeline/
 ├── simulation/                        # worked example: generate a pattern, index it back
 ├── docs/                              # reference: index-file format, provenance, torch model
@@ -190,7 +191,7 @@ LaueMatching/
 ├── Containerfile / .containerignore   # Podman images (CPU and CUDA); must stay at the root
 ├── bin/                               # compiled binaries (created by ./build.sh)
 ├── CHANGELOG.md                       # version history
-└── 100MilOrients.bin                  # pre-computed orientations, ~6.7 GB (not in git)
+└── 100MilOrients.bin                  # pre-computed orientations, ~7.2 GB (6.7 GiB) (not in git)
 ```
 
 The Python side is a small package of **typed pipeline stages** (`laue_index`)
@@ -234,7 +235,7 @@ LAUEMATCHING_CUDA=1 pip install 'laue-index[run]'   # + the CUDA binaries (see b
 That is enough to index without cloning anything:
 
 ```bash
-laue-index fetch-db --dest ~/laue                 # the 6.7 GB orientation database
+laue-index fetch-db --dest ~/laue                 # the 7.2 GB (6.7 GiB) orientation database
 export LAUEMATCHING_ORIENT_DB=~/laue/100MilOrients.bin
 laue-index run process -c params.txt -i frame.h5 -n 8
 ```
@@ -245,7 +246,7 @@ install still succeeds and the Python side works — only the indexing binary is
 missing, and `laue_index.indexer.available()` reports `False`. See
 [Getting the indexer binary](#getting-the-indexer-binary).
 
-The orientation database is **not** part of the package — it is 6.7 GB.
+The orientation database is **not** part of the package — it is 7.2 GB (6.7 GiB).
 `laue-index fetch-db` downloads and reassembles it from the
 [v1.0-data release](https://github.com/AdvancedPhotonSource/LaueMatching/releases/tag/v1.0-data);
 `./build.sh` fetches it too, in a checkout. Point runs at it with
@@ -262,7 +263,7 @@ cd LaueMatching
 ```
 
 Binaries land in `bin/`. The first build also downloads and reassembles the
-orientation database (`100MilOrients.bin`, ~6.7 GB); set `SKIP_DOWNLOAD=1` to
+orientation database (`100MilOrients.bin`, ~7.2 GB (6.7 GiB)); set `SKIP_DOWNLOAD=1` to
 skip that.
 
 For the Python side from a checkout:
@@ -284,7 +285,7 @@ podman build --target cpu  -t laue:cpu  .
 podman build --target cuda -t laue:cuda .
 ```
 
-The orientation database is **not** baked in (6.7 GB); mount it. GPUs arrive
+The orientation database is **not** baked in (7.2 GB, 6.7 GiB); mount it. GPUs arrive
 through the NVIDIA Container Toolkit's CDI interface — `--device`, not Docker's
 `--gpus`:
 
@@ -535,7 +536,9 @@ python scripts/laue_postprocess.py --solutions solutions.txt --spots spots.txt -
 | `MinNrSpots` | Minimum matching spots to qualify a grain |
 | `MinIntensity` | Minimum total intensity threshold |
 | `MaxAngle` | Misorientation tolerance (°) for merging candidates |
-| `Optimizer` | `NelderMead` to use Nelder-Mead; default is BOBYQA (faster) |
+| `tol_LatC` | Six FRACTIONAL bounds on a, b, c, α, β, γ during refinement (0.001 = 0.1%). ≥ 1 or NaN aborts; > 0.1 warns (a percent typed as a fraction) |
+| `tol_c_over_a` | FRACTIONAL bound on c/a at constant cell volume; when nonzero, `tol_LatC` is ignored. On white-beam data the fit is limited by integer spot positions |
+| `Optimizer` | Parsed and ignored: refinement is always the vendored Nelder-Mead simplex (`BOBYQA` prints a notice) |
 
 See `simulation/params_sim.txt` for a complete example.
 
@@ -560,7 +563,7 @@ See `simulation/params_sim.txt` for a complete example.
 - Place `OrientationFile` and `ForwardFile` in `/dev/shm` (tmpfs) for dramatically faster memory-mapped I/O.
 - Ensure ≥ 8 GB RAM for the full 100-million orientation file.
 - Use the GPU build for large-scale datasets — it provides significant speedup over CPU.
-- The default optimizer (BOBYQA) converges in ~2–3× fewer iterations than Nelder-Mead. Add `Optimizer NelderMead` to the parameter file only if needed.
+- Refinement always uses the vendored Nelder-Mead simplex; the `Optimizer` key has no effect (BOBYQA went with the NLopt dependency).
 
 ---
 
@@ -589,7 +592,7 @@ LAUE_E2E=1 pytest tests/test_char_e2e.py
 ```
 
 Without `LAUE_E2E=1` it skips, so CI stays green with `SKIP_DOWNLOAD=1` (the
-6.7 GB database is not required for the unit suite). A mocked-indexer test
+7.2 GB database is not required for the unit suite). A mocked-indexer test
 (`tests/test_runimage_orchestration.py`) covers RunImage's orchestration without
 the binary or DB. To regenerate a golden after an *intentional* behaviour change:
 `UPDATE_GOLDEN=1 pytest`.

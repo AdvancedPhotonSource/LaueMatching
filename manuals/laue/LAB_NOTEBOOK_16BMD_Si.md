@@ -5,7 +5,7 @@
 
 **Beamline** HPCAT 16-BM-D · **Detector** Pilatus3 X CdTe 1M · **Specimen** Si wafer
 **Data** `Commissioning_2026_1/WB_scaning/Si/series1`, collected 2026-02-05
-**Analysed** 2026-08-25 · **Full record** `~/Desktop/analysis/16IDB_Laue/RUNNING_LOG.md`
+**Analysed** 2026-08-25 · **Full record** `$ANALYSIS/16IDB_Laue/RUNNING_LOG.md` (campaign-local, not in this repo)
 
 ---
 
@@ -50,15 +50,17 @@ was an **arm64 Mach-O binary** on a Linux x86-64 host, with a macOS `libnlopt.a`
 > **Both halves of that are now fixed, and the rsync habit is retired.**
 > `pip install laue-index` compiles the C on the machine it will run on, so a
 > foreign-architecture binary cannot be staged by copying a tree; check with
-> `python -c "from laue_index import indexer; print(indexer.binary_path())"`,
-> which reports the binary that will actually be used.
+> `python -c "from laue_index import indexer; print([str(indexer.binary_path(t)) for t in ('CPU', 'GPU', 'GPUStream')])"`,
+> which reports the binaries that will actually be used. Name all three: with no argument
+> `binary_path()` answers for the CPU binary only.
 > The `compute_70` request is gone too — CUDA 13 dropped Volta. The build now
 > asks `nvcc --list-gpu-arch` and covers **every** architecture that toolkit
 > supports plus PTX for the newest, rather than the card in the build machine:
 > PTX JIT works forward and never backward, so a binary built on a newer GPU
 > than it runs on finds zero grains and exits 0 — the same silent-success class
-> as this section's arm64-binary trap. `LAUEMATCHING_CUDA=1 pip install
-> laue-index` builds the GPU binaries the same way. NLopt is gone entirely.
+> as this section's arm64-binary trap. The GPU binaries are built the same way, by default
+> when `nvcc` is on PATH (`LAUEMATCHING_CUDA=require` to fail the install if they cannot be).
+> NLopt is gone entirely.
 
 ## 3. Method findings — the transmission-specific ones
 
@@ -76,7 +78,7 @@ a **mono** calibration and the white beam sits off it at the sample. Predicted r
 
 **`R_Array` is a rotation vector in RADIANS**, θ·axis — not Rodrigues and not degrees,
 whatever `GenerateHKLs --help` and `params_alpha.template.txt` say. Both
-`DetectorType.__init__` and `LaueMatchingCPU.c:252` take `rotang = norm(R)` and feed it to
+`DetectorType.__init__` and `LaueMatchingCPU.c` (`rotang = CalcLength(rArr...)`) take `rotang = norm(R)` and feed it to
 `cos()`. Taking it from the docs puts the detector 30° out, silently.
 
 **`Elo` can be measured, not guessed.** The Pilatus header carries
@@ -108,7 +110,8 @@ only the first digit was ever real.
 `midas_stress.misorientation_om` returns the axis in the **crystal** frame, folded into the
 cubic fundamental sector — components sorted descending, all positive, which is the signature
 to read. The lab axis is **[+1.00000, +0.00014, +0.00277]**, 0.16° from +X. A noise-free
-synthetic whose true axis is exactly lab +X returns the same 11.08° "from +X".
+synthetic whose true axis is exactly lab +X returns the same 11.07° "from +X" (acos of the
+first component above is 11.066°; this line read 11.08° until 2026-09-21).
 
 **"ω residual 0.0185° RMS, 0 % outliers, 15 independent pairs."** CORRECTED. `[:400]` took the
 400 **lowest raster indices** — one contiguous edge strip, not a sample. All positions give
@@ -152,8 +155,8 @@ computed against the **PONI**, 751 px from the actual beam.
 | 2θ range | 0.40 – 53.29° | four-corner computation |
 | dead fraction | 7.41 % (module gaps + 327 bad px) | frame read + Pilatus header |
 | sharp spots / frame | median 16, max 93; 40 % of positions off-sample | `peak_count.csv` |
-| distinct observed / orientation | median 45 | `summary_v2.npy` |
-| stacking ratio | **1.021** | `summary_v2.npy` |
+| distinct observed / orientation (which count: see the glossary, `INVARIANTS.md` 15b) | median 45 | `summary_v2.npy` |
+| stacking ratio (a sharing ratio, not harmonic stacking: `INVARIANTS.md` 15b) | **1.021** | `summary_v2.npy` |
 | frames indexed | 8,108 of 15,300 | six shard logs |
 | index rate | 0.188 s/frame, one GPU | `daemon.log` |
 | forward cache | 12.2 GB = 1e8 × 122 B | `db/forward_Si.bin` |

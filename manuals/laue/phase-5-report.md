@@ -54,8 +54,8 @@ Rules that make it work:
 - **Export the numbers next to the pictures** — a `<key>_grains.csv` per sample with grain id,
   position, size and the full orientation matrix. "Orientations extracted" usually means the reader
   wants the table, not only the map.
-- Generate all pages from ONE builder with a shared stylesheet (`build_reports.py` pattern:
-  `dataset_page(key, ...)` reading a per-dataset `_stats.json`), so a fix to the method text or the
+- Generate all pages from ONE builder with a shared stylesheet (the `build_reports.py` pattern,
+  campaign-local and not in this repo: `dataset_page(key, ...)` reading a per-dataset `_stats.json`), so a fix to the method text or the
   palette lands everywhere at once.
 - Publish the per-sample pages FIRST, collect their URLs, then build the overview with the links in
   it. The overview is re-published in place afterwards whenever a sample page changes.

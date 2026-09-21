@@ -1,7 +1,12 @@
 # Laue microdiffraction — measurement envelope
 
-**Instrument:** 34-ID-E, polychromatic (pink-beam) Laue microdiffraction
-**Last checked:** 2026-08-12 · **Owner:** Hemant Sharma (hsharma@anl.gov)
+**Instruments:** polychromatic (pink/white-beam) Laue microdiffraction at 34-ID-E (reflection,
+Perkin Elmer panel), TPS 21A (reflection, PILATUS3 6M) and 16-BM-D (transmission, Pilatus3 X
+CdTe 1M). Rows written for one station say so.
+**Last checked:** 2026-09-21 for the header, §1 detector distance, §2 crystal-fit tolerances,
+§3 strain and §4 orientation / strain / depth rows; the other rows were last checked
+2026-08-12 and predate the TPS 21A campaign, 0.7.x and invariants 33–38.
+**Owner:** Hemant Sharma (hsharma@anl.gov)
 
 > Part of the **Laue doc set**. Spine: [`README.md`](README.md). Contract: `~/opt/beamreport/DOCS_SPEC.md` §6 (separate repo, not under `$MIDAS`).
 
@@ -25,7 +30,7 @@ No suggestions here. State the consequence and the substitute.
 | Property | Value | Provenance | What it makes unobtainable | Substitute |
 |---|---|---|---|---|
 | Beam / detector angle | 90°, panel **edge-on** to the beam; detector normal is lab **+Y** | station geometry, `phase-1-science.md` §3b | Any declination quoted "from Z" is declination from the **beam**, an instrument direction with no sample meaning. c-axis-along-Z does **not** mean c-axis-along-growth. | The specimen surface normal, from **measured stage motion**: both raster axes lie in the surface, so their cross product is the normal. Never a convention. |
-| Detector distance | 513 mm | station geometry | — | — |
+| Detector distance | 34-ID-E **513 mm**; TPS 21A **~522 mm**; 16-BM-D **223.381 mm** (30.038° tilt) | 34-ID-E: station geometry, `phase-1-science.md` §3b; TPS 21A: `LAB_NOTEBOOK_TPS21A.md` §1 and ledger (`P_Array` z 0.522115 / 0.521652 m); 16-BM-D: `LAB_NOTEBOOK_16BMD_Si.md` ledger (`poly.poni`) | — | — |
 | Incident beam axis | lab **Z**; `Phase.project` computes `kf = ki - 2*qh[:,2]*qh`, valid only for `ki = (0,0,1)` | `phase-1-science.md` §3b (confirm with `ph.ki`) | A geometry with a different `ki` is not describable by this forward model. | none — stop and ask |
 | Panel orientation check | — | — | The usual validation (rotate a crystal about the beam, check the pattern rotates rigidly) **needs a detector perpendicular to the beam**. Edge-on, all three axes fail and prove nothing. | Validate instead by forward-model prediction of observed peaks against a random-orientation null. |
 | **Rotation about the beam axis** | **an exact, unmeasured gauge freedom** | measured: at φ = 90° the largest change in any predicted pixel is **2.3e-13 px** and in any energy **0**; the CeO₂ rings move 1.9e-14° in 2θ while χ sweeps 30° | **Absolute orientation in the laboratory frame.** Every orientation this chain produces is correct only up to an unknown rotation about the beam. No cross-check *internal* to the diffraction can fix it — not a rotation series, not agreement with a second code on the same calibration. | Metrology from outside the pattern: a **surveyed rotation-axis direction** (cheapest, and nearly fully informative when the axis is ⊥ beam), a **surveyed detector translation**, a knife-edge on a surveyed lab axis, or a plumb/fiducial reading of the panel column direction. **Sample translation will not work** — the source is the beam–sample intersection and the beam is lab-fixed. |
@@ -65,6 +70,7 @@ The only tier where "what could be observed differently" has an answer.
 | Energy window | per run (keV) | source + optics | undulator and monochromator configuration | Which reflections are accessible, and the per-spot energy assignment |
 | Exposure per frame | per run | detector-limited | detector frame rate and readout | Counting statistics per spot, which sets how weak a grain can be and still index |
 | Detector geometry refinement | `geoN_*.xml` from **this** run | — | must be re-derived per run | Nothing — see the hard rule. Geometry from another run is the single fastest way to get a confident, wrong answer. |
+| Crystal-fit tolerances `tol_LatC`, `tol_c_over_a` | **FRACTIONS** (0.01 = ±1 %); 0 disables the fit | 0 ≤ tol < 1 | the C fit forms bounds as `value·(1 ∓ tol)`. The 0.7.1 usage text says "in %", which is wrong: 1.0 meant as 1 % is read as ±100 %. From 0.7.2 the binaries reject tol ≥ 1 or NaN, warn above 0.1, and with `tol_c_over_a` non-zero ignore `tol_LatC` with a NOTE (`validateCrystalFitTolerances`, `LaueMatchingHeaders.h`) | A wider or narrower lattice bound. It does **not** buy strain resolution below the integer-pixel floor (§4). |
 
 **Rows deliberately blank.** Detector maximum frame rate, stage travel limits, and
 the dose at which a given sample starts to damage are not recorded anywhere in this doc set
@@ -97,6 +103,7 @@ No configuration helps.
 | Parent-phase reconstruction in a **single-phase** system | There is no parent to reconstruct. | Twin relationships (Σ3 for FCC) and texture remain available. Do not run the parent machinery "to see". |
 | Parent reconstruction across **two unrelated phases** (matrix + precipitate) | No orientation relationship connects them. | Phase fraction and exclusion census are the applicable analyses. |
 | Per-grain depth without a depth-resolving optic | §2 row 1 — the column superimposes. | This is *configured*, not intrinsic, for any future run. It is intrinsic only for data already taken. |
+| **Hydrostatic strain, absolute lattice parameter, cell volume** from white-beam Laue | Spot **positions** fix only the directions of the scattering vectors, so a uniform scaling of the cell moves nothing. Laue determines 8 of the 9 components of the orientation-times-lattice matrix (3 orientation + 5 **deviatoric** strain); the scale needs **spot energy**. | The deviatoric shape (e.g. c/a) IS observable in principle; see §4 for what this pipeline actually resolves. Scale needs an energy measurement (a monochromatic / energy scan of chosen reflections, or an energy-resolving detector). |
 
 ## 4. Derived limits
 
@@ -107,6 +114,9 @@ What follows arithmetically from §1–2. A report may quote these directly.
 | Smallest separable feature | ≈ raster step | §2 raster step; two positions closer than one step are not distinguishable |
 | Angular quantities relative to the sample | **undefined** until the surface normal is supplied | §1 row 1 |
 | Number of grains per frame, no depth optic | the whole illuminated column | §2 row 1 |
+| **Orientation resolution of the C fit** | **~0.004°**; nothing finer is resolvable by it | The objective (`calcOverlap`) samples observed intensity at the **integer** pixel of each predicted reflection, so it is a staircase in orientation. Measured on 198 synthetic seeds scored against a known truth: Nelder-Mead median **0.0041°** (p95 0.0091°). Source: the comment above the Nelder-Mead call in `FitOrientation`, `LaueMatchingHeaders.h`. |
+| **Deviatoric strain (c/a) from the C fit** (`tol_c_over_a`) | **not resolvable at elastic magnitudes.** On sampleH geometry the fit recovered **0.237** (bootstrap 95 % CI [0.17, 0.39]) of an injected c/a change, against a noise floor sd **2.07e-4**; a c/a spread counts as detected only above 3 × 2.07e-4 = 6.2e-4, i.e. a true strain of ~2.6e-3. The preregistered strain test was **REFUTED**. | The binding constraint is **integer pixel positions**, not physics: `spots.txt` X, Y are whole pixels and **1 px = 5.7e-4 in c/a** at this geometry, and the orientation absorbs what c/a cannot resolve. A sub-pixel objective or spot energies would change this. Provenance: synthetic-control addendum of the campaign preregistration and its control analysis (`$ANALYSIS/<sampleH re-run>/PREREGISTER.md`, `analyse_control.py` → `analysis_out/control_ca.json`; campaign-local, not in this repo). |
+| **Depth projection, 45° mount** (reflection geometry, no depth optic) | a scatterer at depth *d* along the beam appears displaced **0.70711·d along the SLOW raster axis** and **0 along the fast axis**: the probe's footprint is a line, and grain extents along slow are inflated | Geometry: the slow axis lies in the surface plane containing the beam, at 45° to it (surface normal `(0, −0.7071, 0.7071)`, `phase-1-science.md` §3b). On sampleH grains are **1.62× longer along slow** (12.0 vs 8.0 µm); **UNTESTED** whether that is this projection or columnar growth: the discriminating test (does the slow-axis excess scale with mean spot energy?) has not been run. Campaign checkpoint, not in this repo. |
 
 ## 5. Did not versus cannot
 
@@ -129,7 +139,7 @@ limits in a parameter file.
 - [x] Every row has a unit or is explicitly dimensionless
 - [ ] Every bound in §2 names what imposes it — **three rows are still blank** (frame rate, stage travel, damage dose)
 - [x] Nothing in §1 or §3 is phrased as a suggestion
-- [x] `Last checked` is within the current run cycle
+- [ ] `Last checked` is within the current run cycle -- **only for the rows named in the header**; the rest predate TPS 21A and 0.7.x
 
 **Open.** The three blank bounds in §2 are the highest-value thing to fill in here. They are
 the difference between a report that can say "a shorter exposure would reach the fast

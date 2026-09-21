@@ -1,6 +1,6 @@
 # Laue Lab Notebook — method and defect record
 
-**Companion to `Laue_Handbook.md`.** The runbook says what to do; this records what was
+**Companion to the handbook, [`README.md`](README.md).** The runbook says what to do; this records what was
 actually found running the chain on real campaigns — how it was measured, and what turned
 out to be wrong. They are kept apart on purpose: the runbook has to stay short enough to
 follow, and this has to stay honest enough to stop a refuted idea coming back.
@@ -51,7 +51,8 @@ Hot pixels must be excluded by *area and shoulder* tests: an early version repor
 
 ### 2b. The silent single-frame background
 
-`mkbg_gen.py` builds frame paths as `{prefix}{i}.h5` with **plain integers**; derived frames
+`mkbg_gen.py` (the campaign's background builder, not in this repo) builds frame paths as
+`{prefix}{i}.h5` with **plain integers**; derived frames
 (substrate-peeled) were written zero-padded, so it raised `FileNotFoundError`. **The pipeline
 does not fail on a missing `BackgroundFile`** — the image server logs
 `Computing background from first frame...` at INFO, writes it to the expected path, and every
@@ -63,6 +64,17 @@ campaign were audited — only one re-index was affected, and it was re-run. `mk
 accepts both naming conventions.
 
 ### 2c. The wrong support metric, and the wrong join
+
+> **CORRECTION 2026-09-21 — the premise of this section is wrong; kept as written so the
+> error stays visible.** `unique_spots_per_orientation` is **not** a distinct-observed count.
+> `laue_index.filtering.calculate_unique_spots` is **winner-take-all across the frame's
+> orientations**: strongest first, and a pixel claimed by a stronger orientation is
+> unavailable to a weaker one. So the "1.1–1.5x stacking" below is a **sharing** ratio, not
+> stacking. And `filtered_orientations[:,6]` (NMatches) does **not** count stacked
+> predictions: `calcOverlap` dedups by q-hat, and on sampleH 0 of 25,172 solutions put two
+> matches on one pixel. The stacking that *was* real lived on the analysis side, in `nhit`
+> via `Phase.project`. The join trap below is still correct. Current account, and the
+> glossary of the spot counts: handbook (`INVARIANTS.md`) invariant 15b.
 
 `entry/results/unique_spots_per_orientation` — distinct **observed** peaks — is written to
 every output file and was never used. The analysis gated on `filtered_orientations[:,6]`,
