@@ -44,6 +44,12 @@ from .footprint import (
     strain_jacobian,
     tangent_rotation,
 )
+from .fault_rod import (
+    RodPoint,
+    rod_accessible_mask,
+    rod_forward,
+    rod_local_jacobian,
+)
 
 __all__ = [
     "AmplitudeSolution",
@@ -76,4 +82,8 @@ __all__ = [
     "strain_jacobian",
     "suggested_window",
     "tangent_rotation",
+    "RodPoint",
+    "rod_accessible_mask",
+    "rod_forward",
+    "rod_local_jacobian",
 ]
