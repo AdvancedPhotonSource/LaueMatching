@@ -1,24 +1,22 @@
 #!/bin/bash
-# launch_shard.sh SHARD GPU PORT NCPUS
-# One LaueMatching orchestrator for one shard, on whatever host it is invoked on.
-# Runs detached; writes a per-shard log under logs/.
-set -u
-K=$1; GPU=$2; PORT=$3; NC=${4:-16}
-W=$LAUE_WORK
-LM=/home/beams/EPIX34ID/opt/LaueMatching
-PY=/home/beams/EPIX34ID/conda-envs/laue_rt/bin/python
-H=$(hostname -s)
-
-mkdir -p $W/logs $W/results
-cd $W
-
-WORK=$W PY=$PY WATCH="" NCPUS=$NC \
-  ALPHA_CONFIG=$W/params/params_Zn_h_s$K.txt BETA_CONFIG="" \
-  ALPHA_GPU=$GPU ALPHA_PORT=$PORT \
-  bash $LM/pipeline/run_laue.sh $W/shards/h_s$K /entry1/data/data \
-  > $W/logs/shard${K}_${H}.launch 2>&1
-
-sleep 8
-echo "host=$H shard=$K gpu=$GPU port=$PORT ncpus=$NC"
-pgrep -af "laue_orchestrator.py --config $W/params/params_Zn_h_s$K.txt" | head -1
-tail -2 $W/logs/shard${K}_${H}.launch
+# launch_shard.sh -- RETIRED. Kept only so an old invocation fails with directions
+# instead of "No such file".
+#
+# It was broken four ways: it hard-coded an install directory and a conda env
+# that no longer exist, set no SCRIPTS (so run_laue.sh looked for the
+# orchestrator in the repo root), left the preprocessing pool sized for the whole
+# host on every shard (several shards on one host then exhaust the per-user
+# thread limit and die with a misleading "GPUassert: device busy"), and was wired
+# to one campaign's file naming. Its liveness check, `pgrep -af <pattern>`, also
+# matches its own command line when run through a remote tcsh, so it reported
+# dead shards as alive.
+#
+# Use the multi-host tooling instead -- see pipeline/dispatch/README.md:
+#   pipeline/dispatch/mkrun.py      shards, per-shard params and a plan file
+#   pipeline/dispatch/preflight.sh  checks the plan before anything starts
+#   pipeline/dispatch/dispatch.sh   launches the plan, one shard per GPU
+# For one orchestrator on this host, call pipeline/dispatch/launch_run.sh
+# (or pipeline/run_laue.sh with BETA_CONFIG="") directly.
+echo "launch_shard.sh is retired: use pipeline/dispatch/ (see pipeline/dispatch/README.md)." >&2
+echo "  one shard on this host:  PY=... SCRIPTS=... pipeline/dispatch/launch_run.sh WORK TAG PARAMS SHARD_DIR GPU PORT" >&2
+exit 1

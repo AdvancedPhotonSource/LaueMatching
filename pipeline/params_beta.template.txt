@@ -1,25 +1,46 @@
 # =============================================================================
-# LaueMatching parameter file -- BETA phase example (a two-phase hcp/bcc alloy, BCC).
-# Identical to the alpha template except the crystal block. Copy to
-# params_beta.txt and edit the geometry to match your alpha file.
+# LaueMatching parameter file -- BETA phase template (bcc example; the beta
+# phase of a two-phase hcp/bcc alloy). Identical to the alpha template except the
+# crystal block. Copy to params_beta.txt, replace EVERY __SET_ME__, and make the
+# geometry match your alpha file exactly.
+#
+# __SET_ME__ is deliberately not a number. From laue-index 0.7.2 the Python
+# parsers refuse it in SpaceGroup, Symmetry, LatticeParameter, P_Array, R_Array,
+# Elo and Ehi, and the C indexer in LatticeParameter, P_Array, R_Array, Elo and
+# Ehi (and requires 0 < Elo < Ehi), naming the key; 0.7.1 and earlier silently
+# fell back to a default or to 0.
+# Other keys are not checked by the parsers. run_laue.sh,
+# pipeline/dispatch/preflight.sh and pipeline/dispatch/mkrun.py also refuse a file
+# that still contains one, before anything is launched.
+#
+# Units: lengths in metres (P_Array, PxX, PxY), lattice edges in nm, lattice
+# angles, OrientationSpacing and MaxAngle in degrees, energies in keV.
+# R_Array is a ROTATION VECTOR (axis x angle) with the angle in RADIANS -- not
+# degrees, and not a Rodrigues-Frank vector (axis x tan(angle/2)).
 # =============================================================================
 
 # --- crystal --------------------------------------------------------------
-SpaceGroup 229                                    # 229 = beta-Ti (BCC, Im-3m)
-Symmetry I
-LatticeParameter 0.330650 0.330650 0.330650 90.000000 90.000000 90.000000
+SpaceGroup __SET_ME__                             # e.g. 229 for bcc (Im-3m)
+Symmetry __SET_ME__                               # lattice centring, e.g. I for bcc
+LatticeParameter __SET_ME__ __SET_ME__ __SET_ME__ __SET_ME__ __SET_ME__ __SET_ME__   # a b c (nm) alpha beta gamma (deg)
+
+# Optional lattice fit (off when absent or 0). FRACTIONS, not percents:
+# 0.001 = 0.1%; the indexer rejects any value >= 1. Only the cell shape is
+# observable in white-beam Laue, and the fit is limited by the integer pixel
+# positions of the spots. (tol_c_over_a is for hcp; see the alpha template.)
+# tol_LatC 0 0 0 0 0 0                            # a b c alpha beta gamma
 
 # --- geometry (SAME as your alpha file) -----------------------------------
-P_Array 0.028834 0.002715 0.513399
-R_Array -1.20334591 -1.2137853 -1.21669634
+P_Array __SET_ME__ __SET_ME__ __SET_ME__          # detector origin (m)
+R_Array __SET_ME__ __SET_ME__ __SET_ME__          # rotation vector, angle in RADIANS
 PxX 0.000200
 PxY 0.000200
 NrPxX 2048
 NrPxY 2048
 
 # --- incident spectrum window ---------------------------------------------
-Elo 5.0
-Ehi 30.0
+Elo __SET_ME__                                    # low energy cutoff (keV) of THIS beamline's band
+Ehi __SET_ME__                                    # high energy cutoff (keV); no default is anyone's band
 
 # --- detection ------------------------------------------------------------
 ThresholdMethod percentile
@@ -37,8 +58,8 @@ MaxAngle 3
 OrientationSpacing 0.4
 DoFwd 0
 SimulationSmoothingWidth 2.0
-OrientationFile   /path/to/db/100MilOrients.bin   # SAME database as alpha
-ForwardFile       /path/to/db/forward_beta.bin    # beta-specific forward cache
-HKLFile           /path/to/params/valid_hkls_beta.csv
-BackgroundFile    /path/to/db/background_beta.bin
-ResultDir         /path/to/results/beta
+OrientationFile   __SET_ME__                      # SAME database as alpha
+ForwardFile       __SET_ME__                      # beta-specific forward cache
+HKLFile           __SET_ME__                      # beta-specific reflection list
+BackgroundFile    __SET_ME__                      # per SCAN, same file as alpha
+ResultDir         __SET_ME__                      # UNIQUE per run, never the alpha one

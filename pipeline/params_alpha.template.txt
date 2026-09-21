@@ -1,25 +1,50 @@
 # =============================================================================
-# LaueMatching parameter file -- ALPHA phase example (a two-phase hcp/bcc alloy, HCP).
-# Copy to params_alpha.txt and edit the marked values for your experiment.
-# All lengths in metres, angles in degrees, energies in keV, cell edges in nm.
+# LaueMatching parameter file -- ALPHA phase template (hcp example; the alpha
+# phase of a two-phase hcp/bcc alloy). Copy to params_alpha.txt and replace EVERY
+# __SET_ME__ with your experiment's value.
+#
+# __SET_ME__ is deliberately not a number. From laue-index 0.7.2 the Python
+# parsers refuse it in SpaceGroup, Symmetry, LatticeParameter, P_Array, R_Array,
+# Elo and Ehi, and the C indexer in LatticeParameter, P_Array, R_Array, Elo and
+# Ehi (and requires 0 < Elo < Ehi), naming the key; 0.7.1 and earlier silently
+# fell back to a default or to 0.
+# Other keys are not checked by the parsers. run_laue.sh,
+# pipeline/dispatch/preflight.sh and pipeline/dispatch/mkrun.py also refuse a file
+# that still contains one, before anything is launched.
+#
+# Units: lengths in metres (P_Array, PxX, PxY), lattice edges in nm, lattice
+# angles, OrientationSpacing and MaxAngle in degrees, energies in keV.
+# R_Array is a ROTATION VECTOR (axis x angle) with the angle in RADIANS -- not
+# degrees, and not a Rodrigues-Frank vector (axis x tan(angle/2)).
 # =============================================================================
 
 # --- crystal --------------------------------------------------------------
-SpaceGroup 194                                    # 194 = alpha-Ti (HCP, P6_3/mmc)
-Symmetry P
-LatticeParameter 0.292100 0.292100 0.466500 90.000000 90.000000 120.000000   # a b c alpha beta gamma
+SpaceGroup __SET_ME__                             # e.g. 194 for hcp (P6_3/mmc)
+Symmetry __SET_ME__                               # lattice centring: P F I C A R
+LatticeParameter __SET_ME__ __SET_ME__ __SET_ME__ __SET_ME__ __SET_ME__ __SET_ME__   # a b c (nm) alpha beta gamma (deg)
 
-# --- geometry (FROM YOUR REFINED geoN FIT -- edit) -------------------------
-P_Array 0.028834 0.002715 0.513399                # detector origin (m)
-R_Array -1.20334591 -1.2137853 -1.21669634        # detector orientation (Rodrigues)
-PxX 0.000200                                      # pixel size x (m)
+# Optional lattice fit in the refinement stage (off when absent or 0).
+# Both are FRACTIONS of the seed value, not percents: 0.001 = 0.1%. The bounds
+# are value * (1 -/+ tol), so the indexer REJECTS any value >= 1 (1.0 would put
+# the lower bound at zero). tol_c_over_a fits c/a at constant volume (hcp) and
+# overrides tol_LatC. White-beam Laue fixes only the cell SHAPE, never its scale;
+# and the c/a fit is limited by the integer pixel positions of the spots, not by
+# the physics -- a c/a change smaller than about one pixel of spot motion is not
+# resolved, whatever tolerance you allow.
+# tol_LatC 0 0 0 0 0 0                            # a b c alpha beta gamma
+# tol_c_over_a 0
+
+# --- geometry (FROM YOUR REFINED DETECTOR CALIBRATION) ----------------------
+P_Array __SET_ME__ __SET_ME__ __SET_ME__          # detector origin (m)
+R_Array __SET_ME__ __SET_ME__ __SET_ME__          # detector orientation: rotation vector, angle in RADIANS
+PxX 0.000200                                      # pixel size x (m) -- check for your detector
 PxY 0.000200                                      # pixel size y (m)
 NrPxX 2048
 NrPxY 2048
 
 # --- incident spectrum window ---------------------------------------------
-Elo 5.0                                           # low energy cutoff (keV)
-Ehi 30.0                                          # high energy cutoff (keV)
+Elo __SET_ME__                                    # low energy cutoff (keV) of THIS beamline's band
+Ehi __SET_ME__                                    # high energy cutoff (keV); no default is anyone's band
 
 # --- detection (two-image strategy: aggressive threshold for the search) ---
 ThresholdMethod percentile
@@ -37,8 +62,8 @@ MaxAngle 3
 OrientationSpacing 0.4                            # SO(3) grid (deg); DB must match
 DoFwd 0
 SimulationSmoothingWidth 2.0
-OrientationFile   /path/to/db/100MilOrients.bin   # 100M-orientation database (GenerateOrientations)
-ForwardFile       /path/to/db/forward_alpha.bin   # forward-spot cache      (GenerateSimulation)
-HKLFile           /path/to/params/valid_hkls_alpha.csv   # allowed reflections (GenerateHKLs)
-BackgroundFile    /path/to/db/background_alpha.bin       # optional precomputed background
-ResultDir         /path/to/results/alpha
+OrientationFile   __SET_ME__                      # 100M-orientation database (GenerateOrientations)
+ForwardFile       __SET_ME__                      # forward-spot cache, per phase (GenerateSimulation)
+HKLFile           __SET_ME__                      # allowed reflections, per phase (GenerateHKLs)
+BackgroundFile    __SET_ME__                      # per SCAN; if missing the server silently builds one from frame 1
+ResultDir         __SET_ME__                      # UNIQUE per run: two runs sharing one interleave solutions.txt
