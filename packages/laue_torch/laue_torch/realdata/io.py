@@ -1,20 +1,35 @@
 """I/O adapter for LaueMatching post-processed H5 output.
 
-The default :class:`LaueScanLoader` reads the structure that
-``scripts/laue_postprocess.py`` writes:
+The default :class:`LaueScanLoader` reads the per-image ``*.output.h5``
+that ``laue_index.pipeline.laue_postprocess`` (streaming) and
+``RunImage`` write:
 
-* ``/entry/results/orientations`` --- (N, M) array of indexed solutions.
-  Per the RunImage / Stream convention, each row carries (at least)
-  GrainNr in column 0 and orientation matrix elements in columns 1..9
-  (row-major 3×3); extra columns may carry quality metrics.
-* ``/entry/results/filtered_orientations`` --- quality-filtered subset.
+* ``/entry/results/orientations`` --- (N, M) array of indexed solutions,
+  one indexer solution-table row per solution. Two layouts exist (column
+  map in ``laue_index.records.SOLUTION_FORMATS``): 34 columns with
+  GrainNr in col 0 and the row-major 3x3 orientation matrix in cols
+  22..30 (RunImage), or 35 columns with ImageNr prepended and the matrix
+  in cols 23..31 (stream). The layout is picked from the column count.
+* ``/entry/results/filtered_orientations`` --- quality-filtered subset,
+  same layout.
 * ``/entry/data/raw_data`` --- the raw detector image.
 * ``/entry/data/input_blurred`` --- the preprocessed (background-
   subtracted, blurred) image used for indexing.
 * ``/entry/data/component_centers`` --- (N, 4) array of detected
-  spot centres ``(label, x, y, area)``.
+  spot centres ``(label, x, y, area)``, x = column, y = row.
 * attrs on ``/entry/results``: ``image_nr``, ``source_file``,
   ``source_frame``.
+
+AXIS ORDER. The images are stored as real detector frames,
+``image[row, col]`` = ``[Y, X]``; the forward model renders ``img[X, Y]``.
+The loader returns the image AS STORED and records the layout in
+``VoxelMeasurement.axis_order``: always set, to ``"YX"`` unless the file
+carries an ``<entry>/axis_order`` marker saying otherwise. A hand-built
+``VoxelMeasurement`` has ``axis_order=None`` and the refiners refuse it. The refiners
+(:class:`~laue_torch.realdata.driver.VoxelODFRefiner`,
+:class:`~laue_torch.realdata.multi_grain.MultiGrainVoxelRefiner`) do the
+transpose at their entry point, so this is the ONE place the conversion
+happens. ``spots_xy`` is already ``(X, Y)`` and is not transposed.
 
 For a scan, each voxel is its own H5 file (one per frame); the
 loader takes a directory of such files and yields a sequence of
@@ -33,6 +48,12 @@ import numpy as np
 import torch
 from torch import Tensor
 
+from ..io import (
+    AXIS_ORDER_DETECTOR,
+    read_axis_order,
+    solution_orientation_columns,
+)
+
 
 @dataclass
 class VoxelMeasurement:
@@ -43,11 +64,19 @@ class VoxelMeasurement:
     residual) or refine each into a separate mode of a mixture model.
     """
     voxel_index: int
-    image: Tensor                        # (Nx, Ny) — the preprocessed detector image
+    image: Tensor                        # detector image, layout given by axis_order
     U_seed_list: Tensor                  # (K, 3, 3) — indexer-supplied orientations
     metadata: dict                       # arbitrary auxiliary info (e.g. source_file)
-    spots_xy: Optional[Tensor] = None    # (S, 2) — detected spot centres (optional)
+    spots_xy: Optional[Tensor] = None    # (S, 2) — detected spot centres (X, Y) (optional)
     voxel_position_um: Optional[tuple[float, float, float]] = None
+    # "YX": image[row, col] = (NrPxY, NrPxX), a real frame.
+    # "XY": img[X, Y] = (NrPxX, NrPxY), the forward model's own layout.
+    # No default: None makes the refiners raise, because a wrong guess is
+    # silent on a square detector (VoxelODFRefiner did not transpose in
+    # 0.1.3, so a guessed "YX" would silently flip a laue_torch render).
+    # LaueScanLoader always sets it: from the file's marker, else "YX".
+    # Consumers convert with ``laue_torch.io.to_model_layout``.
+    axis_order: Optional[str] = None
 
 
 class LaueScanLoader:
@@ -70,8 +99,14 @@ class LaueScanLoader:
         else use the unfiltered ``/entry/results/orientations``.
     orientation_columns : (lo, hi) col indices that carry the row-major
         3×3 orientation matrix in the orientations array. Default
-        (1, 10) follows the RunImage convention (GrainNr in col 0,
-        9 matrix elements in cols 1–9).
+        ``None`` picks it from the column count: (22, 31) for the
+        34-column RunImage layout, (23, 32) for the 35-column stream
+        layout (``laue_index.records.SOLUTION_FORMATS``); any other
+        count raises. Pass a tuple only for a non-indexer layout.
+
+    The image is returned as stored (detector ``[row, col]``), with the
+    layout recorded in ``VoxelMeasurement.axis_order``; see the module
+    docstring.
     """
 
     def __init__(
@@ -81,7 +116,7 @@ class LaueScanLoader:
         pattern: str = "*.h5",
         image_dataset: str = "/entry/data/input_blurred",
         use_filtered: bool = True,
-        orientation_columns: tuple[int, int] = (1, 10),
+        orientation_columns: Optional[tuple[int, int]] = None,
     ):
         if isinstance(paths_or_dir, (str, Path)):
             p = Path(paths_or_dir)
@@ -108,7 +143,6 @@ class LaueScanLoader:
     def load_voxel(self, voxel_index: int, path: Path) -> VoxelMeasurement:
         """Load a single voxel from its H5 file."""
         import h5py
-        lo, hi = self.orientation_columns
         with h5py.File(path, "r") as hf:
             results_group = "/entry/results"
             ds_name = ("filtered_orientations" if self.use_filtered
@@ -116,18 +150,36 @@ class LaueScanLoader:
             if results_group + "/" + ds_name not in hf:
                 raise KeyError(f"{path}: missing {results_group}/{ds_name}")
             orient_arr = np.asarray(hf[results_group + "/" + ds_name])
-            if orient_arr.ndim != 2 or orient_arr.shape[1] < hi:
-                raise ValueError(
-                    f"{path}: orientations array shape {orient_arr.shape} "
-                    f"has fewer than {hi} columns; "
-                    f"is your `orientation_columns` config correct?")
-            U_seed_list = torch.tensor(
-                orient_arr[:, lo:hi].reshape(-1, 3, 3), dtype=torch.float64)
+            if orient_arr.size == 0:
+                # No solution for this frame (postprocess writes shape (0,)).
+                U_seed_list = torch.zeros((0, 3, 3), dtype=torch.float64)
+            else:
+                if orient_arr.ndim == 1:
+                    orient_arr = orient_arr[None, :]
+                if self.orientation_columns is None:
+                    try:
+                        lo, hi = solution_orientation_columns(orient_arr.shape[1])
+                    except ValueError as exc:
+                        raise ValueError(f"{path}: {results_group}/{ds_name}: {exc}") from None
+                else:
+                    lo, hi = self.orientation_columns
+                if orient_arr.ndim != 2 or orient_arr.shape[1] < hi or hi - lo != 9:
+                    raise ValueError(
+                        f"{path}: orientations array shape {orient_arr.shape} "
+                        f"cannot supply columns [{lo}, {hi}); "
+                        f"is your `orientation_columns` config correct?")
+                U_seed_list = torch.tensor(
+                    orient_arr[:, lo:hi].reshape(-1, 3, 3), dtype=torch.float64)
 
             if self.image_dataset not in hf:
                 raise KeyError(f"{path}: missing {self.image_dataset}")
             image = torch.tensor(np.asarray(hf[self.image_dataset]),
                                  dtype=torch.float64)
+            # Honour an <entry>/axis_order marker (laue_torch-written files);
+            # LaueMatching indexer output has none and is detector layout.
+            entry = "/" + self.image_dataset.strip("/").split("/")[0]
+            axis_order = read_axis_order(hf, entry + "/axis_order",
+                                         default=AXIS_ORDER_DETECTOR)
 
             spots_xy = None
             cc_path = "/entry/data/component_centers"
@@ -145,6 +197,7 @@ class LaueScanLoader:
             U_seed_list=U_seed_list,
             spots_xy=spots_xy,
             metadata=metadata,
+            axis_order=axis_order,
         )
 
 

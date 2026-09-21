@@ -28,7 +28,7 @@ from torch import Tensor, nn
 from midas_stress.orientation import quat_to_orient_mat
 
 from ..forward import LaueForwardModel
-from ..io import LaueParams
+from ..io import AXIS_ORDER_MODEL, LaueParams, to_model_layout
 
 
 def _quat_to_rotmat(q: Tensor) -> Tensor:
@@ -40,12 +40,22 @@ def _quat_to_rotmat(q: Tensor) -> Tensor:
 class TwoSourceMeasurement:
     """A single Laue exposure containing reference + sample spots."""
 
-    image: Tensor                       # (Nx, Ny) — single-frame Laue image
+    image: Tensor                       # single-frame Laue image, layout per axis_order
     U_reference: Tensor                 # (3, 3) — known reference orientation
     z_reference_um: float               # known reference depth (often 0)
     U_sample_seed: Tensor               # (3, 3) — indexer seed for sample
     z_sample_seed_um: float = 0.0
     metadata: dict = field(default_factory=dict)
+    # "XY" (default, unchanged): image is img[X, Y] = (NrPxX, NrPxY), the
+    # forward model's layout. "YX": a real detector frame image[row, col];
+    # refine() transposes it. Shape-checked either way (handbook invariant 38).
+    # Why this defaults to "XY" while VoxelMeasurement has no default: this
+    # class has no loader and was only ever built from laue_torch renders,
+    # documented (Nx, Ny) since it was written, and its refiner never
+    # transposed -- so "XY" is what every existing caller already means.
+    # VoxelMeasurement comes from real frames, where a default could not be
+    # right for both old and new callers.
+    axis_order: str = AXIS_ORDER_MODEL
 
 
 @dataclass
@@ -127,7 +137,9 @@ class ReferenceGrainParallaxRefiner:
 
         U_ref = m.U_reference.to(dtype=dtype, device=device)
         U_seed = m.U_sample_seed.to(dtype=dtype, device=device)
-        target = m.image.to(dtype=dtype, device=device)
+        target = to_model_layout(m.image.to(dtype=dtype, device=device),
+                                 m.axis_order,
+                                 (self.params.n_pix_x, self.params.n_pix_y))
         active = (target.abs() > 1e-9).to(dtype)
         n_active = active.sum().clamp_min(1.0)
 

@@ -12,7 +12,8 @@ front-end:
     transcribed from a paper's published values).
   * **Output**: per-mode (``U_mean_k``, ``Σ_orient_k``, mixing
     weight ``π_k``); optionally per-mode strain (full Voigt-6 or
-    deviatoric-5).
+    deviatoric-5); optionally the Laplace posterior over the fitted
+    parameters (``compute_posterior=True``).
 
 Modes
 -----
@@ -24,10 +25,25 @@ Modes
     spread frozen at zero per the paper's recommendation since
     position-only data can't see Σ_ε).  This is the EuAl2O4 case:
     each grain is a parent + characteristic strain.
-  * ``strain_deviatoric`` --- 5-DOF deviatoric strain mean, drops the
-    hydrostatic null direction (`ε33 = -(ε11+ε22)`).  Recommended
-    when the user wants the paper's "full deviatoric strain"
-    capability over the existing const-volume c/a refinement.
+  * ``strain_deviatoric`` --- 5-DOF trace-free strain mean in the
+    ``geometry.deviatoric5_to_symmetric`` layout ``(e11, e22, e23, e13,
+    e12)`` with ``e33 = -(e11 + e22)``.  The hydrostatic direction is
+    not a parameter: in white-beam Laue a pure dilatation moves no spot
+    (it only shifts the Bragg energy), so it is exactly unidentifiable
+    from positions (``jointfit/footprint.py``, ``strain_jacobian``).
+    Prefer this over ``strain_voigt``, whose 6th direction is that null.
+    Orientation and deviatoric strain are still strongly coupled in
+    white-beam Laue; read the posterior's eigenvalues, not a marginal
+    sigma, before quoting a strain.
+
+Axis order
+----------
+
+``refine`` requires ``axis_order``: ``"YX"`` for a frame in detector
+layout ``image[row, col]`` (as the indexer and ``LaueScanLoader``
+provide it), which it transposes to the forward model's ``img[X, Y]``,
+or ``"XY"`` for a laue_torch render.  ``None`` raises; see
+``laue_torch.io.to_model_layout`` and handbook invariant 38.
 
 Note on M_render
 ----------------
@@ -58,9 +74,68 @@ from ..distributions import (
     MixtureOfVoxelDistributions,
     TangentGaussianSO3,
 )
+from ..distributions import CholeskyCov
 from ..forward import LaueForwardModel
-from ..io import LaueParams, generate_hkls
-from ..uncertainty import laplace_posterior
+from ..geometry import rodrigues_to_matrix
+from ..io import LaueParams, experiment_band, generate_hkls, to_model_layout
+from ..uncertainty import LaplacePosterior, laplace_posterior_from_residuals
+from .driver import FIXED_PRED_SEED
+
+
+def _dev5_to_voigt6(e5: Tensor) -> Tensor:
+    """Deviatoric-5 ``(e11, e22, e23, e13, e12)`` -> trace-free Voigt-6
+    ``(e11, e22, e33, e23, e13, e12)`` with ``e33 = -(e11 + e22)``.
+
+    Same layout and tensor as ``geometry.deviatoric5_to_symmetric``; mapped to
+    Voigt-6 only because the mixture renderers drive a ``strain_mode="voigt"``
+    forward model.
+    """
+    e11, e22, e23, e13, e12 = e5.unbind(-1)
+    return torch.stack([e11, e22, -(e11 + e22), e23, e13, e12], dim=-1)
+
+
+class _DeviatoricGaussianStrain(torch.nn.Module):
+    """Strain Gaussian restricted to the 5-D trace-free subspace.
+
+    Drop-in for :class:`GaussianStrain` inside
+    :class:`IndependentVoxelDistribution` (same ``mean`` / ``sample`` /
+    ``covariance`` surface, Voigt-6 out), but the only free mean parameters
+    are the 5 deviatoric components in ``mean5``; the hydrostatic direction
+    cannot move.
+    """
+
+    def __init__(self, sigma_init: float = 1e-4,
+                 dtype: torch.dtype = torch.float64):
+        super().__init__()
+        self.mean5 = torch.nn.Parameter(torch.zeros(5, dtype=dtype))
+        self.cov = CholeskyCov(5, init_scale=sigma_init, dtype=dtype)
+
+    @property
+    def mean(self) -> Tensor:
+        return _dev5_to_voigt6(self.mean5)
+
+    def sample(self, N: int, generator: Optional[torch.Generator] = None) -> Tensor:
+        return _dev5_to_voigt6(self.mean5.unsqueeze(0)
+                               + self.cov.sample(N, generator=generator))
+
+    def covariance(self) -> Tensor:
+        return self.cov.cov()
+
+
+def _stratified_counts(M: int, K: int) -> list[int]:
+    """Samples per mode, matching the mixtures' stratified ``sample``."""
+    per_k, extra = M // K, M % K
+    return [per_k + (1 if k < extra else 0) for k in range(K)]
+
+
+def _per_sample_intensity(target_KH: Tensor, M: int) -> Tensor:
+    """Expand a per-mode ``(K, H)`` target to the ``(M, H)`` per-sample
+    ``per_spot_intensity`` in the mixtures' sample order (mode-major,
+    modes with zero samples skipped)."""
+    K = target_KH.shape[0]
+    rows = [target_KH[k].unsqueeze(0).expand(m_k, -1)
+            for k, m_k in enumerate(_stratified_counts(M, K)) if m_k > 0]
+    return torch.cat(rows, dim=0)
 
 
 @dataclass
@@ -70,12 +145,20 @@ class MultiGrainResult:
     U_means: Tensor                      # (K, 3, 3) refined orientations
     sigma_U_deg: Tensor                  # (K,) per-mode mosaic spread (deg)
     pi: Tensor                           # (K,) mixing weights, sum 1
-    eps_means: Optional[Tensor]          # (K, 6) Voigt strain or None
+    eps_means: Optional[Tensor]          # (K, 6) Voigt strain or None;
+                                         # trace-free for strain_deviatoric
     final_loss: float
     initial_seed_misos_deg: Tensor       # (K,) cubic miso between final and seed for each mode
     n_steps: int
     dt_s: float
     metadata: dict = field(default_factory=dict)
+    # Laplace posterior at the optimum (compute_posterior=True), else None.
+    # Read posterior.eigvals / cond_number / rank_eff / is_positive_definite
+    # before any posterior.sigma entry: orientation spread and deviatoric
+    # strain are strongly coupled in white-beam Laue, and a marginal sigma
+    # on its own hides that. posterior_param_names labels posterior.theta.
+    posterior: Optional[LaplacePosterior] = None
+    posterior_param_names: Optional[list] = None
 
 
 class MultiGrainVoxelRefiner:
@@ -101,6 +184,14 @@ class MultiGrainVoxelRefiner:
         If True, also refine each mode's mean orientation via 6-D
         rotation parameter.  Default False --- the indexer-supplied
         seed is held fixed.
+    compute_posterior : bool
+        If True, compute the Laplace posterior at the optimum
+        (:func:`laue_torch.uncertainty.laplace_posterior`) over the
+        fitted parameters and return it in ``MultiGrainResult.posterior``.
+        With ``refine_means=False`` the means are not parameters, so the
+        posterior is CONDITIONAL on them (``metadata
+        ["posterior_conditional_on_fixed_means"]``); because orientation
+        and strain are coupled, that understates strain uncertainty.
     """
 
     def __init__(
@@ -139,10 +230,17 @@ class MultiGrainVoxelRefiner:
         self.refine_eta = bool(refine_eta)
         self.psf_eta = float(psf_eta)
 
+        # Every render (target, fit, posterior) uses the experiment's band;
+        # raises if params carries none (no (5, 30) keV fallback).
+        self.E_range = experiment_band(params)
         self.hkls = generate_hkls(params.sg_num, params.lattice, params.E_hi)
         self.tensors = params.to_tensors(dtype=torch.float64, device=device)
 
-        # Forward model: shared across all modes.
+        # Forward model: shared across all modes.  Voigt-6 for every strain
+        # mode: "strain_deviatoric" constrains the MEAN to the trace-free
+        # subspace (_DeviatoricGaussianStrain) and hands the model the
+        # equivalent trace-free Voigt-6, identical to strain_mode="deviatoric"
+        # on the 5-vector.
         self.model = LaueForwardModel(
             hkls=self.hkls.to(device),
             n_pix=self.tensors["n_pix"],
@@ -157,22 +255,49 @@ class MultiGrainVoxelRefiner:
             reduce="sum",
         )
 
+    def _strain_param(self, strain) -> Tensor:
+        """The free strain-mean parameter: 5-vector (deviatoric) or 6 (Voigt)."""
+        return strain.mean5 if self.mode == "strain_deviatoric" else strain.mean
+
     @torch.no_grad()
     def _compute_per_spot_target(self, mix, U_seed_list: Tensor, I_obs: Tensor
                                  ):
         """Returns ``(target_per_spot, patch_mask)``.
 
-        - ``target_per_spot``: shape ``(H,)`` per-HKL intrinsic spot
-          intensity, equal to the sum of ``I_obs`` in a
-          ``render_window×render_window`` patch around the
-          seed-orientation predicted spot centre.  Used as
-          ``per_spot_intensity`` in the Adam loop so predicted peak
-          amplitudes match observed integrated counts at the seed.
+        - ``target_per_spot``: shape ``(K, H)``, one row PER MODE.
+          ``target[k, h]`` is the peak amplitude (max of ``I_obs``) in a
+          ``render_window×render_window`` patch around mode ``k``'s
+          seed-predicted spot for reflection ``h``.  Used as the
+          per-sample ``per_spot_intensity`` in the fit, so each mode's
+          predicted peak amplitudes match the observed ones at the seed.
         - ``patch_mask``: shape ``(Nx, Ny)`` boolean tensor that is
           ``True`` inside the union of those W×W windows.  Used to
           restrict the loss to spot regions, ignoring the remainder of
           the image where post-background-subtraction residual is not a
           diffraction peak the model could fit.
+
+        Three rules make the prediction match the observation in amplitude
+        (each fixes a way the earlier version over-predicted):
+
+        * PEAK, not window sum: the splat is peak-normalised (its peak is
+          the intensity it is given), so a window-sum target rendered every
+          spot ~2πσ² times too bright.  Same calibration as
+          :meth:`_target_from_indexer_spots`.
+        * ONE reflection per predicted pixel per mode: harmonics ((111),
+          (222), ...) share a q-hat and so land on the same pixel; giving
+          each the full observed amplitude predicted n× the observed peak.
+          Only the lowest-order member (smallest |hkl|) of each pixel group
+          gets the target; the rest get 0.  The group is the rounded seed
+          pixel, which also merges distinct reflections that coincide on a
+          pixel (the observed patch holds both, so one amplitude is right).
+          Reflections that are near but not on the same pixel still see
+          overlapping patches; that residual double-count is not removed.
+        * PER MODE: each mode's reflection ``h`` lands at its own pixel, so
+          the target is not shared (summed) across modes.
+
+        Reflections off the detector or out of band at the seed (soft mask
+        <= 0.5) get target 0; kept ones get ``peak / mask`` so that the
+        render, which multiplies by the soft mask, reproduces the peak.
 
         Computed once at refinement start (not re-evaluated each step) so
         gradients through the optimisation are stable.  The seed
@@ -187,19 +312,20 @@ class MultiGrainVoxelRefiner:
         r = W // 2
         device = I_obs.device
 
-        target = torch.zeros(H, dtype=torch.float64, device=device)
+        target = torch.zeros(K, H, dtype=torch.float64, device=device)
         patch_mask = torch.zeros(Nx, Ny, dtype=torch.bool, device=device)
         offsets = torch.arange(-r, r + 1, device=device, dtype=torch.long)
         I_obs_flat = I_obs.reshape(-1)
         eps_zero = torch.zeros(1, 6, dtype=torch.float64, device=device)
         weights_one = torch.ones(1, dtype=torch.float64, device=device)
+        hkl_order = (self.hkls.to(device=device, dtype=torch.float64) ** 2).sum(-1)
 
         for k in range(K):
             U_k = U_seed_list[k:k + 1]  # (1, 3, 3)
             _, aux = self.model(U_k, self.tensors["lattice"],
                                 self.tensors["P"], self.tensors["R"],
                                 strain=eps_zero, weights=weights_one,
-                                return_aux=True)
+                                E_range=self.E_range, return_aux=True)
             cx = aux.px.detach().round().long().clamp(0, Nx - 1)
             cy = aux.py.detach().round().long().clamp(0, Ny - 1)
             tx = cx[:, None] + offsets[None, :]               # (H, W)
@@ -209,24 +335,32 @@ class MultiGrainVoxelRefiner:
             tx_c = tx.clamp(0, Nx - 1)
             ty_c = ty.clamp(0, Ny - 1)
             flat_idx = (tx_c[:, :, None] * Ny + ty_c[:, None, :])  # (H, W, W)
-            valid = (valid_x[:, :, None] & valid_y[:, None, :]).to(torch.float64)
-            obs_tile = I_obs_flat[flat_idx.reshape(-1)].reshape(H, W, W) * valid
-            patch_sum = obs_tile.sum(dim=(1, 2))               # (H,)
+            valid = (valid_x[:, :, None] & valid_y[:, None, :])
+            obs_tile = I_obs_flat[flat_idx.reshape(-1)].reshape(H, W, W)
+            obs_tile = torch.where(valid, obs_tile,
+                                   torch.full_like(obs_tile, -math.inf))
+            patch_max = obs_tile.amax(dim=(1, 2)).clamp_min(0.0)   # (H,)
             mask_k = aux.mask.detach().reshape(H)
-            target = target + patch_sum * mask_k
+            keep_h = (mask_k > 0.5).nonzero(as_tuple=False).reshape(-1)
+
+            # One reflection per rounded seed pixel: lowest order wins.
+            if keep_h.numel() > 0:
+                order = torch.argsort(hkl_order[keep_h], stable=True)
+                seen = set()
+                for h in keep_h[order].tolist():
+                    key = (int(cx[h]), int(cy[h]))
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    # The render multiplies by the soft mask again, so divide
+                    # it out (mask > 0.5 here): rendered peak = observed peak
+                    # also for reflections near a band or detector edge.
+                    target[k, h] = patch_max[h] / mask_k[h]
 
             # Build patch mask from valid HKLs only, expanded slightly so
             # the σ_U gradient has room to inflate without spilling out of
             # the loss region.
-            keep_h = (mask_k > 0.5).nonzero(as_tuple=False).reshape(-1)
             if keep_h.numel() > 0:
-                tx_keep = tx_c[keep_h].reshape(-1)             # (n_keep * W,)
-                ty_keep = ty_c[keep_h].reshape(-1)
-                # All (W,W) = 169 pixels per kept HKL on the patch_mask.
-                # Use index_put_ for efficient scatter.
-                tx_pairs = tx_keep.unsqueeze(-1).expand(-1, W).reshape(-1)
-                ty_pairs = ty_c[keep_h, None, :].expand(-1, W, -1).reshape(-1)
-                # Simpler: rebuild full coord grids
                 tx_full = tx_c[keep_h, :, None].expand(-1, W, W).reshape(-1)
                 ty_full = ty_c[keep_h, None, :].expand(-1, W, W).reshape(-1)
                 valid_keep = ((valid_x[keep_h, :, None] & valid_y[keep_h, None, :])
@@ -295,13 +429,15 @@ class MultiGrainVoxelRefiner:
         # per-spot intensity that makes the predicted *peak amplitude*
         # match the observed peak amplitude is
         #     target[h] = max(I_obs in window around indexer (X, Y)).
-        # The indexer's reported ``intensity`` (column 10 of
-        # /entry/results/spots) is the *integrated* intensity, not the
-        # peak amplitude, so it would over-shoot when used as a peak
-        # target.  We deliberately use the patch-max as a peak-amplitude
-        # proxy — this is the calibration that makes the synthetic
-        # exp5l recovery converge correctly and keeps the EuAl2O4
-        # null-hypothesis recovery at the FWHM-derived bound.
+        # The indexer's reported ``Intensity`` (column 10 of
+        # /entry/results/spots in the RunImage layout, 11 in the stream
+        # layout) is the value of the INDEXER'S processed image at the
+        # truncated predicted pixel (``image[py * nrPxX + px]`` in
+        # LaueMatchingHeaders.h), not a measurement on ``I_obs``, so it
+        # is not used as the target here.  We deliberately use the
+        # patch-max of ``I_obs`` as a peak-amplitude proxy -- this is the
+        # calibration that makes the synthetic exp5l recovery converge
+        # correctly and keeps the EuAl2O4 null-hypothesis recovery at the FWHM-derived bound.
         #
         # Coordinate convention: the LaueMatching indexer stores ``X`` as
         # the column index and ``Y`` as the row index of the cleaned image
@@ -331,13 +467,26 @@ class MultiGrainVoxelRefiner:
         image: Tensor,
         U_seed_list: Tensor,
         *,
-        seed: int = 0xC0FFEE,
+        seed: int = FIXED_PRED_SEED,
         indexer_spots: Optional[dict] = None,
+        axis_order: Optional[str] = None,
     ) -> MultiGrainResult:
         """Refine the K-grain mixture.
 
         ``U_seed_list``: (K, 3, 3) seed orientation matrices.
-        ``image``: (Nx, Ny) observed Laue pattern.
+        ``image``: observed Laue pattern.  ``axis_order`` is REQUIRED
+        (``None`` raises): ``"YX"`` for a real frame in detector layout
+        ``image[row, col]`` = ``(NrPxY, NrPxX)`` (what ``LaueScanLoader``
+        yields; pass ``voxel.axis_order``), ``"XY"`` for an image already
+        in the forward model's ``img[X, Y]`` layout (a laue_torch render).
+        The layout is shape-checked, so a wrong declaration fails on a
+        non-square detector; on a square one only the declaration
+        protects you.
+        ``indexer_spots``: optional ``{"hkl", "xy", "intensity"}`` with
+        ``xy`` = (X, Y) = (column, row); the target is then taken at
+        those spots instead of at the seed predictions.  It is keyed by
+        hkl only, so with K > 1 the same hkl of two grains shares one
+        target (not per mode).
         """
         t0 = time.time()
         if U_seed_list.dim() != 3 or U_seed_list.shape[-2:] != (3, 3):
@@ -350,8 +499,10 @@ class MultiGrainVoxelRefiner:
         # RunImage.py writes the cleaned image with standard convention,
         # so we transpose the input here to align with the forward.  On a
         # square image (Nx=Ny=2048) this is invisible to existing parity
-        # tests but critical for any pixel-wise comparison.
-        I_obs = image.to(self.device, dtype=torch.float64).T.contiguous()
+        # tests but critical for any pixel-wise comparison; the shape
+        # check in to_model_layout catches it on a non-square one.
+        I_obs = to_model_layout(image.to(self.device, dtype=torch.float64),
+                                axis_order, self.tensors["n_pix"])
         U_seed_list = U_seed_list.to(self.device, dtype=torch.float64)
 
         # Build mixture model.  We construct the modules first, then move
@@ -387,7 +538,10 @@ class MultiGrainVoxelRefiner:
                     U_init=U_seed_list[k],
                     sigma_init=math.radians(self.sigma_init_deg),
                 )
-                strain = GaussianStrain(sigma_init=1e-6)
+                if self.mode == "strain_deviatoric":
+                    strain = _DeviatoricGaussianStrain(sigma_init=1e-6)
+                else:
+                    strain = GaussianStrain(sigma_init=1e-6)
                 components.append(IndependentVoxelDistribution(orient, strain))
             mix = MixtureOfVoxelDistributions(components)
             mix = mix.to(self.device)
@@ -400,7 +554,8 @@ class MultiGrainVoxelRefiner:
             opt_param_groups = [
                 {"params": [c.orient.cov.log_diag for c in mix.components], "lr": 5e-3},
                 {"params": [c.orient.cov.off_diag for c in mix.components], "lr": 5e-3},
-                {"params": [c.strain.mean for c in mix.components], "lr": 1e-4},
+                {"params": [self._strain_param(c.strain) for c in mix.components],
+                 "lr": 1e-4},
                 {"params": [mix.logits], "lr": 1e-2},
             ]
             if self.refine_means:
@@ -418,15 +573,19 @@ class MultiGrainVoxelRefiner:
         # ── Per-spot target intensities ──────────────────────────────────
         # Two paths:
         # (1) indexer_spots given: use the upstream indexer's confirmed
-        #     spot list directly.  ``target_per_spot[h]`` is the indexer's
-        #     reported intensity at the matching (h,k,l), zero everywhere
-        #     else.  ``patch_mask`` covers W×W around each indexer (X, Y).
+        #     spot list directly.  ``target_per_spot[h]`` is the max of
+        #     I_obs in the W×W window at the indexer's (X, Y) for the
+        #     matching (h,k,l), zero everywhere else (NOT the indexer's
+        #     reported intensity column; see _target_from_indexer_spots).
+        #     ``patch_mask`` covers W×W around each indexer (X, Y).
         #     This is the cleanest signal — the indexer has already done
         #     the spot-vs-noise classification.
-        # (2) fallback: compute target as window-sum of I_obs at each
-        #     hkl's seed-predicted (px, py).  Vulnerable to confounding
-        #     by post-bg residual when the obs image is noisy, so prefer
-        #     path (1) when an indexer spot list is available.
+        # (2) fallback: per mode, the max of I_obs in the W×W window at
+        #     each hkl's seed-predicted (px, py), one reflection per
+        #     predicted pixel (see _compute_per_spot_target).  Vulnerable
+        #     to confounding by post-bg residual when the obs image is
+        #     noisy, so prefer path (1) when an indexer spot list is
+        #     available.
         # The forward model gives every reflection an intrinsic intensity
         # of 1.  In real Laue data, |F_hkl|² varies by orders of magnitude
         # across the HKL list, and the sample-dependent absorption /
@@ -437,11 +596,11 @@ class MultiGrainVoxelRefiner:
         # σ_U→∞ with a single global LSQ scale).  Both failure modes were
         # observed before this fix.
         #
-        # Solution: pre-compute target_per_spot[h] = ∑ I_obs(window) at
-        # the seed-orientation predicted (px_h, py_h) and pass it as the
-        # forward's per_spot_intensity.  Predicted peak amplitudes then
-        # match observed peak amplitudes by construction at the seed
-        # orientation; the remaining loss measures only the shape/
+        # Solution: pre-compute a per-mode peak-amplitude target at the
+        # seed-orientation predicted (px_h, py_h) and pass it as the
+        # forward's per-sample per_spot_intensity.  Predicted peak
+        # amplitudes then match observed peak amplitudes by construction at
+        # the seed orientation; the remaining loss measures only the shape/
         # positional mismatch the optimizer is actually meant to fit
         # (mosaic spread, strain-induced position shift).
         if indexer_spots is not None:
@@ -451,9 +610,13 @@ class MultiGrainVoxelRefiner:
                 indexer_spots["intensity"].to(self.device),
                 I_obs,
             )
+            target_psi = target_psi.unsqueeze(0).expand(K, -1)   # shared, see docstring
         else:
             target_psi, patch_mask = self._compute_per_spot_target(
                 mix, U_seed_list, I_obs)
+        # (K, H) per mode -> (M, H) per phantom sample, in the mixtures'
+        # stratified sample order.
+        psi_per_sample = _per_sample_intensity(target_psi, self.M_render)
         patch_mask_f = patch_mask.to(torch.float64)
         patch_mask_count = patch_mask_f.sum().clamp_min(1.0)
         print(f"  target_psi: shape={tuple(target_psi.shape)} "
@@ -465,7 +628,7 @@ class MultiGrainVoxelRefiner:
               f"({patch_mask_count.item() / (patch_mask.numel()) * 100:.2f}% of image)",
               flush=True)
 
-        FIXED_PRED_SEED = seed
+        pred_seed = seed
         last_loss = float("nan")
         log_every = max(1, self.n_steps // 20)
         gen_device = "cpu" if str(self.device).startswith("cpu") else self.device
@@ -498,7 +661,7 @@ class MultiGrainVoxelRefiner:
         loss_iter = [0]   # mutable counter used to print step-0 diagnostics
         def loss_closure():
             opt.zero_grad()
-            g = torch.Generator(device=gen_device).manual_seed(FIXED_PRED_SEED)
+            g = torch.Generator(device=gen_device).manual_seed(pred_seed)
             psf_arg = (torch.exp(log_psf) if log_psf is not None else None)
             eta_arg = (torch.sigmoid(logit_eta)
                        if logit_eta is not None else None)
@@ -507,7 +670,8 @@ class MultiGrainVoxelRefiner:
                                 self.tensors["P"],
                                 self.tensors["R"],
                                 M=self.M_render, generator=g,
-                                per_spot_intensity=target_psi,
+                                E_range=self.E_range,
+                                per_spot_intensity=psi_per_sample,
                                 psf_sigma=psf_arg, psf_eta=eta_arg)
             loss = ((I_pred - I_obs) ** 2 * patch_mask_f).sum() / patch_mask_count
             if loss_iter[0] == 0:
@@ -601,6 +765,12 @@ class MultiGrainVoxelRefiner:
                   f"(initial {self.psf_eta:.3f}; pure Gaussian = 0, "
                   f"pure Lorentzian = 1)", flush=True)
 
+        posterior, posterior_names = None, None
+        if self.compute_posterior:
+            posterior, posterior_names = self._laplace(
+                mix, I_obs, psi_per_sample, patch_mask_f, pred_seed,
+                gen_device, log_psf, logit_eta)
+
         return MultiGrainResult(
             n_modes=K,
             U_means=U_means,
@@ -614,5 +784,127 @@ class MultiGrainVoxelRefiner:
             metadata={"psf_sigma_init_px": self.psf_sigma,
                       "psf_sigma_recovered_px": recovered_psf_sigma_px,
                       "psf_eta_init": self.psf_eta,
-                      "psf_eta_recovered": recovered_psf_eta},
+                      "psf_eta_recovered": recovered_psf_eta,
+                      "posterior_conditional_on_fixed_means":
+                          (None if posterior is None else not self.refine_means)},
+            posterior=posterior,
+            posterior_param_names=posterior_names,
         )
+
+    def _laplace(self, mix, I_obs: Tensor, psi_per_sample: Tensor,
+                 patch_mask_f: Tensor, seed: int, gen_device,
+                 log_psf: Optional[Tensor], logit_eta: Optional[Tensor]):
+        """Laplace posterior over the fitted parameters at the optimum.
+
+        The flat vector holds, per mode ``k``: the 3 log-diagonal and 3
+        off-diagonal Cholesky entries of the orientation spread; the strain
+        mean (5 deviatoric or 6 Voigt) in strain modes; with
+        ``refine_means``, a 3-vector tangent rotation composed on the fitted
+        mean (0 at the optimum; the 6-D mean representation has 3 gauge
+        directions, this does not).  Then ``K-1`` mixing logits relative to
+        mode 0 (softmax is shift-invariant, so the absolute logits have a
+        null direction), and ``log_psf`` / ``logit_eta`` if refined.
+
+        The residual is the fit's own, over the patch-mask pixels, with the
+        same fixed MC samples and energy band; the curvature scale is set by
+        :func:`laue_torch.uncertainty.laplace_posterior_from_residuals`
+        (``0.5 * SSR`` with the plug-in per-pixel noise variance).
+        """
+        K = len(mix.kernels) if self.mode == "orient_only" else len(mix.components)
+        orients = (list(mix.kernels) if self.mode == "orient_only"
+                   else [c.orient for c in mix.components])
+        strains = (None if self.mode == "orient_only"
+                   else [c.strain for c in mix.components])
+        dtype = torch.float64
+        dev = I_obs.device
+        strain_names = (["e11", "e22", "e23", "e13", "e12"]
+                        if self.mode == "strain_deviatoric"
+                        else ["e11", "e22", "e33", "e23", "e13", "e12"])
+
+        pieces, names, slices = [], [], []
+
+        def add(t: Tensor, labels: list):
+            start = sum(p.numel() for p in pieces)
+            pieces.append(t.detach().reshape(-1).to(dtype))
+            names.extend(labels)
+            slices.append((start, start + t.numel()))
+            return len(slices) - 1
+
+        idx = []
+        for k in range(K):
+            entry = {
+                "log_diag": add(orients[k].cov.log_diag,
+                                [f"mode{k}.orient_chol_logdiag[{i}]" for i in range(3)]),
+                "off_diag": add(orients[k].cov.off_diag,
+                                [f"mode{k}.orient_chol_offdiag[{i}]" for i in range(3)]),
+            }
+            if strains is not None:
+                entry["strain"] = add(self._strain_param(strains[k]),
+                                      [f"mode{k}.strain_mean.{n}" for n in strain_names])
+            if self.refine_means:
+                entry["dtheta"] = add(torch.zeros(3, dtype=dtype, device=dev),
+                                      [f"mode{k}.dtheta_rad[{i}]" for i in range(3)])
+            idx.append(entry)
+        logits = mix.logits.detach().to(dtype)
+        i_logit = (add(logits[1:] - logits[0],
+                       [f"mode{k}.logit_minus_mode0" for k in range(1, K)])
+                   if K > 1 else None)
+        i_psf = add(log_psf.reshape(1), ["log_psf_sigma"]) if log_psf is not None else None
+        i_eta = add(logit_eta.reshape(1), ["logit_psf_eta"]) if logit_eta is not None else None
+        theta_map = torch.cat(pieces)
+
+        U_map = [o.mean().detach() for o in orients]
+        L_strain = ([st.cov.L().detach() for st in strains]
+                    if strains is not None else None)
+        tril = orients[0].cov.tril_idx
+        counts = _stratified_counts(self.M_render, K)
+
+        def seg(theta: Tensor, i: int) -> Tensor:
+            a, b = slices[i]
+            return theta[a:b]
+
+        patch_sel = patch_mask_f > 0.5
+
+        def residual_fn(theta: Tensor) -> Tensor:
+            # Replays mix.sample() draw-for-draw with the fit's fixed seed.
+            if i_logit is not None:
+                lg = torch.cat([torch.zeros(1, dtype=dtype, device=dev), seg(theta, i_logit)])
+            else:
+                lg = torch.zeros(1, dtype=dtype, device=dev)
+            w = torch.softmax(lg, dim=0)
+            g = torch.Generator(device=gen_device).manual_seed(seed)
+            Us, epss, ws = [], [], []
+            for k, m_k in enumerate(counts):
+                if m_k == 0:
+                    continue
+                L = torch.diag(seg(theta, idx[k]["log_diag"]).exp())
+                L = L.clone()
+                L[tril[0], tril[1]] = seg(theta, idx[k]["off_diag"])
+                z = torch.randn(m_k, 3, dtype=dtype, device=dev, generator=g)
+                U_mean = U_map[k]
+                if self.refine_means:
+                    U_mean = U_mean @ rodrigues_to_matrix(seg(theta, idx[k]["dtheta"]))
+                Us.append(U_mean.unsqueeze(0) @ rodrigues_to_matrix(z @ L.T))
+                if strains is not None:
+                    Ls = L_strain[k]
+                    zs = torch.randn(m_k, Ls.shape[0], dtype=dtype, device=dev,
+                                     generator=g)
+                    e = seg(theta, idx[k]["strain"]).unsqueeze(0) + zs @ Ls.T
+                    if self.mode == "strain_deviatoric":
+                        e = _dev5_to_voigt6(e)
+                    epss.append(e)
+                else:
+                    epss.append(torch.zeros(m_k, 6, dtype=dtype, device=dev))
+                ws.append((w[k] / m_k).expand(m_k))
+            psf_arg = seg(theta, i_psf).exp()[0] if i_psf is not None else None
+            eta_arg = torch.sigmoid(seg(theta, i_eta))[0] if i_eta is not None else None
+            I_pred = self.model(torch.cat(Us), self.tensors["lattice"],
+                                self.tensors["P"], self.tensors["R"],
+                                strain=torch.cat(epss), weights=torch.cat(ws),
+                                E_range=self.E_range,   # same band as the fit
+                                per_spot_intensity=psi_per_sample,
+                                psf_sigma=psf_arg, psf_eta=eta_arg)
+            return (I_pred - I_obs)[patch_sel]
+
+        post = laplace_posterior_from_residuals(residual_fn, theta_map)
+        return post, names

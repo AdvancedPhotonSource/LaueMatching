@@ -107,8 +107,36 @@ def main(argv: list[str] | None = None) -> int:
     _save_tiff(img_np, tif_path, stretch=not args.noStretch)
     logger.info("Wrote TIFF: %s", tif_path)
 
+    # ------------------------------------------------------------------
+    # AXIS ORDER -- READ THIS BEFORE FEEDING THIS FILE TO THE INDEXER.
+    #
+    # The splat produces img[X, Y]. Every REAL beamline frame, the background
+    # files built from them, and LaueMatching's own reader are image[row, col]
+    # -- i.e. the TRANSPOSE of what is written here. The dataset name below is
+    # `/entry1/data/data`, which is exactly what the indexer reads, so a
+    # simulated frame written by this CLI and handed straight to the indexer is
+    # transposed relative to everything it will be compared against.
+    #
+    # It does NOT fail loudly. Measured on 34-ID-E Zn (2026-09-20): projecting
+    # the TRUTH orientation onto frames written as-is hit 0-2 of ~60 predicted
+    # reflections -- chance -- while the same frames transposed hit 17-61. The
+    # indexer still "succeeded" on ~30% of them, returning spurious solutions,
+    # which is exactly how a synthetic control turns into a meaningless number.
+    #
+    # The real-data refiners (`realdata.driver.VoxelODFRefiner`,
+    # `realdata.multi_grain.MultiGrainVoxelRefiner`) handle the same mismatch
+    # in the other direction: they take a declared `axis_order` ("YX" for a
+    # real frame) and convert with `laue_torch.io.to_model_layout`, which
+    # transposes and shape-checks. The `/entry1/axis_order` marker written
+    # below is read by `realdata.LaueScanLoader`.
+    #
+    # This is left UNTRANSPOSED so the file matches the model's own convention
+    # and existing callers do not silently change meaning. If you are generating
+    # frames to index, transpose before writing.
+    # ------------------------------------------------------------------
     with h5py.File(out, "w") as hf:
         hf.create_dataset("/entry1/data/data", data=img_np)
+        hf.create_dataset("/entry1/axis_order", data=np.bytes_("XY"))
         hf.create_dataset("/entry1/orientation_matrices", data=U.cpu().numpy())
         if aux is not None and aux.energy_image is not None:
             hf.create_dataset("/entry1/energy_image",

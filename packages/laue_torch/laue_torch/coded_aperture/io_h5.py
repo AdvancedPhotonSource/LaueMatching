@@ -11,9 +11,24 @@ convention):
 
   /entry/
       attrs: voxel_index, source_file
+      axis_order         bytes        b"XY" -- layout of the last two
+                                          axes of ``frames``: "XY" =
+                                          img[X, Y] (model layout,
+                                          what save_voxel_h5 writes),
+                                          "YX" = detector [row, col].
+                                          load_voxel_h5 returns model
+                                          layout either way; absent is
+                                          read as "XY", because every
+                                          file this module wrote before
+                                          the marker existed is model
+                                          layout. A file from elsewhere
+                                          (custom ``layout``) should
+                                          carry the marker.
       data/
           frames           (M, Nx, Ny) float64 — raw or pre-processed
-                                                  detector frames
+                                                  detector frames, in the
+                                                  forward model's [X, Y]
+                                                  layout (see axis_order)
           scan_offsets_um  (M,)         float64 — coded-aperture scan
                                                   positions, µm
       results/
@@ -43,6 +58,8 @@ from typing import TYPE_CHECKING
 import numpy as np
 import torch
 
+from ..io import AXIS_ORDER_DETECTOR, AXIS_ORDER_MODEL, read_axis_order
+
 if TYPE_CHECKING:  # pragma: no cover
     from .mask import CodedApertureMask
     from ..realdata.depth_resolved import CodedApertureVoxelMeasurement
@@ -50,6 +67,7 @@ if TYPE_CHECKING:  # pragma: no cover
 
 DEFAULT_LAYOUT = {
     "frames": "/entry/data/frames",
+    "axis_order": "/entry/axis_order",
     "scan_offsets_um": "/entry/data/scan_offsets_um",
     "U_seed": "/entry/results/U_seed",
     "z_seed_um": "/entry/results/z_seed_um",
@@ -148,6 +166,9 @@ def save_voxel_h5(measurement, mask, path,
             layout["z_seed_um"],
             data=float(measurement.z_seed_um),
         )
+        # frame_stack is (M, Nx, Ny) = model layout; record it (invariant 38).
+        hf.create_dataset(layout.get("axis_order", DEFAULT_LAYOUT["axis_order"]),
+                          data=np.bytes_(AXIS_ORDER_MODEL))
 
     save_mask_h5(mask, path, mask_group=layout["mask_group"])
 
@@ -166,6 +187,12 @@ def load_voxel_h5(path,
             if layout[key] not in hf:
                 raise KeyError(f"{path}: missing {layout[key]!r}")
         frame_stack = torch.tensor(np.asarray(hf[layout["frames"]]), dtype=dtype)
+        # Files without a marker (written before it existed) are model layout.
+        axis_order = read_axis_order(
+            hf, layout.get("axis_order", DEFAULT_LAYOUT["axis_order"]),
+            default=AXIS_ORDER_MODEL)
+        if axis_order == AXIS_ORDER_DETECTOR:
+            frame_stack = frame_stack.transpose(-1, -2).contiguous()
         scan_offsets = torch.tensor(np.asarray(hf[layout["scan_offsets_um"]]), dtype=dtype)
         U_seed = torch.tensor(np.asarray(hf[layout["U_seed"]]), dtype=dtype)
         z_seed_um = float(np.asarray(hf[layout["z_seed_um"]]))

@@ -24,8 +24,10 @@ analytic gradients through every step of the forward map.
 - **Tensor GND density**: Nye's dislocation density tensor follows
   analytically from the recovered per-voxel ODF gradient; FCC slip-
   system projection helper included.
-- **Posterior uncertainty**: Laplace approximation at convergence
-  gives per-parameter marginal credible intervals.
+- **Posterior uncertainty**: Laplace approximation at convergence, returned
+  with its Hessian eigenvalues, condition number, effective rank and a
+  positive-definiteness flag. Read those before any marginal sigma (see
+  below).
 - **Hessian eigenanalysis**: explicit identification of the physical
   degeneracies of polychromatic Laue (hydrostatic-strain null, lattice
   scale null, $P_z\!\leftrightarrow\!$lattice trade-off, etc.).
@@ -52,6 +54,15 @@ U = torch.tensor([[1.0, 0.0, 0.0, 0.0]], dtype=torch.float64)   # (G, 4) quatern
 img = model(U, t["lattice"], t["P"], t["R"])                    # (Nx, Ny)
 ```
 
+**Axis order.** The model renders `img[X, Y]` (X = detector column first).
+A real detector frame, a background built from one, and the LaueMatching
+indexer are `image[row, col]` = `[Y, X]`, the transpose. Transpose a render
+(`img.T`) before writing it as a frame for the indexer or comparing it with a
+real frame; on a square detector nothing fails if you forget, and every spot
+lands on the wrong pixel. `laue-torch` CLI output carries
+`/entry1/axis_order = b"XY"` for this reason; `laue_torch.io.to_model_layout`
+converts and shape-checks.
+
 ## Per-voxel ODF refinement on real data
 
 ```python
@@ -70,12 +81,52 @@ plot_sigma_map(results, grid_shape=(20, 20),
                out_path="sigma_map.png", show_posterior=True)
 ```
 
+What the loader and refiner do with the data:
+
+- **Orientation seeds** come from the indexer's OrientMatrix columns, chosen by
+  the solution table's column count: 34 (RunImage, cols 22..30) or 35 (stream,
+  cols 23..31). Any other layout raises; pass `orientation_columns=(lo, hi)`.
+- **Frames stay as stored** (`image[row, col]`) in `VoxelMeasurement.image`,
+  labelled `axis_order="YX"` (or whatever an `<entry>/axis_order` marker in the
+  file says). `VoxelODFRefiner` and `MultiGrainVoxelRefiner` transpose to the
+  model layout on entry and check the shape against `(NrPxX, NrPxY)`.
+  There is no default layout: a hand-built `VoxelMeasurement`, or
+  `MultiGrainVoxelRefiner.refine(image, U)`, must say `axis_order="YX"` (real
+  frame) or `"XY"` (a laue_torch render), or the refiner raises. (A default
+  could not be right for both: `VoxelODFRefiner` did not transpose before
+  0.1.4, and on a square detector a wrong guess is silent.)
+- **Energy band**: fits render in the parameter file's `Elo`..`Ehi`. A file
+  without them is refused by the refiners (the forward CLI still defaults to
+  5-30 keV).
+
 Each `result` is a `VoxelODFResult` carrying:
 
 - `U_mean`: refined mean orientation (3×3)
 - `sigma_U_deg`: recovered isotropic mosaic spread
-- `posterior_sigma_U_deg`: 1-σ Laplace posterior on `sigma_U_deg`
+- `posterior_sigma_U_deg`: a one-number summary of the Laplace posterior on
+  `sigma_U_deg`, and `posterior`, the full `LaplacePosterior`
 - `final_loss`, `n_steps`, `dt_s`, ...
+
+**Before quoting any posterior sigma**, read `posterior.eigvals`,
+`posterior.cond_number`, `posterior.rank_eff` and
+`posterior.is_positive_definite`. A non-positive-definite Hessian (an
+unconverged fit, or a saddle) makes the affected sigmas NaN rather than
+small. Orientation spread and deviatoric strain are strongly coupled in
+white-beam Laue, so a small marginal sigma on one of them can sit on a
+near-null direction the eigenvalues expose.
+
+### Several grains in one voxel
+
+`MultiGrainVoxelRefiner(params, mode=...)` fits K modes to one frame:
+`"orient_only"`, `"strain_voigt"` (6-component strain mean) or
+`"strain_deviatoric"`, which fits the **5** trace-free components
+`(e11, e22, e23, e13, e12)` with `e33 = -(e11 + e22)`. Prefer it to
+`strain_voigt`: a pure hydrostatic strain moves no Laue spot (it only shifts
+the Bragg energy), so the 6th Voigt direction is exactly unidentifiable from
+spot positions. `compute_posterior=True` returns `result.posterior` with
+`result.posterior_param_names`; with `refine_means=False` it is conditional on
+the fixed orientations (`metadata["posterior_conditional_on_fixed_means"]`),
+which understates strain uncertainty.
 
 For multi-voxel scans, the `plots` module supplies `plot_sigma_map`,
 `plot_orientation_map`, `plot_gnd_map` (which computes Nye's tensor on
@@ -107,7 +158,7 @@ pip install -e '.[dev]'
 KMP_DUPLICATE_LIB_OK=TRUE pytest
 ```
 
-219 tests cover parity against the NumPy/C reference, gradient flow /
+290 tests cover parity against the NumPy/C reference, gradient flow /
 `gradcheck` on every parameter group, calibration recovery, distribution
 moments, mixture / Nye correctness, coded-aperture and joint-fit paths, and a
 contract test pinning the `midas-stress` misorientation convention.

@@ -33,8 +33,13 @@ from ..distributions import (
     TangentGaussianSO3,
 )
 from ..forward import LaueForwardModel
-from ..io import LaueParams, generate_hkls
-from ..uncertainty import laplace_posterior
+from ..io import LaueParams, experiment_band, generate_hkls, to_model_layout
+from ..uncertainty import LaplacePosterior, laplace_posterior_from_residuals
+
+# Fixed RNG seed for the MC phantom samples. Shared by the fit and the Laplace
+# posterior so the posterior is the curvature of the objective that was
+# actually minimised (it used a different seed before).
+FIXED_PRED_SEED = 0xC0FFEE
 from .io import VoxelMeasurement
 
 
@@ -51,6 +56,11 @@ class VoxelODFResult:
     n_steps: int
     dt_s: float
     metadata: dict = field(default_factory=dict)
+    # Full Laplace posterior over (3 log-diag, 3 off-diag) orientation-spread
+    # Cholesky entries when compute_posterior=True and it could be computed.
+    # posterior_sigma_U_deg is a summary of it; read posterior.eigvals,
+    # cond_number, rank_eff and is_positive_definite before trusting it.
+    posterior: Optional[LaplacePosterior] = None
 
 
 class VoxelODFRefiner:
@@ -120,6 +130,9 @@ class VoxelODFRefiner:
         self.compute_posterior = compute_posterior
         self.device = device
 
+        # Render in the experiment's band (raises if params has none; no
+        # (5, 30) keV fallback). Used by the fit and the posterior.
+        self.E_range = experiment_band(params)
         # Build the forward model once (HKLs and detector geometry are shared).
         self.hkls = generate_hkls(params.sg_num, params.lattice, params.E_hi)
         self.tensors = params.to_tensors(dtype=torch.float64, device=device)
@@ -157,7 +170,14 @@ class VoxelODFRefiner:
             raise ValueError(
                 f"voxel {measurement.voxel_index}: no seed orientations")
         U_seed = measurement.U_seed_list[0].to(self.device)        # take first solution
-        I_obs = measurement.image.to(self.device)
+        # AXIS ORDER: the loader hands over the frame as stored (a real frame is
+        # image[row, col]); the forward model renders img[X, Y]. This is the one
+        # place the conversion happens (see realdata/io.py); it is shape-checked
+        # so a wrong declared layout fails on a non-square detector.
+        I_obs = to_model_layout(
+            measurement.image.to(self.device, dtype=torch.float64),
+            measurement.axis_order,          # None raises: no guessing
+            self.tensors["n_pix"])
 
         voxel = self._build_voxel(U_seed)
 
@@ -179,7 +199,6 @@ class VoxelODFRefiner:
         # to a true MAP.  Without this fix, fresh seeds per step inject
         # noise that Adam reduces by inflating Σ_orient, biasing the
         # recovered mosaic spread up.
-        FIXED_PRED_SEED = 0xC0FFEE
         last_loss = float("nan")
         for step in range(self.n_steps):
             opt.zero_grad()
@@ -188,7 +207,8 @@ class VoxelODFRefiner:
                                   self.tensors["lattice"],
                                   self.tensors["P"],
                                   self.tensors["R"],
-                                  M=self.M_render, generator=g)
+                                  M=self.M_render, generator=g,
+                                  E_range=self.E_range)
             loss = ((I_pred - I_obs) ** 2).mean()
             loss.backward()
             opt.step()
@@ -207,9 +227,19 @@ class VoxelODFRefiner:
 
         # Laplace posterior on σ_U (only the Cholesky entries are free).
         posterior_sigma_U_deg = float("nan")
+        posterior = None
+        metadata = dict(measurement.metadata)
         if self.compute_posterior:
-            posterior_sigma_U_deg = self._laplace_on_sigma(voxel, I_obs,
-                                                          last_loss)
+            posterior_sigma_U_deg, posterior, err = self._laplace_on_sigma(voxel, I_obs)
+            if err is not None:
+                metadata["posterior_error"] = err
+            # The posterior covers only the spread; the mean orientation is
+            # held at its value (the refined mean if refine_mean, else the
+            # seed). Same key as MultiGrainVoxelRefiner. Orientation and
+            # strain/spread are coupled, so this understates uncertainty.
+            metadata["posterior_conditional_on_fixed_means"] = True
+            metadata["posterior_mean_source"] = ("fitted" if self.refine_mean
+                                                 else "seed")
 
         return VoxelODFResult(
             voxel_index=measurement.voxel_index,
@@ -222,55 +252,67 @@ class VoxelODFRefiner:
             initial_seed_miso_deg=miso_seed,
             n_steps=self.n_steps,
             dt_s=time.time() - t0,
-            metadata=measurement.metadata,
+            metadata=metadata,
+            posterior=posterior,
         )
 
     def _laplace_on_sigma(
         self,
         voxel: IndependentVoxelDistribution,
         I_obs: Tensor,
-        map_loss: float,
-    ) -> float:
-        """Compute the Laplace posterior on σ_U (averaged over the 3
-        Cholesky entries of the orientation covariance)."""
-        # Pack the converged Cholesky parameters into a flat vector.
+    ):
+        """Laplace posterior over the 6 orientation-spread Cholesky entries.
+
+        Returns ``(posterior_sigma_U_deg, posterior, error)``. The residual
+        replays the fit exactly: same seed (``FIXED_PRED_SEED``), same draw
+        order as ``IndependentVoxelDistribution.sample`` (orientation, then the
+        frozen strain), same energy band. The curvature scale is
+        :func:`laue_torch.uncertainty.laplace_posterior_from_residuals`
+        (``0.5 * SSR`` with the plug-in per-pixel noise variance), the same as
+        ``MultiGrainVoxelRefiner``.
+
+        ``posterior_sigma_U_deg`` = sigma_U times the mean posterior std of the
+        3 log-diagonal entries (delta method). It is NaN when those entries
+        have no valid width (non-positive-definite Hessian; see
+        ``posterior.is_positive_definite`` / ``n_negative_eigvals``). Only a
+        ``torch.linalg.LinAlgError`` from the eigen/pinv step is caught (it is
+        returned as ``error``); anything else propagates.
+        """
         log_diag = voxel.orient.cov.log_diag.detach().clone()
         off_diag = voxel.orient.cov.off_diag.detach().clone()
         theta_map = torch.cat([log_diag, off_diag])
 
-        from ..geometry import rodrigues_to_matrix, sixd_to_matrix
-        U_mean = sixd_to_matrix(voxel.orient.mean_d6.detach())
-        fixed_seed = 0xABCDEF
+        from ..geometry import rodrigues_to_matrix
+        U_mean = voxel.orient.mean().detach()
+        L_strain = voxel.strain.cov.L().detach()
+        eps_mean = voxel.strain.mean.detach()
+        tril_i, tril_j = voxel.orient.cov.tril_idx
+        M = self.M_render
+        weights = torch.full((M,), 1.0 / M, dtype=theta_map.dtype,
+                             device=theta_map.device)
 
-        def loss_fn_flat(theta: Tensor) -> Tensor:
-            cov_log = theta[:3]
-            cov_off = theta[3:6]
-            L = torch.diag(cov_log.exp())
-            tril_i, tril_j = voxel.orient.cov.tril_idx
-            L = L.clone()
-            L[tril_i, tril_j] = cov_off
-            g = torch.Generator().manual_seed(fixed_seed)
-            z = torch.randn(self.M_render, 3, dtype=theta.dtype, generator=g)
-            delta = z @ L.T
-            U_pert = rodrigues_to_matrix(delta)
-            U_samples = U_mean.unsqueeze(0) @ U_pert
-            eps = torch.zeros(self.M_render, 6, dtype=theta.dtype)
-            weights = torch.full((self.M_render,), 1.0 / self.M_render, dtype=theta.dtype)
+        def residual_fn(theta: Tensor) -> Tensor:
+            L = torch.diag(theta[:3].exp()).clone()
+            L[tril_i, tril_j] = theta[3:6]
+            g = torch.Generator().manual_seed(FIXED_PRED_SEED)
+            z = torch.randn(M, 3, dtype=theta.dtype, device=theta.device, generator=g)
+            U_samples = U_mean.unsqueeze(0) @ rodrigues_to_matrix(z @ L.T)
+            zs = torch.randn(M, L_strain.shape[0], dtype=theta.dtype,
+                             device=theta.device, generator=g)
+            eps = eps_mean.unsqueeze(0) + zs @ L_strain.T
             I_pred = self.model(U_samples,
                                 self.tensors["lattice"],
                                 self.tensors["P"],
                                 self.tensors["R"],
-                                strain=eps, weights=weights)
-            return ((I_pred - I_obs) ** 2).mean()
+                                strain=eps, weights=weights,
+                                E_range=self.E_range)
+            return I_pred - I_obs
 
         try:
-            posterior = laplace_posterior(
-                loss_fn_flat, theta_map,
-                noise_variance=max(map_loss, 1e-12),
-            )
-            sigma_orient_rad = float(log_diag.exp().mean().item())
-            posterior_sigma_log_diag = posterior.sigma[:3].mean().item()
-            posterior_sigma_orient_rad = sigma_orient_rad * posterior_sigma_log_diag
-            return math.degrees(posterior_sigma_orient_rad)
-        except Exception as exc:
-            return float("nan")
+            posterior = laplace_posterior_from_residuals(residual_fn, theta_map)
+        except torch.linalg.LinAlgError as exc:
+            return float("nan"), None, f"LinAlgError: {exc}"
+        sigma_orient_rad = float(log_diag.exp().mean().item())
+        posterior_sigma_log_diag = float(posterior.sigma[:3].mean().item())
+        return (math.degrees(sigma_orient_rad * posterior_sigma_log_diag),
+                posterior, None)

@@ -1,4 +1,5 @@
-"""Parameter-file parsing and HKL generation via midas-hkls."""
+"""Parameter-file parsing, HKL generation via midas-hkls, orientation-table
+loading, and the detector axis-order convention (``[X, Y]`` vs ``[row, col]``)."""
 
 from __future__ import annotations
 
@@ -87,8 +88,16 @@ def parse_params(path: str | Path) -> LaueParams:
     px_y = fget("PxY")
     n_x = iget("NrPxX")
     n_y = iget("NrPxY")
-    E_lo = fget("Elo", 5.0)
-    E_hi = fget("Ehi", 30.0)
+    E_lo = fget("Elo", None)
+    E_hi = fget("Ehi", None)
+    # The forward CLI keeps its historical 5-30 keV default, but records that
+    # the band was NOT in the file so the real-data refiners (which must fit
+    # in the experiment's band) can refuse it; see experiment_band().
+    missing = [k for k, v in (("Elo", E_lo), ("Ehi", E_hi)) if v is None]
+    if missing:
+        extras["energy_band_defaulted"] = ",".join(missing)
+    E_lo = 5.0 if E_lo is None else E_lo
+    E_hi = 30.0 if E_hi is None else E_hi
     psf = fget("SimulationSmoothingWidth", 2.0)
     hkl_file = grab("HKLFile")
 
@@ -108,6 +117,28 @@ def parse_params(path: str | Path) -> LaueParams:
         hkl_file=hkl_file,
         extras=extras,
     )
+
+
+def experiment_band(params: LaueParams) -> tuple[float, float]:
+    """The experiment's energy band ``(E_lo, E_hi)`` in keV, or raise.
+
+    Used by the real-data refiners, which must render in the band the data
+    were taken in. Raises if the band is missing, was defaulted by
+    :func:`parse_params` because the file had no ``Elo``/``Ehi``, or is not
+    ``0 < E_lo < E_hi``. There is deliberately no (5, 30) fallback.
+    """
+    lo = getattr(params, "E_lo", None)
+    hi = getattr(params, "E_hi", None)
+    defaulted = (getattr(params, "extras", None) or {}).get("energy_band_defaulted")
+    if lo is None or hi is None or defaulted:
+        raise ValueError(
+            f"no experiment energy band: params has E_lo={lo!r}, E_hi={hi!r}"
+            + (f" (defaulted, {defaulted} missing from the parameter file)" if defaulted else "")
+            + "; set Elo/Ehi (keV) for the measurement")
+    lo, hi = float(lo), float(hi)
+    if not (0.0 < lo < hi):
+        raise ValueError(f"invalid energy band E_lo={lo}, E_hi={hi} keV")
+    return lo, hi
 
 
 # ── HKL generation via midas-hkls ──────────────────────────────────────────
@@ -193,14 +224,131 @@ def generate_hkls(
     return torch.tensor(out, dtype=torch.long)
 
 
+# ── Detector axis order ────────────────────────────────────────────────────
+#
+# The forward model splats into img[X, Y] (X = detector column / fast axis
+# first). Real detector frames, the backgrounds built from them and the C
+# indexer are image[row, col] = image[Y, X] -- the TRANSPOSE. Getting this
+# wrong does not raise on a square detector; it silently compares every spot
+# with the wrong pixel (handbook invariant 38). Files carry the convention as
+# ``<entry>/axis_order``: b"XY" = model layout (written by ``cli.py`` and
+# ``coded_aperture.io_h5``), b"YX" = detector layout. LaueMatching indexer
+# output carries no marker and is detector layout.
+
+AXIS_ORDER_MODEL = "XY"      # img[X, Y], what LaueForwardModel returns
+AXIS_ORDER_DETECTOR = "YX"   # image[row, col], a real frame
+
+
+def read_axis_order(hf, key: str, default: Optional[str] = None) -> Optional[str]:
+    """Return the ``axis_order`` marker stored at ``key`` in an open h5py file.
+
+    Returns ``default`` when the dataset is absent. Raises ``ValueError`` on a
+    value that is neither ``"XY"`` nor ``"YX"`` rather than guessing.
+    """
+    if key not in hf:
+        return default
+    raw = np.asarray(hf[key][()]).reshape(-1)[0]
+    val = raw.decode() if isinstance(raw, (bytes, np.bytes_)) else str(raw)
+    val = val.strip().upper()
+    if val not in (AXIS_ORDER_MODEL, AXIS_ORDER_DETECTOR):
+        raise ValueError(f"{key} = {val!r}; expected 'XY' (model layout) "
+                         f"or 'YX' (detector row, col)")
+    return val
+
+
+def to_model_layout(image: Tensor, axis_order: Optional[str],
+                    n_pix: tuple[int, int]) -> Tensor:
+    """Return ``image`` (last two dims) in the forward model's ``[X, Y]`` layout.
+
+    ``axis_order`` is the layout ``image`` is in (``"YX"`` for a real frame,
+    ``"XY"`` if it is already model layout). There is no default: ``None``
+    raises, because on a square detector a wrong guess cannot be detected.
+    ``n_pix = (Nx, Ny)``. The result is shape-checked against ``n_pix`` so a
+    frame in the wrong layout fails loudly on a non-square detector.
+    """
+    if axis_order is None:
+        raise ValueError(
+            "axis_order is None: say which layout the image is in -- 'YX' for "
+            "a real detector frame image[row, col] (LaueScanLoader sets this "
+            "from the file, 'YX' for indexer output), or 'XY' for an image "
+            "already in the forward model's img[X, Y] layout (a laue_torch "
+            "render). On a square detector a wrong guess would be silent.")
+    if axis_order == AXIS_ORDER_DETECTOR:
+        image = image.transpose(-1, -2).contiguous()
+    elif axis_order != AXIS_ORDER_MODEL:
+        raise ValueError(f"axis_order must be 'XY' or 'YX', got {axis_order!r}")
+    Nx, Ny = int(n_pix[0]), int(n_pix[1])
+    if tuple(image.shape[-2:]) != (Nx, Ny):
+        raise ValueError(
+            f"image in model layout has shape {tuple(image.shape[-2:])}, but the "
+            f"forward model renders (Nx, Ny) = ({Nx}, {Ny}); declared axis_order "
+            f"{axis_order!r} is wrong for this image (a real frame is 'YX' = "
+            f"[row, col] = (NrPxY, NrPxX))")
+    return image
+
+
+# ── Indexer solution-table layouts ─────────────────────────────────────────
+#
+# DUPLICATED from ``laue_index.records.SOLUTION_FORMATS`` (the source of
+# truth), because laue_torch does not depend on laue_index. Only the two
+# fields laue_torch needs are copied. If the indexer's column map changes,
+# change it there first, then here.
+#   runimage: 34 columns, GrainNr at col 0, OrientMatrix at cols 22..30
+#   stream  : 35 columns, ImageNr prepended, OrientMatrix at cols 23..31
+SOLUTION_OM_START = {34: 22, 35: 23}     # n_cols -> first orientation column
+
+
+def solution_orientation_columns(n_cols: int) -> tuple[int, int]:
+    """(lo, hi) slice of the row-major orientation matrix in a solutions table.
+
+    Selected by column count (34 = runimage, 35 = stream layout). Any other
+    count raises: there is no safe default.
+    """
+    if n_cols not in SOLUTION_OM_START:
+        raise ValueError(
+            f"solutions table has {n_cols} columns; expected 34 (runimage) or "
+            f"35 (stream) -- see laue_index.records.SOLUTION_FORMATS. Pass "
+            f"the orientation columns explicitly for any other layout.")
+    lo = SOLUTION_OM_START[n_cols]
+    return lo, lo + 9
+
+
+def _is_numeric_line(line: str) -> bool:
+    toks = line.replace(",", " ").split()
+    if not toks:
+        return False
+    try:
+        [float(t) for t in toks]
+    except ValueError:
+        return False
+    return True
+
+
 def load_orientations(path: str | Path) -> Tensor:
-    """Load orientation matrices from CSV. Each row is a flattened 3×3 (9 floats)."""
+    """Load orientation matrices from a text file.
+
+    Accepts either a plain table whose first 9 columns are a row-major 3×3
+    per row, or an indexer ``solutions.txt`` (34-column runimage or 35-column
+    stream layout, with or without its ``%GrainNr``/``#`` header line), in
+    which case the matrix is taken from the layout's OrientMatrix columns.
+    Header lines are detected from the TEXT: any leading line that does not
+    parse as numbers is skipped.
+    """
     path = Path(path)
-    arr = np.genfromtxt(path)
+    lines = path.read_text().splitlines()
+    rows = [ln for ln in lines if ln.strip() and not ln.lstrip().startswith(("%", "#"))]
+    # Drop any remaining non-numeric header line (e.g. a bare column-name row).
+    while rows and not _is_numeric_line(rows[0]):
+        rows = rows[1:]
+    if not rows:
+        raise ValueError(f"{path}: no numeric rows")
+    arr = np.array([[float(t) for t in ln.replace(",", " ").split()] for ln in rows])
     if arr.ndim == 1:
         arr = arr.reshape(1, -1)
-    if arr.shape[1] >= 31 and str(arr[0]).startswith(("%", "#")):
-        # Old-style with %GrainNr header — caller can post-process.
-        arr = arr[:, 22:31]
+    if arr.shape[1] >= 34:
+        lo, hi = solution_orientation_columns(arr.shape[1])
+        arr = arr[:, lo:hi]
+    elif arr.shape[1] < 9:
+        raise ValueError(f"{path}: {arr.shape[1]} columns; need 9 (row-major 3x3)")
     arr = arr[:, :9].reshape(-1, 3, 3)
     return torch.tensor(arr, dtype=torch.float64)
