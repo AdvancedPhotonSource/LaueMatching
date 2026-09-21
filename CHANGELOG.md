@@ -1,11 +1,226 @@
 # Changelog
 
-Version history for the LaueMatching C/CUDA indexer and its pipeline. The Python
-distributions in `packages/` version independently and are released to PyPI; see
-each package's `pyproject.toml` for its current version.
+Version history for the LaueMatching C/CUDA indexer, its pipeline, and the Python
+distributions in `packages/`, which version independently and are released to PyPI.
+
+**From laue-index 0.7.0 on, entries are headed by the PyPI version that shipped
+them.** The `v2.2` section below collects what shipped in laue-index 0.3.0 to 0.6.1
+under the pipeline's internal version string. `v2.2` was never a release: it is the
+value of `laue_index/pipeline/_version.py`, which older provenance records wrote as
+`laue_version` and which does not identify a build. Provenance schema 2 (laue-index
+0.7.2) records the package version and source/binary hashes instead.
 
 
-## v2.2 (unreleased)
+## laue-index 0.7.2 (unreleased)
+
+A correctness release. Several items change results; each says how to reproduce
+0.7.1.
+
+### Results change
+
+- **Streaming post-processing honours the filter keys in the config.** 0.7.1
+  streaming was hard-wired to the legacy filter and passed `--min-unique 2`
+  whatever `MinGoodSpots` said. Now an EXPLICIT `RobustFilter`, `MinGoodSpots`,
+  `MinNrSpots` or `MaxAngle` is honoured exactly as `RunImage` honours it. An
+  ABSENT `RobustFilter` keeps the 0.7.1 streaming behaviour (legacy filter) and
+  says so once at startup, because `RunImage`'s default for an absent key is 1.
+  **On a config carrying `MinGoodSpots 4` the exclusive-label floor rises from 2
+  to 4**; `MinGoodSpots 2` reproduces 0.7.1. Measured on one 2,613-frame shard of
+  the texture-case sample: filtered orientations 8,870 -> 7,340 (−17%), 1,528 of the
+  1,548 dropped having 2 or 3 own labels; the raw C output was unchanged within
+  the pipeline's own run-to-run variation. **A config written by laue-index
+  itself** (`RunImage config`, `write_config`) has always carried an explicit
+  `RobustFilter 1`, so streaming runs from such a file now use the robust filter;
+  set `RobustFilter 0` to reproduce 0.7.1.
+- **Robust filter floor is monotonic.** It counted the orientation's own
+  winner-take-all pixels but fell back to total `NMatches` exactly when that count
+  was 0, so a Σ3 twin with every spot claimed was kept while one with 1-4 own
+  pixels was dropped. The floor is now own pixels throughout; a solution with no
+  own pixels is dropped. (Flooring on `NMatches` instead, as first proposed, kept
+  four extra Σ3 relatives with 0-1 own labels on the test frame and was not used.)
+- **Hexagonal near-duplicates** within `MaxAngle` are now removed by the robust
+  filter (6/mmm operators); the CSL exemption stays cubic-only.
+- **`RunImage` honours `GaussSigmaMax`**, which only the streaming path applied.
+- **The analysis chain** (`pipeline/analysis/`, not in the wheel) counts hits
+  without stacking harmonics (`nhit_distinct` beside `nhit`), picks symmetry from
+  the space group rather than the phase name (any hex phase not named `alpha` had been
+  given 24 cubic operators in two scripts), reads its null from the measured JSON
+  instead of a hard-coded Ti null, labels the hex a-axis texture rows correctly
+  (they had measured ⟨10-10⟩), and iterates the kept grains in `within_grain.py`.
+  Grain connectivity is one shared setting, 8 (what `regrain.py` always used);
+  scripts that had used 4 change unless `LAUE_CONNECTIVITY=4`.
+
+### Fails loudly where it used to be silent
+
+- **Crystal-fit tolerances are fractions, and the C checks them.** `tol_LatC` and
+  `tol_c_over_a` are fractional bounds (0.001 = 0.1%); 0.7.1's usage text said
+  percent. ≥ 1 or NaN is fatal, > 0.1 warns. When `tol_c_over_a` is set,
+  `tol_LatC` is ignored with a NOTE instead of being validated.
+- **Unfilled or malformed geometry stops the run.** The Python parsers refuse a
+  malformed `SpaceGroup`, `Symmetry`, `LatticeParameter`, `P_Array` or `R_Array`
+  (0.7.1 logged it and kept a default, e.g. SpaceGroup 225); the C refuses a short
+  `LatticeParameter`/`P_Array`/`R_Array` line and a zero detector distance. The
+  parameter templates now carry `__SET_ME__` placeholders instead of another
+  experiment's fitted geometry.
+- **A zero `R_Array` is the identity rotation.** It divided 0 by 0 and every
+  predicted spot became NaN.
+- **Forward-cache writes are atomic.** The cache is written to
+  `<ForwardFile>.partial.<host>.<pid>` and renamed only after it is complete and flushed;
+  a write, fsync or close failure is fatal and deletes the partial file. A killed
+  run leaves only a `.partial.<host>.<pid>` file, which is never read. The GPU
+  binary had printed and carried on after a failed write, and the CPU loop could
+  spin on a zero-byte write.
+- **Shards that share a forward cache take turns building it.** An `fcntl` lock on
+  `<ForwardFile>.lock` (works over NFS) lets one process simulate while siblings
+  wait and then reuse the published file, so a cold start needs one copy of the
+  cache, not one per shard. The lock holder deletes stale partial files. If locking
+  is unavailable the run warns and proceeds unlocked. A symlinked `ForwardFile` is
+  replaced at its target; a new cache is created 0644 (it was 0600, unreadable to
+  other beamline accounts) and a replaced one keeps its mode.
+- **`Elo`/`Ehi` are checked.** An unparseable value silently kept 5 / 30 keV in all
+  three binaries; it is now fatal, and so is a band that fails 0 < Elo < Ehi.
+- **The `.cu` files build with gcc 14 and later**: `<omp.h>` and `<math.h>` are
+  included before the `extern "C"` block (a hard error on gcc ≥ 14; CI's gcc 13
+  passed it).
+- **The stream daemon** bounds-checks its kernel like the GPU binary, initialises
+  and validates its geometry, and checks `numProcs`.
+- **The orchestrator exits non-zero when post-processing fails**, instead of
+  logging "Pipeline complete".
+- **`pipeline/run_laue.sh`** found its orchestrator at the repo root, where it is
+  not, and reported a launch that had died. It now resolves `scripts/` (or the
+  installed package), checks every input before launching anything, and confirms
+  each launch is alive. `pipeline/launch_shard.sh` (deleted paths, campaign
+  naming) is retired in favour of `pipeline/dispatch/`.
+- **Analysis scripts exit naming the variable** instead of falling back to another
+  campaign's data paths, a Ti null, a 201-column raster or a 1 µm step; five
+  scripts that raised `NameError` on import now run.
+
+### Worker sizing (the 0.7.0 defect)
+
+- `LAUE_SHARDS_PER_HOST` divides the CPU, memory and thread budgets; a
+  `LAUE_DAEMON_NCPUS` you set is subtracted, never below half the per-shard share
+  (nothing sets it for you, so a plain run sizes as 0.7.1 did);
+  `RLIMIT_NPROC` caps the pool; a fractional cgroup quota gives 1 worker.
+  `LAUE_PREPROCESS_WORKERS` still overrides. Pool workers run their
+  OpenMP/MKL/OpenBLAS/OpenCV/diplib thread pools at 1. The pinning is done in the
+  PARENT just before the pool forks, never inside a forked worker: OpenCV and
+  libgomp are not fork-safe, and a version that pinned from the worker
+  initializer hung a Linux worker indefinitely. A spawned worker (macOS) pins
+  its own pools.
+- The streaming config now parses `PreprocessWorkers` and `RobustFilter`.
+
+### Added
+
+- **`pipeline/dispatch/`**: multi-host sharding (`mkrun.py`, `preflight.sh`,
+  `dispatch.sh`, `launch_run.sh`, `watch_arm.sh`, `wait_static.sh`), each encoding
+  a failure that cost a run.
+- **Provenance schema 2** records the `laue_index` version, the SHA-256 of the C
+  sources and of each binary, and the binary that actually ran. Schema 1's
+  `laue_version` ("2.1.0"/"2.2.0") did not identify a build.
+- **Config schema rows** for `tol_LatC`, `tol_c_over_a`, `MinSpotIntensity`,
+  `GaussSigmaMax`, so they are validated and survive a config rewrite.
+- IndexFile `NiData` is filled (it was always 0); its `err(deg)` is documented as
+  integer-pixel quantisation, not a fit residual.
+- `.unique_spot_counts.txt` now reaches the output HDF5 (the reader looked for
+  `.bin.unique_spot_counts.txt`, which nothing writes).
+
+### Docs
+
+- The three spot counts are defined once (handbook invariant 15b):
+  `NMatches` does not stack harmonics (the C dedups by q-hat);
+  `unique_spots_per_orientation` is winner-take-all across a frame's orientations,
+  not "distinct"; the analysis `nhit` stacked harmonics (1.186x on the hcp
+  deposit), `nhit_distinct` does not. Descriptions across the package corrected.
+- `Optimizer` is parsed and ignored: refinement is always Nelder-Mead (the README
+  said BOBYQA was the default).
+- Handbook invariant 38: laue_torch renders `[X, Y]`, real frames are `[row, col]`.
+
+## laue-torch 0.1.4 (unreleased)
+
+### Fixed (results change)
+
+- `realdata.LaueScanLoader` read the orientation seed from solution columns 1-9
+  (intensity, scores, NMatches), never the matrix. It now reads the matrix columns
+  by layout: 34 columns (RunImage, 22-30) or 35 (stream, 23-31); other layouts
+  raise unless `orientation_columns` is given.
+- `realdata.VoxelODFRefiner` compared a stored `[row, col]` frame with the model's
+  `[X, Y]` render: transposed on a square detector, a broadcast error on a
+  non-square one. Frames stay as stored with `VoxelMeasurement.axis_order`, and
+  both refiners convert on entry with a shape check. **Every earlier
+  `VoxelODFRefiner` result on a square detector changes.**
+- **Breaking: `axis_order` is required where a frame meets a refiner.**
+  `VoxelMeasurement.axis_order` and `MultiGrainVoxelRefiner.refine(axis_order=)`
+  have no default; the refiners raise until it is `"YX"` (a real frame,
+  `image[row, col]`) or `"XY"` (a laue_torch render). `LaueScanLoader` always sets
+  it (the file's marker, else `"YX"`). No default could be right both for 0.1.3
+  callers and for real frames, and on a square detector a wrong guess is silent.
+  `MultiGrainVoxelRefiner.refine` no longer transposes implicitly.
+  `TwoSourceMeasurement` and marker-less coded-aperture files keep `"XY"`, being
+  laue_torch-written by construction.
+- Both refiners rendered in a fixed 5-30 keV band whatever the parameter file said;
+  they now use `Elo`..`Ehi` and refuse a missing or defaulted band.
+- `MultiGrainVoxelRefiner(mode="strain_deviatoric")` was an alias of
+  `strain_voigt`, fitting 6 components including the unobservable hydrostatic one.
+  It now fits the 5 trace-free components.
+- The multi-grain fallback target (no indexer spots) used the window sum against a
+  peak-normalised splat, gave every co-located harmonic the full amplitude, and
+  summed grains into one vector. It is now the window peak, one reflection per
+  predicted pixel, per grain.
+- `laue_torch.io.load_orientations` never detected a `%`/`#` header, so a
+  solutions file gave columns 0-8 as the matrix.
+- The `VoxelODFRefiner` Laplace posterior used a different random seed from its
+  fit, a per-pixel-MSE curvature (σ inflated by about √(N/2)), and turned every
+  exception into NaN. It now shares the fit's seed, uses 0.5·SSR with the plug-in
+  noise variance, and catches only `torch.linalg.LinAlgError`.
+
+### Added
+
+- `MultiGrainVoxelRefiner(compute_posterior=True)`, previously accepted and
+  ignored, returns a Laplace posterior; `LaplacePosterior.is_positive_definite`
+  and `n_negative_eigvals` expose a saddle point. Read `eigvals`, `cond_number`
+  and `rank_eff` before any σ.
+- `/entry1/axis_order = b"XY"` in the CLI's HDF5 output; the coded-aperture HDF5
+  writes and honours `/entry/axis_order`.
+- `laue_torch.jointfit.fault_rod`: a continuous-L forward model for one (h, k)
+  reciprocal-lattice row (stacking-fault rods), cross-checked against
+  `LaueForwardModel` at integer L.
+
+## laue-index 0.7.1 (2026-09-09)
+
+- **The streaming daemon frees its host copy of the forward simulation after the
+  GPU upload.** In unchunked mode that copy is read once, by the upload, and was
+  then held for the daemon's life: 12.2 GB at 100M orientations. Idle RSS on 40
+  frames against the 100M cache went 18.35 -> 6.99 GB; solutions and spots were
+  identical (GrainNr excluded, it is nondeterministic). The PEAK is unchanged
+  (~18.2 GB, the cache must still be read to be uploaded); what goes is the holding,
+  which competed with the preprocessing pool for memory.
+- **The sdist pre-flight measures what it ships.** Its size guard summed the
+  compressed tarball, so a 32.93 MB working file compressed to 320 KB and passed;
+  it now sums uncompressed members and names the ten largest. `*.bin`, `build` and
+  `dist` are excluded from the sdist. PyPI was not affected.
+
+## laue-index 0.7.0 (2026-09-09)
+
+- **Preprocessing worker count chosen from the machine.** It was
+  `min(os.cpu_count(), 8)`; 8 sits at the end of the linear region (measured on a
+  40-core host: 17.8 frames/s at 8 workers, 34.7 at 40). The pool is now sized from
+  the CPUs this process may use (affinity and cgroup quota) and a fitted per-worker
+  memory model. **Known defect, fixed in 0.7.2:** the size does not account for
+  sibling shards on the same host, and each worker also starts its own OpenCV
+  thread pool. Two shards on a 112-core host with `ulimit -u` 8192 exhausted
+  threads; the visible symptom was a misleading `GPUassert: device busy or
+  unavailable`. On 0.7.0/0.7.1 set `LAUE_PREPROCESS_WORKERS` per shard and
+  `OPENCV_NUM_THREADS=1` when several shards share a host.
+- **Preprocessing centroids only the lit pixels** (`_centers_of_mass_sparse`), bit-
+  identical to `ndimage.center_of_mass`; `preprocess_image` 486 -> 291 ms/frame.
+- **The coarse-fit blur is parallel over rows**, bit-identical at 1/16/64 threads;
+  it had been 449 of 464 ms per image in the streaming fit.
+- **Four exact rearrangements of the forward-simulation loop**, 27% off it with no
+  spot moved: a per-thread duplicate-pixel mask replaced by a scan of the spots
+  already written (`pixelClaimed`), one shared stage-1 comparison instead of three
+  drifted copies, no sqrt in the inner loop, cheaper rejection order.
+
+## v2.2 (laue-index 0.3.0 to 0.6.1)
 
 - **`LAUEMATCHING_CUDA=1` means ATTEMPT again (0.6.1).** 0.6.0 redefined it to
   "require", which was a gratuitous break: every README and script from the

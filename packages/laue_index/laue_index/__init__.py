@@ -16,7 +16,7 @@ The pipeline orchestrators live in ``laue_index.pipeline``; the indexer wrapper,
 filtering, preprocessing and worker sizing are importable as submodules.
 """
 
-__version__ = "0.7.1"
+__version__ = "0.7.2"
 
 from .records import Solution, SolutionFormat, SOLUTION_FORMATS, parse_solutions
 from .postprocess import PostProcessor, PostProcessResult
