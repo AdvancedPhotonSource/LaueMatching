@@ -23,6 +23,12 @@
 #include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
+// C++-aware system headers go in BEFORE the extern "C" wrapper: GCC >= 14's
+// <omp.h> (and libstdc++'s <math.h>, which pulls in <cmath>) declare templates,
+// and "template with C linkage" is a hard error. Their include guards then
+// make the header's own includes of them no-ops inside the wrapper.
+#include <math.h>
+#include <omp.h>
 extern "C" {
 #include "LaueMatchingHeaders.h"
 }
@@ -36,7 +42,6 @@ double cellVol;
 double phiVol;
 int nSym;
 double Symm[24][4];
-int useBobyqa = 1;
 
 // ── Constants ───────────────────────────────────────────────────────────
 // Default TCP port; override with env LAUE_STREAM_PORT (lets two daemons —
@@ -73,15 +78,21 @@ inline void gpuAssert(cudaError_t code, const char *file, int line,
 // true grains included -- before the top-score merge can rank them.
 // 4M entries x 12 B x MAX_STREAMS is < 200 MB on device and pinned host.
 
-__global__ void compare(size_t nrPxX, size_t nOr, size_t nrMaxSpots,
-                        float minInt, size_t minSps, float minSpotInt,
-                        uint16_t *oA, float *im,
+// Bounds: nrSpots is clamped to nrMaxSpots and (px, py) checked against the
+// frame before the read, exactly as in LaueMatchingGPU.cu. The forward cache
+// is size-checked (forwardCacheUsable) but not content-checked, so a corrupt
+// row must not become an out-of-bounds device read.
+__global__ void compare(size_t nrPxX, size_t nrPxY, size_t nOr,
+                        size_t nrMaxSpots, float minInt, size_t minSps,
+                        float minSpotInt, uint16_t *oA, float *im,
                         int *matchCount, size_t *matchIdx,
                         float *matchScore, size_t chunkOffset) {
   size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < nOr) {
     size_t loc = i * (1 + 2 * nrMaxSpots);
     size_t nrSpots = (size_t)oA[loc];
+    if (nrSpots > nrMaxSpots)
+      nrSpots = nrMaxSpots;
     size_t hklnr;
     size_t px, py;
     float thisInt, totInt = 0;
@@ -91,10 +102,12 @@ __global__ void compare(size_t nrPxX, size_t nOr, size_t nrMaxSpots,
       px = (size_t)oA[loc];
       loc++;
       py = (size_t)oA[loc];
-      float raw = __ldg(&im[py * nrPxX + px]);
-      if (raw > minSpotInt) {
-        totInt += raw;
-        nSps++;
+      if (px < nrPxX && py < nrPxY) {
+        float raw = __ldg(&im[py * nrPxX + px]);
+        if (raw > minSpotInt) {
+          totInt += raw;
+          nSps++;
+        }
       }
     }
     if (nSps >= minSps && totInt >= minInt) {
@@ -429,12 +442,19 @@ void *accept_connections(void *server_fd_ptr) {
 }
 
 // ── Usage ──────────────────────────────────────────────────────────────
+// printf, NOT puts: a literal percent sign is written `%%` here. The other two
+// binaries print usage with puts(), where it must be a single `%`.
 static void usage(const char *prog) {
   printf("LaueMatchingGPUStream — persistent GPU daemon\n"
          "Contact hsharma@anl.gov\n\n"
          "Usage: %s parameterFile orientationFile hklFile nCPUs\n\n"
          "Listens on TCP port %d for binary images.\n"
-         "Wire protocol: uint16_t image_num + float[NrPxX*NrPxY]\n",
+         "Wire protocol: uint16_t image_num + float[NrPxX*NrPxY]\n\n"
+         "Crystal-fit tolerances in the parameter file:\n"
+         "\t\t* tol_latC (FRACTION of each lattice parameter, 6 values;\n"
+         "\t\t  0 = hold fixed). 0.01 means +-1%%, NOT 1.0.\n"
+         "\t\t* tol_c_over_a (FRACTION of c/a, 1 value; 0 = hold fixed,\n"
+         "\t\t  overrides tol_latC). 0.01 means +-1%%, NOT 1.0.\n",
          prog, PORT);
 }
 
@@ -492,7 +512,8 @@ static void finalize_stream(StreamContext *fc, double *orients, int *hkls,
     rowNrs[ci] = matchIdx[ci];
   }
   // Merge duplicate orientations
-  double *FinOrientArr = (double *)calloc(nrResults * 9, sizeof(double));
+  double *FinOrientArr =
+      (double *)calloc((size_t)nrResults * 9, sizeof(double));
   int *dArr = (int *)calloc(nrResults, sizeof(int));
   int *bsArr = (int *)calloc(nrResults, sizeof(int));
   double *bsScoreArr = (double *)calloc(nrResults, sizeof(double));
@@ -582,17 +603,22 @@ int main(int argc, char *argv[]) {
     printf("Could not open parameter file %s.\n", paramFN);
     return 1;
   }
-  char aline[1000], *str, dummy[1000], outfn[1000];
-  int LowNr, nrPxX, nrPxY, maxNrSpots = 500, minNrSpots = 5, doFwd = 1;
+  // outfn starts empty so a missing ForwardFile hits forwardCacheUsable()'s
+  // blank-path check deterministically instead of reading stack garbage.
+  char aline[1000], *str, dummy[1000], dummy2[1000], outfn[1000] = "";
+  // Initialised so a missing config key is detectable (checked below) and
+  // never feeds stack garbage into an allocation or a division.
+  int LowNr, nrPxX = 0, nrPxY = 0, maxNrSpots = 500, minNrSpots = 5, doFwd = 1;
   sg_num = 225;
-  double pArr[3], rArr[3], pxX, pxY, Elo = 5, Ehi = 30;
+  double pArr[3] = {0, 0, 0}, rArr[3] = {0, 0, 0}, pxX = 0, pxY = 0, Elo = 5,
+         Ehi = 30;
   int iter;
   for (iter = 0; iter < 6; iter++)
     tol_LatC[iter] = 0;
   double minIntensity = 1000.0, maxAngle = 2.0;
   // See MinSpotIntensity in LaueMatchingCPU.c; 0.0 == the historical `> 0`.
   double minSpotIntensity = 0.0;
-  double LatticeParameter[6];
+  double LatticeParameter[6] = {0, 0, 0, 0, 0, 0};
   tol_c_over_a = 0;
   char resultDir[1000] = "results_stream";
   int minGoodSpots = 5;
@@ -602,22 +628,32 @@ int main(int argc, char *argv[]) {
     str = "LatticeParameter";
     LowNr = strncmp(aline, str, strlen(str));
     if (LowNr == 0) {
-      sscanf(aline, "%s %lf %lf %lf %lf %lf %lf", dummy, &LatticeParameter[0],
-             &LatticeParameter[1], &LatticeParameter[2], &LatticeParameter[3],
-             &LatticeParameter[4], &LatticeParameter[5]);
+      if (!paramLineComplete(
+              sscanf(aline, "%s %lf %lf %lf %lf %lf %lf", dummy,
+                     &LatticeParameter[0], &LatticeParameter[1],
+                     &LatticeParameter[2], &LatticeParameter[3],
+                     &LatticeParameter[4], &LatticeParameter[5]),
+              7, "LatticeParameter", aline))
+        return 1;
       calcV(LatticeParameter);
       continue;
     }
     str = "P_Array";
     LowNr = strncmp(aline, str, strlen(str));
     if (LowNr == 0) {
-      sscanf(aline, "%s %lf %lf %lf", dummy, &pArr[0], &pArr[1], &pArr[2]);
+      if (!paramLineComplete(sscanf(aline, "%s %lf %lf %lf", dummy, &pArr[0],
+                                    &pArr[1], &pArr[2]),
+                             4, "P_Array", aline))
+        return 1;
       continue;
     }
     str = "R_Array";
     LowNr = strncmp(aline, str, strlen(str));
     if (LowNr == 0) {
-      sscanf(aline, "%s %lf %lf %lf", dummy, &rArr[0], &rArr[1], &rArr[2]);
+      if (!paramLineComplete(sscanf(aline, "%s %lf %lf %lf", dummy, &rArr[0],
+                                    &rArr[1], &rArr[2]),
+                             4, "R_Array", aline))
+        return 1;
       continue;
     }
     str = "tol_c_over_a";
@@ -641,13 +677,17 @@ int main(int argc, char *argv[]) {
     str = "Elo";
     LowNr = strncmp(aline, str, strlen(str));
     if (LowNr == 0) {
-      sscanf(aline, "%s %lf", dummy, &Elo);
+      if (!paramLineComplete(sscanf(aline, "%s %lf", dummy, &Elo), 2,
+                             "Elo", aline))
+        return 1;
       continue;
     }
     str = "Ehi";
     LowNr = strncmp(aline, str, strlen(str));
     if (LowNr == 0) {
-      sscanf(aline, "%s %lf", dummy, &Ehi);
+      if (!paramLineComplete(sscanf(aline, "%s %lf", dummy, &Ehi), 2,
+                             "Ehi", aline))
+        return 1;
       continue;
     }
     str = "DoFwd";
@@ -721,9 +761,9 @@ int main(int argc, char *argv[]) {
     str = "Optimizer";
     LowNr = strncmp(aline, str, strlen(str));
     if (LowNr == 0) {
-      sscanf(aline, "%s %s", dummy, dummy);
-      useBobyqa = 0; /* Nelder-Mead always; see LaueMatchingHeaders.h */
-      if (strncmp(dummy, "BOBYQA", 6) == 0)
+      sscanf(aline, "%s %s", dummy, dummy2); // two buffers, as in CPU.c
+      /* Parsed, never acted on: Nelder-Mead always (LaueMatchingHeaders.h). */
+      if (strncmp(dummy2, "BOBYQA", 6) == 0)
         printf("NOTE: Optimizer BOBYQA requested, but BOBYQA has been "
                "removed. Using Nelder-Mead, which measured better on "
                "this objective (median 0.0041 vs 0.0054 deg, p95 3.3x "
@@ -743,30 +783,40 @@ int main(int argc, char *argv[]) {
       continue;
     }
   }
+  // Validates the EFFECTIVE tolerances itself (it knows tol_c_over_a
+  // overrides tol_LatC), so its place relative to the zeroing below is moot.
+  if (validateCrystalFitTolerances())
+    return 1;
   if (tol_c_over_a != 0) {
+    // c/a is a ratio at CONSTANT cell volume, so it must not compete with
+    // per-parameter tolerances on a and c; it overrides them.
     for (iter = 0; iter < 6; iter++)
       tol_LatC[iter] = 0;
   }
   c_over_a_orig = LatticeParameter[2] / LatticeParameter[0];
   fclose(fileParam);
+  // Same checks and messages as LaueMatchingGPU.cu.
+  if (nrPxX <= 0 || nrPxY <= 0) {
+    fprintf(stderr,
+            "FATAL: Invalid detector dimensions (NrPxX=%d, NrPxY=%d). Check "
+            "parameter file.\n",
+            nrPxX, nrPxY);
+    return 1;
+  }
+  if (LatticeParameter[0] == 0) {
+    fprintf(stderr, "FATAL: LatticeParameter not set in parameter file.\n");
+    return 1;
+  }
+  if (validateDetectorDistance(pArr))
+    return 1;
+  if (validateEnergyBand(Elo, Ehi))
+    return 1;
   puts("Parameters read");
 
-  // Rotation matrix
-  double rotang = CalcLength(rArr[0], rArr[1], rArr[2]);
-  double rotvect[3] = {rArr[0] / rotang, rArr[1] / rotang, rArr[2] / rotang};
-  double rot[3][3] = {
-      {cos(rotang) + (1 - cos(rotang)) * (rotvect[0] * rotvect[0]),
-       (1 - cos(rotang)) * rotvect[0] * rotvect[1] - sin(rotang) * rotvect[2],
-       (1 - cos(rotang)) * rotvect[0] * rotvect[2] + sin(rotang) * rotvect[1]},
-      {(1 - cos(rotang)) * rotvect[1] * rotvect[0] + sin(rotang) * rotvect[2],
-       cos(rotang) + (1 - cos(rotang)) * (rotvect[1] * rotvect[1]),
-       (1 - cos(rotang)) * rotvect[1] * rotvect[2] - sin(rotang) * rotvect[0]},
-      {(1 - cos(rotang)) * rotvect[2] * rotvect[0] - sin(rotang) * rotvect[1],
-       (1 - cos(rotang)) * rotvect[2] * rotvect[1] + sin(rotang) * rotvect[0],
-       cos(rotang) + (1 - cos(rotang)) * (rotvect[2] * rotvect[2])}};
-  double rotTranspose[3][3] = {{rot[0][0], rot[1][0], rot[2][0]},
-                               {rot[0][1], rot[1][1], rot[2][1]},
-                               {rot[0][2], rot[1][2], rot[2][2]}};
+  // Rotation matrix (transpose = inverse). A zero R_Array is a legitimate
+  // unrotated detector; the helper guards its 0/0 axis. See the header.
+  double rotTranspose[3][3];
+  detectorRotationTranspose(rArr, rotTranspose);
 
   // ── Read orientations ─────────────────────────────────────────────
   puts("Reading orientations");
@@ -803,6 +853,12 @@ int main(int argc, char *argv[]) {
     printf("%zu orientations mapped into memory\n", nrOrients);
   } else {
     orients = (double *)malloc(szFile);
+    if (orients == NULL) {
+      fprintf(stderr, "FATAL: Could not allocate orientations (%zu bytes).\n",
+              szFile);
+      fclose(orientF);
+      return 1;
+    }
     size_t rc = fread(orients, 1, szFile, orientF);
     if (rc != szFile) {
       printf("Error reading orientations.\n");
@@ -823,6 +879,11 @@ int main(int argc, char *argv[]) {
     return 1;
   }
   int *hkls = (int *)calloc(MaxNHKLS * 3, sizeof(*hkls));
+  if (hkls == NULL) {
+    fprintf(stderr, "FATAL: could not allocate hkls (%zu bytes).\n",
+            (size_t)MaxNHKLS * 3 * sizeof(*hkls));
+    return 1;
+  }
   int nhkls = 0;
   while (fgets(aline, 1000, hklf) != NULL) {
     if (nhkls >= MaxNHKLS)
@@ -835,6 +896,11 @@ int main(int argc, char *argv[]) {
   printf("%d hkls read\n", nhkls);
 
   int numProcs = atoi(argv[4]);
+  if (numProcs < 1) {
+    fprintf(stderr, "FATAL: Invalid number of CPU cores (%d). Must be >= 1.\n",
+            numProcs);
+    return 1;
+  }
   printf("Will use %d CPU threads for fitting.\n", numProcs);
   g_imagePixels = (size_t)nrPxX * nrPxY;
 
@@ -876,6 +942,19 @@ int main(int argc, char *argv[]) {
       doFwd = 1;
   }
 
+  // Forward-cache writer: one writer at a time (lock on <outfn>.lock), a
+  // sibling's fresh publication is reused, and the cache is written as
+  // <outfn>.partial.<host>.<pid> and renamed onto outfn only when complete
+  // and durable; the read-back below opens outfn by name after that. See the forward-cache helpers in the header.
+  FwdCache fc;
+  int fwdFd = -1;
+  if (doFwd == 1) {
+    fwdFd = beginForwardCacheWrite(outfn, (size_t)nrOrients, maxNrSpots, &fc);
+    if (fwdFd == FWD_CACHE_REUSE)
+      doFwd = 0;
+    else if (fwdFd < 0) // reason already printed
+      return 1;
+  }
   if (doFwd == 1) {
     // Forward simulation on CPU (same as LaueMatchingGPU.cu)
     printf("Running forward simulation (%zu orientations)...\n", nrOrients);
@@ -890,11 +969,6 @@ int main(int argc, char *argv[]) {
     // No O_SYNC: on network filesystems synchronous writes serialize the
     // 12 GB forward table against every pwrite and effectively stall. Write
     // buffered and fsync once at the end (matches LaueMatchingCPU).
-    int fwdFd = open(outfn, O_CREAT | O_WRONLY, S_IRUSR | S_IWUSR);
-    if (fwdFd < 0) {
-      printf("Could not open forward output file %s.\n", outfn);
-      return 1;
-    }
 #pragma omp parallel num_threads(numProcs)
     {
       int procNr = omp_get_thread_num();
@@ -908,14 +982,17 @@ int main(int argc, char *argv[]) {
           (endOrientNr > startOrientNr) ? endOrientNr - startOrientNr : 0;
       size_t szArrThread = nrOrientsThread * (1 + 2 * maxNrSpots);
       size_t OffsetHere = (size_t)procNr;
-      OffsetHere *= (size_t)((int)ceil((double)nrOrients / (double)numProcs)) *
-                    (1 + 2 * maxNrSpots);
+      // size_t, not via int: the ceil used to be cast through (int).
+      OffsetHere *= (size_t)ceil((double)nrOrients / (double)numProcs) *
+                    (size_t)(1 + 2 * maxNrSpots);
       OffsetHere *= sizeof(uint16_t);
-      uint16_t *outArrThis = (uint16_t *)calloc(szArrThread, sizeof(uint16_t));
+      // calloc(0) may legally return NULL (empty trailing slab); never ask for 0.
+      uint16_t *outArrThis = (uint16_t *)calloc(
+          szArrThread ? szArrThread : 1, sizeof(uint16_t));
       if (!outArrThis) {
         fprintf(stderr,
                 "FATAL: calloc failed for per-thread forward-sim buffers.\n");
-        exit(EXIT_FAILURE);
+        abandonForwardCache(fc.partial); // other threads may already be writing
       }
       size_t orientNr;
       for (orientNr = startOrientNr; orientNr < endOrientNr; orientNr++) {
@@ -982,13 +1059,16 @@ int main(int argc, char *argv[]) {
         outArrThis[(orientNr - startOrientNr) * (1 + 2 * maxNrSpots)] =
             (uint16_t)spotNr;
       }
-      pwrite(fwdFd, outArrThis, szArrThread * sizeof(uint16_t), OffsetHere);
+      // Retries short writes; on failure removes the partial cache and exits
+      // (the return value used to be ignored). See LaueMatchingHeaders.h.
+      writeForwardSlabOrDie(fwdFd, outArrThis, szArrThread * sizeof(uint16_t),
+                            OffsetHere, procNr, fc.partial);
       free(outArrThis);
     }
-    if (fsync(fwdFd) < 0)
-      fprintf(stderr, "WARNING: fsync(forward file) failed: %s\n",
-              strerror(errno));
-    close(fwdFd);
+    // Durable or abandoned: an fsync/close failure now removes the cache, as
+    // a failed write does (this was a WARNING). See the header.
+    finishForwardCacheOrDie(fwdFd, fc.partial, fc.target);
+    releaseForwardCacheLock(&fc);
     free(matchedArrFwd);
     printf("Forward simulation completed in %lf s\n", omp_get_wtime() - wt_fwd);
   }
@@ -1116,6 +1196,11 @@ int main(int argc, char *argv[]) {
   // Allocate per-stream contexts
   StreamContext *streams =
       (StreamContext *)calloc(numStreams, sizeof(StreamContext));
+  if (streams == NULL) {
+    fprintf(stderr, "FATAL: could not allocate %d stream contexts.\n",
+            numStreams);
+    return 1;
+  }
   for (int s = 0; s < numStreams; s++) {
     gpuErrchk(cudaStreamCreate(&streams[s].stream));
     gpuErrchk(cudaMalloc(&streams[s].d_image, imageBytes));
@@ -1287,7 +1372,7 @@ int main(int argc, char *argv[]) {
       uint16_t *d_chunkPtr =
           outArrOnGPU ? d_outArr + offset * stride : d_outArr;
       compare<<<blocks, 1024, 0, ctx->stream>>>(
-          nrPxX, thisChunk, maxNrSpots, minIntensity, minNrSpots,
+          nrPxX, nrPxY, thisChunk, maxNrSpots, minIntensity, minNrSpots,
           (float)minSpotIntensity, d_chunkPtr,
           ctx->d_image, ctx->d_matchCount, ctx->d_matchIdx,
           ctx->d_matchScore, offset);

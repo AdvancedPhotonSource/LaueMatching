@@ -19,7 +19,6 @@ double cellVol;
 double phiVol;
 int nSym;
 double Symm[24][4];
-int useBobyqa = 1; // default: BOBYQA
 
 // ── Usage ───────────────────────────────────────────────────────────────
 static void usageCPU() {
@@ -36,8 +35,10 @@ static void usageCPU() {
        "* must use multiple cores to distribute in that case\n\n"
        "Parameter file with the following parameters: \n"
        "\t\t* LatticeParameter (in nm and degrees),\n"
-       "\t\t* tol_latC (in %%, 6 values),\n"
-       "\t\t* tol_c_over_a (in %%, 1 value),\n"
+       "\t\t* tol_latC (FRACTION of each lattice parameter, 6 values;\n"
+       "\t\t  0 = hold fixed). 0.01 means +-1%, NOT 1.0.\n"
+       "\t\t* tol_c_over_a (FRACTION of c/a, 1 value; 0 = hold fixed,\n"
+       "\t\t  overrides tol_latC). 0.01 means +-1%, NOT 1.0.\n"
        "\t\t* SpaceGroup,\n"
        "\t\t* P_Array, R_Array, PxX, PxY, NrPxX, NrPxY,\n"
        "\t\t* Elo, Ehi, MaxNrLaueSpots, ForwardFile, DoFwd,\n"
@@ -57,7 +58,9 @@ int main(int argc, char *argv[]) {
     printf("Could not open parameter file %s.\n", paramFN);
     return 1;
   }
-  char aline[1000], *str, dummy[1000], dummy2[1000], outfn[1000];
+  // outfn starts empty so a missing ForwardFile hits forwardCacheUsable()'s
+  // blank-path check deterministically instead of reading stack garbage.
+  char aline[1000], *str, dummy[1000], dummy2[1000], outfn[1000] = "";
   // Initialise detector/geometry params so a missing config key is detectable
   // and never feeds a garbage value into an allocation or a division.
   int LowNr, nrPxX = 0, nrPxY = 0, maxNrSpots = 500, minNrSpots = 5, doFwd = 1;
@@ -81,22 +84,32 @@ int main(int argc, char *argv[]) {
     str = "LatticeParameter";
     LowNr = strncmp(aline, str, strlen(str));
     if (LowNr == 0) {
-      sscanf(aline, "%s %lf %lf %lf %lf %lf %lf", dummy, &LatticeParameter[0],
-             &LatticeParameter[1], &LatticeParameter[2], &LatticeParameter[3],
-             &LatticeParameter[4], &LatticeParameter[5]);
+      if (!paramLineComplete(
+              sscanf(aline, "%s %lf %lf %lf %lf %lf %lf", dummy,
+                     &LatticeParameter[0], &LatticeParameter[1],
+                     &LatticeParameter[2], &LatticeParameter[3],
+                     &LatticeParameter[4], &LatticeParameter[5]),
+              7, "LatticeParameter", aline))
+        return 1;
       calcV(LatticeParameter);
       continue;
     }
     str = "P_Array";
     LowNr = strncmp(aline, str, strlen(str));
     if (LowNr == 0) {
-      sscanf(aline, "%s %lf %lf %lf", dummy, &pArr[0], &pArr[1], &pArr[2]);
+      if (!paramLineComplete(sscanf(aline, "%s %lf %lf %lf", dummy, &pArr[0],
+                                    &pArr[1], &pArr[2]),
+                             4, "P_Array", aline))
+        return 1;
       continue;
     }
     str = "R_Array";
     LowNr = strncmp(aline, str, strlen(str));
     if (LowNr == 0) {
-      sscanf(aline, "%s %lf %lf %lf", dummy, &rArr[0], &rArr[1], &rArr[2]);
+      if (!paramLineComplete(sscanf(aline, "%s %lf %lf %lf", dummy, &rArr[0],
+                                    &rArr[1], &rArr[2]),
+                             4, "R_Array", aline))
+        return 1;
       continue;
     }
     str = "tol_c_over_a";
@@ -132,13 +145,17 @@ int main(int argc, char *argv[]) {
     str = "Elo";
     LowNr = strncmp(aline, str, strlen(str));
     if (LowNr == 0) {
-      sscanf(aline, "%s %lf", dummy, &Elo);
+      if (!paramLineComplete(sscanf(aline, "%s %lf", dummy, &Elo), 2,
+                             "Elo", aline))
+        return 1;
       continue;
     }
     str = "Ehi";
     LowNr = strncmp(aline, str, strlen(str));
     if (LowNr == 0) {
-      sscanf(aline, "%s %lf", dummy, &Ehi);
+      if (!paramLineComplete(sscanf(aline, "%s %lf", dummy, &Ehi), 2,
+                             "Ehi", aline))
+        return 1;
       continue;
     }
     str = "DoFwd";
@@ -220,7 +237,7 @@ int main(int argc, char *argv[]) {
     LowNr = strncmp(aline, str, strlen(str));
     if (LowNr == 0) {
       sscanf(aline, "%s %s", dummy, dummy2);
-      useBobyqa = 0; /* Nelder-Mead always; see LaueMatchingHeaders.h */
+      /* Parsed, never acted on: Nelder-Mead always (LaueMatchingHeaders.h). */
       if (strncmp(dummy2, "BOBYQA", 6) == 0)
         printf("NOTE: Optimizer BOBYQA requested, but BOBYQA has been "
                "removed. Using Nelder-Mead, which measured better on "
@@ -229,7 +246,13 @@ int main(int argc, char *argv[]) {
       continue;
     }
   }
+  // Validates the EFFECTIVE tolerances itself (it knows tol_c_over_a
+  // overrides tol_LatC), so its place relative to the zeroing below is moot.
+  if (validateCrystalFitTolerances())
+    return 1;
   if (tol_c_over_a != 0) {
+    // c/a is a ratio at CONSTANT cell volume, so it must not compete with
+    // per-parameter tolerances on a and c; it overrides them.
     for (iter = 0; iter < 6; iter++)
       tol_LatC[iter] = 0;
   }
@@ -245,25 +268,17 @@ int main(int argc, char *argv[]) {
             "Check the parameter file.\n");
     return 1;
   }
+  if (validateDetectorDistance(pArr))
+    return 1;
+  if (validateEnergyBand(Elo, Ehi))
+    return 1;
   c_over_a_orig = LatticeParameter[2] / LatticeParameter[0];
   puts("Parameters read");
 
-  // Rotation matrix (transpose = inverse for det=1 orthogonal matrix)
-  double rotang = CalcLength(rArr[0], rArr[1], rArr[2]);
-  double rotvect[3] = {rArr[0] / rotang, rArr[1] / rotang, rArr[2] / rotang};
-  double rot[3][3] = {
-      {cos(rotang) + (1 - cos(rotang)) * (rotvect[0] * rotvect[0]),
-       (1 - cos(rotang)) * rotvect[0] * rotvect[1] - sin(rotang) * rotvect[2],
-       (1 - cos(rotang)) * rotvect[0] * rotvect[2] + sin(rotang) * rotvect[1]},
-      {(1 - cos(rotang)) * rotvect[1] * rotvect[0] + sin(rotang) * rotvect[2],
-       cos(rotang) + (1 - cos(rotang)) * (rotvect[1] * rotvect[1]),
-       (1 - cos(rotang)) * rotvect[1] * rotvect[2] - sin(rotang) * rotvect[0]},
-      {(1 - cos(rotang)) * rotvect[2] * rotvect[0] - sin(rotang) * rotvect[1],
-       (1 - cos(rotang)) * rotvect[2] * rotvect[1] + sin(rotang) * rotvect[0],
-       cos(rotang) + (1 - cos(rotang)) * (rotvect[2] * rotvect[2])}};
-  double rotTranspose[3][3] = {{rot[0][0], rot[1][0], rot[2][0]},
-                               {rot[0][1], rot[1][1], rot[2][1]},
-                               {rot[0][2], rot[1][2], rot[2][2]}};
+  // Rotation matrix (transpose = inverse). A zero R_Array is a legitimate
+  // unrotated detector; the helper guards its 0/0 axis. See the header.
+  double rotTranspose[3][3];
+  detectorRotationTranspose(rArr, rotTranspose);
 
   // Read orientations from a binary file
   puts("Reading orientations");
@@ -296,6 +311,12 @@ int main(int argc, char *argv[]) {
     fflush(stdout);
   } else {
     orients = (double *)malloc(szFile);
+    if (orients == NULL) {
+      fprintf(stderr, "FATAL: Could not allocate orientations (%zu bytes).\n",
+              szFile);
+      fclose(orientF);
+      return 1;
+    }
     size_t rc = fread(orients, 1, szFile, orientF);
     if (rc != szFile) {
       printf(
@@ -444,19 +465,24 @@ int main(int argc, char *argv[]) {
   size_t outArrMapLen = 0;  // tracked so it can be munmap'd at cleanup
   LowNr = 1;
 
-  // Open the forward file once before the parallel region (if writing)
+  // Open the forward file once before the parallel region (if writing).
+  // No O_SYNC: with batched pwrites we'd otherwise sync per-batch,
+  // serializing writes against compute and inflating wallclock by ~5x.
+  // We fsync once at the very end of the parallel region instead.
+  // Forward-cache writer: one writer at a time (lock on <outfn>.lock), a
+  // sibling's fresh publication is reused, and the cache is written as
+  // <outfn>.partial.<host>.<pid> and renamed onto outfn only when complete
+  // and durable. See the forward-cache helpers in the header.
+  FwdCache fc;
   int fwdFd = -1;
   if (doFwd == 1) {
-    // No O_SYNC: with batched pwrites we'd otherwise sync per-batch,
-    // serializing writes against compute and inflating wallclock by ~5x.
-    // We fsync once at the very end of the parallel region instead.
-    fwdFd = open(outfn, O_CREAT | O_WRONLY,
-                 S_IRUSR | S_IWUSR); // FIX: open once, not per-thread
-    if (fwdFd < 0) {
-      printf("Could not open forward output file %s.\n", outfn);
+    fwdFd = beginForwardCacheWrite(outfn, (size_t)nrOrients, maxNrSpots, &fc);
+    if (fwdFd == FWD_CACHE_REUSE)
+      doFwd = 0;
+    else if (fwdFd < 0) // reason already printed
       return 1;
-    }
-  } else {
+  }
+  if (doFwd == 0) {
     // Read existing forward file
     str = "/dev/shm";
     LowNr = strncmp(outfn, str, strlen(str));
@@ -509,6 +535,8 @@ int main(int argc, char *argv[]) {
               procNr,
               (double)(batchEntries * sizeof(*outArrBatch)) / (1024.0 * 1024.0),
               batchSize, maxNrSpots);
+      if (doFwd == 1)
+        abandonForwardCache(fc.partial); // other threads may already be writing
       exit(EXIT_FAILURE);
     }
 
@@ -624,6 +652,8 @@ int main(int argc, char *argv[]) {
             if (E < Elo || E > Ehi)
               continue;
             badSpot = 0;
+            // Dedup by INTEGER PIXEL here; the fit stage (calcOverlap) dedups
+            // by q-hat instead. Deliberate -- see pixelClaimed() before unifying.
             if (pixelClaimed(&outArrBatch[local * entriesPerOrient + 1],
                              spotNr, ipx, ipy))
               badSpot = 1;
@@ -652,25 +682,11 @@ int main(int argc, char *argv[]) {
       }
       // ── End inner orientation loop ───────────────────────────────────
 
-      // Write this batch back to the cache (doFwd==1).
-      if (doFwd == 1) {
-        size_t bytesWritten = 0;
-        while (bytesWritten < bytesThisBatch) {
-          ssize_t rc =
-              pwrite(fwdFd, (char *)outArrBatch + bytesWritten,
-                     bytesThisBatch - bytesWritten,
-                     batchByteOffset + bytesWritten);
-          if (rc < 0) {
-            fprintf(stderr,
-                    "FATAL: thread %d pwrite failed at offset %zu "
-                    "(wrote %zu of %zu bytes): %s\n",
-                    procNr, batchByteOffset + bytesWritten, bytesWritten,
-                    bytesThisBatch, strerror(errno));
-            exit(EXIT_FAILURE);
-          }
-          bytesWritten += (size_t)rc;
-        }
-      }
+      // Write this batch back to the cache (doFwd==1). Retries short writes;
+      // on failure removes the partial cache and exits. See the header.
+      if (doFwd == 1)
+        writeForwardSlabOrDie(fwdFd, outArrBatch, bytesThisBatch,
+                              batchByteOffset, procNr, fc.partial);
     } // end batch loop
 
     if (rfd >= 0)
@@ -679,11 +695,10 @@ int main(int argc, char *argv[]) {
   }
   if (fwdFd >= 0) {
     // Single fsync at end (instead of per-batch O_SYNC) so the cache
-    // is durable on disk before subsequent runs try to read it.
-    if (fsync(fwdFd) < 0) {
-      fprintf(stderr, "WARNING: fsync(fwdFd) failed: %s\n", strerror(errno));
-    }
-    close(fwdFd);
+    // is durable on disk before subsequent runs try to read it. A failure is
+    // fatal and removes the cache, as a failed write does; see the header.
+    finishForwardCacheOrDie(fwdFd, fc.partial, fc.target);
+    releaseForwardCacheLock(&fc);
   }
 
   double time2 = omp_get_wtime() - start_time;

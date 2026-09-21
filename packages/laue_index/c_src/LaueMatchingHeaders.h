@@ -11,8 +11,10 @@
 #ifndef LAUE_MATCHING_HEADERS_H
 #define LAUE_MATCHING_HEADERS_H
 
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <math.h>
 #include "nelder_mead.h"
 #include <omp.h>
@@ -23,11 +25,15 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/utsname.h>
 #include <time.h>
 #include <unistd.h>
 
 #ifdef __linux__
 #include <malloc.h>
+#endif
+#ifndef PATH_MAX
+#define PATH_MAX 4096
 #endif
 
 // ── Constants ───────────────────────────────────────────────────────────
@@ -95,6 +101,376 @@ static inline bool forwardCacheUsable(const char *outfn, size_t nrOrients,
   return true;
 }
 
+// ── Forward-simulation cache: begin, write, finish, abandon ─────────────
+// ATOMIC PUBLICATION. The cache is never written under its final name. It is
+// written to `<ForwardFile>.partial.<host>.<pid>` in the SAME directory (so
+// rename is atomic on the same filesystem) and renamed onto ForwardFile only
+// after every slab is written and fsync/close succeeded. So the final name
+// only ever holds a complete cache (or whatever was there before), and:
+//   - a run that FAILS removes its partial file (abandonForwardCache);
+//   - a run that is KILLED (SIGKILL, node loss, OOM) leaves only a
+//     `*.partial.*` file, which forwardCacheUsable() never looks at. Such
+//     leftovers are dead weight and can be deleted at any time; the next
+//     writer that holds the lock deletes them itself.
+// Before this, each thread pwrote into ForwardFile itself, so a failed or
+// killed run could leave a file with a zero-filled hole that other threads'
+// slabs had extended to exactly the size forwardCacheUsable() accepts; a later
+// DoFwd 0 run then read the hole as "no spots".
+//
+// ONE WRITER AT A TIME. Sibling shards on one host (and shards on other hosts
+// sharing the filesystem) share one ForwardFile and cold-start together.
+// Unserialised, each would write its own ~12 GB partial -- 4 shards = 48 GB,
+// and under /dev/shm that is RAM. So simulate-and-publish runs under an
+// advisory fcntl() write lock on `<ForwardFile>.lock` (F_SETLKW). fcntl locks
+// are what NFS supports (through lockd/NLM, or natively in NFSv4); flock() is
+// not reliably cross-host on NFS. A waiter RE-CHECKS after acquiring the lock:
+// if a sibling published a new ForwardFile meanwhile it reads that instead of
+// simulating. If locking is unsupported (ENOLCK, ENOSYS, EOPNOTSUPP, EINVAL,
+// no lockd) or the lock file cannot be opened, a WARNING is printed and the
+// run proceeds UNLOCKED -- the pre-lock behaviour -- rather than risk hanging.
+// The lock is released by the kernel if the holder dies, so it cannot be left
+// held. The .lock file itself is left in place (deleting lock files races).
+//
+// Ordering in every main(): forwardCacheUsable() (DoFwd 0) runs BEFORE any of
+// this, so an existing, possibly stale ForwardFile is judged before a write
+// starts and is never read while one is in progress; the rename then replaces
+// it whole. Only LaueMatchingGPUStream reads the cache back by name after
+// simulating, and it does so after finishForwardCacheOrDie() has renamed it.
+//
+// Not covered: the directory entry of the rename is not fsynced, so after a
+// power loss the final name may still hold the PREVIOUS file (never a mix).
+#define FWD_CACHE_REUSE (-2)
+
+typedef struct {
+  char target[PATH_MAX];      // ForwardFile, symlinks resolved
+  char partial[PATH_MAX + 320];
+  char lock[PATH_MAX + 16];
+  int lockFd;                 // -1: not locked (none taken, or unsupported)
+} FwdCache;
+
+// Resolve ForwardFile to where the bytes should live. A symlinked cache is
+// replaced at its TARGET (on the target's filesystem), not by a regular file
+// in the link's directory, which is what open() used to write through to.
+static inline int resolveForwardCachePath(const char *outfn, char *target) {
+  if (realpath(outfn, target) != NULL)
+    return 0;
+  if (errno != ENOENT) {
+    fprintf(stderr, "FATAL: cannot resolve ForwardFile %s: %s\n", outfn,
+            strerror(errno));
+    return -1;
+  }
+  // Does not exist yet: resolve its directory and append the name.
+  char dir[PATH_MAX], rdir[PATH_MAX];
+  const char *slash = strrchr(outfn, '/');
+  const char *base = slash ? slash + 1 : outfn;
+  if (slash == NULL)
+    strcpy(dir, ".");
+  else if (slash == outfn)
+    strcpy(dir, "/");
+  else {
+    size_t n = (size_t)(slash - outfn);
+    if (n >= sizeof(dir)) {
+      fprintf(stderr, "FATAL: ForwardFile path too long: %s\n", outfn);
+      return -1;
+    }
+    memcpy(dir, outfn, n);
+    dir[n] = '\0';
+  }
+  if (base[0] == '\0' || realpath(dir, rdir) == NULL) {
+    fprintf(stderr, "FATAL: the directory of ForwardFile %s does not exist or "
+                    "cannot be resolved.\n",
+            outfn);
+    return -1;
+  }
+  int n = snprintf(target, PATH_MAX, "%s%s%s", rdir,
+                   strcmp(rdir, "/") == 0 ? "" : "/", base);
+  if (n < 0 || n >= PATH_MAX) {
+    fprintf(stderr, "FATAL: ForwardFile path too long: %s\n", outfn);
+    return -1;
+  }
+  return 0;
+}
+
+// Take the writer lock. Blocks (F_SETLKW) while a sibling holds it; says so
+// first. Returns the lock fd, or -1 after a WARNING when locking is not
+// available -- the caller then proceeds unlocked.
+static inline int lockForwardCache(const char *lockfn) {
+  // 0666 subject to umask: every beamline account that shares the cache must
+  // be able to open the lock file O_RDWR, which a write lock requires.
+  int fd = open(lockfn, O_RDWR | O_CREAT, 0666);
+  if (fd < 0) {
+    fprintf(stderr, "WARNING: cannot open the forward-cache lock %s (%s); "
+                    "simulating WITHOUT the lock.\n",
+            lockfn, strerror(errno));
+    return -1;
+  }
+  struct flock fl;
+  memset(&fl, 0, sizeof(fl));
+  fl.l_type = F_WRLCK;
+  fl.l_whence = SEEK_SET; // l_start = l_len = 0: the whole file
+  if (fcntl(fd, F_SETLK, &fl) == 0)
+    return fd;
+  if (errno == EACCES || errno == EAGAIN) {
+    printf("Another process is simulating this forward cache; waiting for "
+           "%s ...\n",
+           lockfn);
+    fflush(stdout);
+    int rc;
+    do {
+      rc = fcntl(fd, F_SETLKW, &fl);
+    } while (rc != 0 && errno == EINTR);
+    if (rc == 0) {
+      printf("Forward-cache lock acquired.\n");
+      return fd;
+    }
+  }
+  fprintf(stderr, "WARNING: advisory locking is not available for %s (%s); "
+                  "simulating WITHOUT the lock. Concurrent writers each need "
+                  "space for a full partial cache.\n",
+          lockfn, strerror(errno));
+  close(fd);
+  return -1;
+}
+
+static inline void releaseForwardCacheLock(FwdCache *fc) {
+  if (fc->lockFd >= 0)
+    close(fc->lockFd); // closing releases this process's fcntl lock
+  fc->lockFd = -1;
+}
+
+// With the lock held no other (locking) writer is active, so any partial file
+// for this ForwardFile belongs to a dead one. Delete them.
+static inline void sweepStalePartials(const char *target) {
+  char dir[PATH_MAX];
+  const char *slash = strrchr(target, '/'); // target is absolute
+  size_t n = (size_t)(slash - target);
+  if (n == 0)
+    n = 1; // "/"
+  memcpy(dir, target, n);
+  dir[n] = '\0';
+  char prefix[PATH_MAX];
+  snprintf(prefix, sizeof(prefix), "%s.partial.", slash + 1);
+  size_t plen = strlen(prefix);
+  DIR *d = opendir(dir);
+  if (d == NULL)
+    return;
+  struct dirent *e;
+  while ((e = readdir(d)) != NULL) {
+    if (strncmp(e->d_name, prefix, plen) != 0)
+      continue;
+    char p[2 * PATH_MAX + 2];
+    int pn = snprintf(p, sizeof(p), "%s/%s", strcmp(dir, "/") == 0 ? "" : dir,
+                      e->d_name);
+    if (pn < 0 || (size_t)pn >= sizeof(p))
+      continue;
+    if (unlink(p) == 0)
+      printf("Removed a partial forward cache left by a dead writer: %s\n", p);
+    else
+      fprintf(stderr, "WARNING: could not remove stale partial %s: %s\n", p,
+              strerror(errno));
+  }
+  closedir(d);
+}
+
+// Everything before the first slab write. Returns:
+//   >= 0            the partial's fd: simulate, write, finishForwardCacheOrDie,
+//                   then releaseForwardCacheLock;
+//   FWD_CACHE_REUSE a sibling published a usable ForwardFile while this run
+//                   waited for the lock: take the DoFwd 0 read path instead;
+//   -1              fatal, reason printed; exit non-zero.
+// The re-check accepts only a file that CHANGED (new inode) while waiting, so
+// an explicit DoFwd 1 over an existing right-sized cache still re-simulates.
+static inline int beginForwardCacheWrite(const char *outfn, size_t nrOrients,
+                                         int maxNrSpots, FwdCache *fc) {
+  fc->lockFd = -1;
+  fc->partial[0] = '\0';
+  if (outfn == NULL || outfn[0] == '\0') {
+    fprintf(stderr, "FATAL: no ForwardFile specified; cannot write the "
+                    "forward cache.\n");
+    return -1;
+  }
+  if (resolveForwardCachePath(outfn, fc->target) != 0)
+    return -1;
+  snprintf(fc->lock, sizeof(fc->lock), "%s.lock", fc->target);
+  struct stat before, after;
+  int existedBefore = (stat(fc->target, &before) == 0);
+  fc->lockFd = lockForwardCache(fc->lock);
+  if (stat(fc->target, &after) == 0 &&
+      (!existedBefore || after.st_ino != before.st_ino ||
+       after.st_dev != before.st_dev) &&
+      forwardCacheUsable(fc->target, nrOrients, maxNrSpots)) {
+    printf("A sibling published %s while this run waited; reading it instead "
+           "of simulating.\n",
+           fc->target);
+    releaseForwardCacheLock(fc);
+    return FWD_CACHE_REUSE;
+  }
+  if (fc->lockFd >= 0)
+    sweepStalePartials(fc->target);
+  // uname(), not gethostname(): the .cu files define _XOPEN_SOURCE 500, under
+  // which some libcs (macOS) do not declare gethostname.
+  char host[256];
+  struct utsname un;
+  if (uname(&un) == 0 && un.nodename[0] != '\0')
+    snprintf(host, sizeof(host), "%s", un.nodename);
+  else
+    strcpy(host, "unknownhost");
+  for (char *c = host; *c; c++)
+    if (*c == '/')
+      *c = '_';
+  int n = snprintf(fc->partial, sizeof(fc->partial), "%s.partial.%s.%ld",
+                   fc->target, host, (long)getpid());
+  if (n < 0 || (size_t)n >= sizeof(fc->partial)) {
+    fprintf(stderr, "FATAL: ForwardFile path too long: %s\n", fc->target);
+    return -1;
+  }
+  // 0644 subject to umask (the old open() used 0600, which locked out other
+  // beamline accounts that read the same cache). O_EXCL: host+pid is unique,
+  // so an existing file means something is badly wrong -- say so, never
+  // truncate someone's in-progress slabs.
+  int fd = open(fc->partial, O_CREAT | O_EXCL | O_WRONLY, 0644);
+  if (fd < 0) {
+    fprintf(stderr, "FATAL: could not create %s: %s\n", fc->partial,
+            strerror(errno));
+    return -1;
+  }
+  {
+    struct stat cur;
+    if (stat(fc->target, &cur) == 0) {
+      // Keep the replaced cache's permissions (as writing in place did).
+      if (fchmod(fd, cur.st_mode & 0777) != 0)
+        fprintf(stderr, "WARNING: could not copy the mode of %s: %s\n",
+                fc->target, strerror(errno));
+      // Fail NOW, not after the whole simulation: in a sticky directory
+      // (/dev/shm, /tmp) only the owner may replace the existing file.
+      struct stat dst;
+      char dir[PATH_MAX];
+      const char *slash = strrchr(fc->target, '/');
+      size_t dn = (size_t)(slash - fc->target);
+      if (dn == 0)
+        dn = 1;
+      memcpy(dir, fc->target, dn);
+      dir[dn] = '\0';
+      if (cur.st_uid != geteuid() && stat(dir, &dst) == 0 &&
+          (dst.st_mode & S_ISVTX)) {
+        fprintf(stderr, "FATAL: %s is owned by another user in a sticky "
+                        "directory; this run could not replace it.\n",
+                fc->target);
+        close(fd);
+        unlink(fc->partial);
+        return -1;
+      }
+    }
+  }
+  return fd;
+}
+
+// Remove the PARTIAL cache and exit. Every fatal path taken after the partial
+// file was opened ends here: a failed slab write, a failed per-thread
+// allocation, a failed fsync/close/rename. The final ForwardFile, if one
+// existed before this run, is not touched.
+//
+// SINGLE ENTRY. On ENOSPC/EDQUOT every writer thread fails at about the same
+// moment, and POSIX leaves concurrent exit() undefined (glibc >= 2.37
+// serialises it; older beamline glibc may not). The named critical section
+// admits one thread: it unlinks and calls exit(); any other thread arriving
+// blocks at the critical and never returns -- the process ends under it. The
+// fcntl lock, if held, is released by the kernel at exit.
+static inline void abandonForwardCache(const char *partialfn) {
+#pragma omp critical(laue_abandon_forward_cache)
+  {
+    if (unlink(partialfn) == 0)
+      fprintf(stderr, "  Removed the partial forward cache %s; any existing "
+                      "ForwardFile was left untouched.\n",
+              partialfn);
+    else if (errno != ENOENT)
+      fprintf(stderr, "  Could NOT remove the partial forward cache %s (%s). "
+                      "It is never read and can be deleted.\n",
+              partialfn, strerror(errno));
+    exit(EXIT_FAILURE);
+  }
+}
+
+// Write one thread's slab: `nbytes` at `offset` of the partial file, retrying
+// short writes; on failure abandon the partial file and exit. ONE
+// implementation for all three binaries, for the same reason as
+// forwardCacheUsable() above. A second failing thread gets ENOENT from the
+// unlink, which is harmless; threads still writing to the unlinked inode are
+// harmless too.
+//
+// The three copies this replaces each failed differently: the CPU loop spun
+// forever on rc == 0, LaueMatchingGPU printed and carried on, and the stream
+// daemon ignored the return value entirely.
+static inline void writeForwardSlabOrDie(int fd, const void *buf,
+                                         size_t nbytes, size_t offset,
+                                         int procNr, const char *partialfn) {
+  size_t done = 0;
+  while (done < nbytes) {
+    ssize_t rc = pwrite(fd, (const char *)buf + done, nbytes - done,
+                        (off_t)(offset + done));
+    if (rc < 0 && errno == EINTR)
+      continue; // the stream daemon installs handlers without SA_RESTART
+    if (rc <= 0) {
+      const char *why = (rc < 0) ? strerror(errno) : "wrote 0 bytes";
+      fprintf(stderr,
+              "FATAL: thread %d forward-cache pwrite failed at offset %zu "
+              "(wrote %zu of %zu bytes): %s\n",
+              procNr, offset + done, done, nbytes, why);
+      abandonForwardCache(partialfn);
+    }
+    done += (size_t)rc;
+  }
+}
+
+// Make the partial cache durable, close it, and publish it by rename -- or
+// abandon it.
+//
+// A cache the kernel has not actually committed is the same hazard as a failed
+// write: fsync reporting EIO/ENOSPC/EDQUOT means data a later DoFwd 0 run would
+// trust may never reach the disk, and on NFS a deferred write error can surface
+// only here or at close(). So both take the write-failure path, and nothing is
+// published.
+//
+// EXCEPTION, kept as a WARNING: EINVAL / EROFS / ENOTSUP / EOPNOTSUPP mean
+// "this fd or filesystem does not implement fsync" (Linux fsync(2): special
+// files; some FUSE and network mounts; tmpfs-like targets). There durability is
+// not the filesystem's contract at all, the data written by pwrite is still
+// what a reader will see, and treating it as fatal would make the indexer
+// unusable on such a mount without making anything safer. EINTR is retried.
+// A failing close() is fatal except EINTR, whose fd state is unspecified and
+// which does not by itself mean data was lost.
+static inline void finishForwardCacheOrDie(int fd, const char *partialfn,
+                                           const char *outfn) {
+  int rc;
+  do {
+    rc = fsync(fd);
+  } while (rc != 0 && errno == EINTR);
+  if (rc != 0) {
+    int e = errno;
+    if (e == EINVAL || e == EROFS || e == ENOTSUP || e == EOPNOTSUPP) {
+      fprintf(stderr,
+              "WARNING: fsync is not supported for the forward cache %s (%s); "
+              "its durability is not guaranteed by this filesystem.\n",
+              partialfn, strerror(e));
+    } else {
+      fprintf(stderr, "FATAL: fsync of the forward cache %s failed: %s\n",
+              partialfn, strerror(e));
+      close(fd);
+      abandonForwardCache(partialfn);
+    }
+  }
+  if (close(fd) != 0 && errno != EINTR) {
+    fprintf(stderr, "FATAL: close of the forward cache %s failed: %s\n",
+            partialfn, strerror(errno));
+    abandonForwardCache(partialfn);
+  }
+  if (rename(partialfn, outfn) != 0) {
+    fprintf(stderr, "FATAL: could not rename %s onto %s: %s\n", partialfn,
+            outfn, strerror(errno));
+    abandonForwardCache(partialfn);
+  }
+}
+
 // ── Comparison: one spot row against the image ──────────────────────────
 // The ONE place a predicted reflection is tested against the detector image.
 //
@@ -147,6 +523,16 @@ static inline void compareRowToImage(const uint16_t *row, const double *image,
 // `spots` points at the first (ipx, ipy) pair of this orientation's row, i.e.
 // one past the spot-count slot. Order is preserved: the FIRST reflection to
 // claim a pixel keeps it, exactly as the mask behaved.
+//
+// TWO DEDUP RULES, ON PURPOSE. This coarse (forward-cache) stage dedups by
+// INTEGER PIXEL and scores `totInt * sqrt(nSpots)` (Intensity*sqrt(N)). The
+// fit stage -- calcOverlap / calcOverlapFiltered / writeCalcOverlap below --
+// dedups by UNIT q-hat (|d| < 1e-6 per component) and scores
+// `nrPos * sqrt(sum)` (N*sqrt(Intensity)). Both collapse harmonics ((111),
+// (222), ... share q-hat, hence the pixel); they differ only when two
+// NON-parallel reflections land on one pixel (one here, two there). The cache
+// layout is (ipx, ipy) pairs with no q-hat to compare, and the fit stage needs
+// sub-pixel identity, so do not "unify" them without re-measuring both.
 static inline int pixelClaimed(const uint16_t *spots, int spotNr, int ipx,
                                int ipy) {
   for (int i = 0; i < spotNr; i++)
@@ -176,11 +562,12 @@ extern double cellVol;
 extern double phiVol;
 extern int nSym;
 extern double Symm[24][4];
-// Retained only so an existing `Optimizer BOBYQA` line in a parameter file
-// still parses. BOBYQA is gone -- Nelder-Mead is used unconditionally, and
-// measured BETTER on this objective (see FitOrientation). Requesting BOBYQA
-// now prints a notice and proceeds with Nelder-Mead.
-extern int useBobyqa; // vestigial: reported, never selects an algorithm
+// There is no optimiser switch. Refinement is Nelder-Mead unconditionally (see
+// FitOrientation); an `Optimizer ...` line in a parameter file is still parsed
+// so old files keep working, and `Optimizer BOBYQA` prints a notice and
+// proceeds with Nelder-Mead. The former `useBobyqa` global was written by that
+// parse and read by nothing -- and was initialised to 1 "default: BOBYQA",
+// which described an algorithm that no longer exists -- so it is gone.
 
 // ── Optimization data bundle ────────────────────────────────────────────
 struct dataFit {
@@ -508,6 +895,177 @@ static inline void calcV(double LatC[6]) {
   cellVol = LatC[0] * LatC[1] * LatC[2] * phiVol;
 }
 
+// ── Parameter-file geometry: refuse what nobody wrote ───────────────────
+// Did a numeric parameter line parse completely? `got` is sscanf's return,
+// `want` counts the key token too. sscanf stops at the first token it cannot
+// convert, so an unfilled template value (`P_Array 0 0 __SET_ME__`) used to
+// leave the remaining numbers at their 0 defaults and the run went ahead on a
+// geometry nobody specified. Returns 1 if complete; else prints a FATAL naming
+// the key and returns 0 (caller exits non-zero).
+static inline int paramLineComplete(int got, int want, const char *key,
+                                    const char *line) {
+  if (got == want)
+    return 1;
+  size_t n = strlen(line);
+  fprintf(stderr,
+          "FATAL: %s needs %d number(s) but only %d parsed from this line:\n"
+          "  %s%s",
+          key, want - 1, got > 1 ? got - 1 : 0, line,
+          (n > 0 && line[n - 1] == '\n') ? "" : "\n");
+  return 0;
+}
+
+// P_Array[2] is the detector distance along its normal: every predicted spot
+// is projected with `xyz * pArr[2] / xyz[2]`, so 0 collapses them all onto one
+// point and the run "works" on nothing. Zero is what a missing P_Array line
+// or an unparsed value leaves, never a real geometry. Written `!(fabs > 0)`
+// so NaN is refused too. Returns 0 on success, 1 on a rejected value.
+static inline int validateDetectorDistance(const double pArr[3]) {
+  if (!(fabs(pArr[2]) > 0.0)) {
+    fprintf(stderr,
+            "FATAL: P_Array[2] (detector distance) is %g. It must be non-zero; "
+            "a missing or unfilled P_Array line leaves it 0. Check the "
+            "parameter file.\n",
+            pArr[2]);
+    return 1;
+  }
+  return 0;
+}
+
+// The energy band [Elo, Ehi] (keV) every predicted reflection must fall in.
+// Both default to 5/30 when their line is missing or unparsed, so a template's
+// `Elo __SET_ME__` used to run silently at 5 keV; paramLineComplete now refuses
+// the unparsed line, and this refuses a band that cannot be real. Written
+// `!(0 < Elo && Elo < Ehi)` so NaN is refused too. Returns 0 on success, 1 on
+// a rejected band.
+static inline int validateEnergyBand(double Elo, double Ehi) {
+  if (!(Elo > 0.0 && Ehi > Elo)) {
+    fprintf(stderr,
+            "FATAL: energy band Elo = %g keV, Ehi = %g keV is invalid; it "
+            "must satisfy 0 < Elo < Ehi. Check the parameter file.\n",
+            Elo, Ehi);
+    return 1;
+  }
+  return 0;
+}
+
+// Detector rotation from the R_Array rotation vector (axis * angle, radians).
+//
+// |r| == 0 is LEGITIMATE: a detector exactly perpendicular to its P_Array
+// axis, with no rotation. The axis r/|r| is then 0/0 = NaN, and the NaN rode
+// through Rodrigues (0 * NaN = NaN) into every predicted spot. With the angle
+// zero the axis is irrelevant -- cos 0 = 1, sin 0 = 0, 1 - cos 0 = 0 -- so any
+// unit axis gives the exact identity; use z. Guarded, not rejected. (An
+// unfilled R_Array is caught separately by paramLineComplete.)
+static inline void detectorRotationTranspose(const double rArr[3],
+                                             double rotTranspose[3][3]) {
+  double rotang = CalcLength(rArr[0], rArr[1], rArr[2]);
+  double rotvect[3] = {0.0, 0.0, 1.0};
+  if (rotang > 0.0) {
+    rotvect[0] = rArr[0] / rotang;
+    rotvect[1] = rArr[1] / rotang;
+    rotvect[2] = rArr[2] / rotang;
+  }
+  double c = cos(rotang), s = sin(rotang), t = 1 - cos(rotang);
+  double rot[3][3] = {
+      {c + t * (rotvect[0] * rotvect[0]),
+       t * rotvect[0] * rotvect[1] - s * rotvect[2],
+       t * rotvect[0] * rotvect[2] + s * rotvect[1]},
+      {t * rotvect[1] * rotvect[0] + s * rotvect[2],
+       c + t * (rotvect[1] * rotvect[1]),
+       t * rotvect[1] * rotvect[2] - s * rotvect[0]},
+      {t * rotvect[2] * rotvect[0] - s * rotvect[1],
+       t * rotvect[2] * rotvect[1] + s * rotvect[0],
+       c + t * (rotvect[2] * rotvect[2])}};
+  // Transpose = inverse for a proper rotation.
+  for (int i = 0; i < 3; i++)
+    for (int j = 0; j < 3; j++)
+      rotTranspose[i][j] = rot[j][i];
+}
+
+// Reject a crystal-fit tolerance that was written as a PERCENT.
+//
+// `tol_LatC` and `tol_c_over_a` are FRACTIONS: the bounds are formed as
+// `value * (1 -/+ tol)`. A tolerance of 1.0 therefore puts the lower bound at
+// ZERO and the upper at twice the seed -- a and c are then free to collapse
+// through zero, and on a staircase objective the simplex wanders rather than
+// failing. The usage strings said "in %" until 2026-09-20, so "1.0" meaning
+// "1%" is the natural mistake and it produces a plausible-looking run, not an
+// error. Anything at or above 1.0 cannot be a meaningful elastic tolerance --
+// a 100% strain is not a refinement bound -- so refuse it and say why.
+//
+// Below 1.0 there is still a percent-minded mistake that passes: 0.5 meaning
+// "0.5%" is read as +-50%. Legal as a fraction, but no elastic refinement needs
+// more than ~10%, so anything above WARNTOL is accepted with a WARNING that
+// states the percent it will actually be used as. Not fatal: a deliberately
+// wide bound is the user's call.
+//
+// EFFECTIVE values only. When tol_c_over_a != 0 every main zeroes tol_LatC
+// straight after this call (c/a at constant volume overrides the per-parameter
+// tolerances), so tol_LatC never forms a bound and is not validated here --
+// a NOTE says it is being ignored instead. Checking it anyway would abort a run
+// over a value the fit never uses. Deciding this HERE, rather than by where
+// each main places the call relative to that zeroing, keeps the three
+// binaries in agreement by construction.
+//
+// The tests are written `!(tol >= 0 && tol < MAXTOL)` so a NaN (sscanf accepts
+// "nan") is rejected rather than slipping through both comparisons.
+//
+// Returns 0 on success, 1 on a rejected value (caller should exit non-zero).
+static inline int validateCrystalFitTolerances(void) {
+  const double MAXTOL = 1.0;
+  const double WARNTOL = 0.1;
+  int bad = 0;
+  if (!(tol_c_over_a >= 0.0 && tol_c_over_a < MAXTOL)) {
+    fprintf(stderr,
+            "FATAL: tol_c_over_a = %g is not a valid FRACTION.\n"
+            "  It must satisfy 0 <= tol_c_over_a < 1 (0 disables the c/a fit).\n"
+            "  The bounds are c/a * (1 -/+ tol), so %g would put the lower "
+            "bound at %g.\n"
+            "  If you meant one percent, write 0.01 -- not 1.0.\n",
+            tol_c_over_a, tol_c_over_a, 1.0 - tol_c_over_a);
+    bad = 1;
+  } else if (tol_c_over_a > WARNTOL) {
+    fprintf(stderr,
+            "WARNING: tol_c_over_a = %g is a FRACTION: c/a may move by "
+            "+-%g%%.\n"
+            "  If you meant %g%%, write %g.\n",
+            tol_c_over_a, 100.0 * tol_c_over_a, tol_c_over_a,
+            tol_c_over_a / 100.0);
+  }
+  if (tol_c_over_a != 0.0) {
+    int anyLatC = 0;
+    for (int i = 0; i < 6; i++)
+      if (tol_LatC[i] != 0.0)
+        anyLatC = 1;
+    if (anyLatC)
+      fprintf(stderr,
+              "NOTE: tol_c_over_a is set, so it overrides tol_LatC; "
+              "tol_LatC (%g %g %g %g %g %g) is ignored and not validated.\n",
+              tol_LatC[0], tol_LatC[1], tol_LatC[2], tol_LatC[3], tol_LatC[4],
+              tol_LatC[5]);
+    return bad;
+  }
+  for (int i = 0; i < 6; i++) {
+    if (!(tol_LatC[i] >= 0.0 && tol_LatC[i] < MAXTOL)) {
+      fprintf(stderr,
+              "FATAL: tol_LatC[%d] = %g is not a valid FRACTION.\n"
+              "  It must satisfy 0 <= tol < 1 (0 holds that parameter fixed).\n"
+              "  If you meant one percent, write 0.01 -- not 1.0.\n",
+              i, tol_LatC[i]);
+      bad = 1;
+    } else if (tol_LatC[i] > WARNTOL) {
+      fprintf(stderr,
+              "WARNING: tol_LatC[%d] = %g is a FRACTION: that parameter may "
+              "move by +-%g%%.\n"
+              "  If you meant %g%%, write %g.\n",
+              i, tol_LatC[i], 100.0 * tol_LatC[i], tol_LatC[i],
+              tol_LatC[i] / 100.0);
+    }
+  }
+  return bad;
+}
+
 static inline void calcRecipArray(double Lat[6], int SpaceGroup,
                                   double recip[3][3]) {
   double a = Lat[0], b = Lat[1], c = Lat[2];
@@ -568,6 +1126,17 @@ static inline void calcRecipArray(double Lat[6], int SpaceGroup,
 }
 
 // ── Diffraction overlap calculation ─────────────────────────────────────
+//
+// HARMONICS ARE COUNTED ONCE. (111), (222), (333)... of one orientation share a
+// unit q-hat and therefore one detector pixel; the loop below keeps only the
+// FIRST reflection with a given q-hat (|d| < 1e-6 per component) and skips the
+// rest before they reach the image. So nrPos -- and NMatches, which is
+// writeCalcOverlap's nrPos under the same rule -- cannot stack harmonics. A
+// handbook entry once claimed the opposite; it was wrong.
+// tests/test_c_harmonic_no_stack.py pins this.
+//
+// This q-hat dedup and score (N*sqrt(Intensity)) intentionally differ from the
+// coarse stage's integer-pixel dedup and Intensity*sqrt(N): see pixelClaimed().
 
 static inline double calcOverlap(float *image, double euler[3], int *hkls,
                                  int nhkls, int nrPxX, int nrPxY,
@@ -1227,7 +1796,7 @@ static inline int mergeDuplicateOrientations(double *orients, size_t *rowNrs,
       }
     }
     for (int k = 0; k < 9; k++)
-      FinOrientArr[iterNr * 9 + k] = orients[bestSol * 9 + k];
+      FinOrientArr[iterNr * 9 + k] = orients[(size_t)bestSol * 9 + k];
     dArr[iterNr] = doneArr[gi];
     bsArr[iterNr] = bestSol;
     bsScoreArr[iterNr] = bestIntensity;
@@ -1467,7 +2036,8 @@ static inline void fitAndWriteOrientations(
     FitOrientation(image, eulerCoarse, hkls, nhkls, nrPxX, nrPxY, recip,
                    outArrThisFit, maxNrSpots, rotTranspose, pArr, pxX, pxY, Elo,
                    Ehi, tol, LatticeParameter, eulerFit, latCFit, &mv,
-                   doCrystalFit, validIdx, nValid, 0 /*BOBYQA*/, 0.0,
+                   doCrystalFit, validIdx, nValid,
+                   0 /*forceNelderMead: ignored, Nelder-Mead always*/, 0.0,
                    minSpotIntensity);
     free(validIdx);
     Euler2OrientMat(eulerFit, orientFit);

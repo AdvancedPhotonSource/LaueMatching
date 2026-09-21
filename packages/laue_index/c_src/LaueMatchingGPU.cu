@@ -11,6 +11,12 @@
 #define _XOPEN_SOURCE 500
 #include <cuda.h>
 #include <unistd.h>
+// C++-aware system headers go in BEFORE the extern "C" wrapper: GCC >= 14's
+// <omp.h> (and libstdc++'s <math.h>, which pulls in <cmath>) declare templates,
+// and "template with C linkage" is a hard error. Their include guards then
+// make the header's own includes of them no-ops inside the wrapper.
+#include <math.h>
+#include <omp.h>
 extern "C" {
 #include "LaueMatchingHeaders.h"
 }
@@ -24,7 +30,6 @@ double cellVol;
 double phiVol;
 int nSym;
 double Symm[24][4];
-int useBobyqa = 1; // default: BOBYQA
 
 #define gpuErrchk(ans)                                                         \
   {                                                                            \
@@ -99,8 +104,10 @@ static void usageGPU() {
        "* must use multiple cores to distribute in that case\n\n"
        "Parameter file with the following parameters: \n"
        "\t\t* LatticeParameter (in nm and degrees),\n"
-       "\t\t* tol_latC (in %%, 6 values),\n"
-       "\t\t* tol_c_over_a (in %%, 1 value),\n"
+       "\t\t* tol_latC (FRACTION of each lattice parameter, 6 values;\n"
+       "\t\t  0 = hold fixed). 0.01 means +-1%, NOT 1.0.\n"
+       "\t\t* tol_c_over_a (FRACTION of c/a, 1 value; 0 = hold fixed,\n"
+       "\t\t  overrides tol_latC). 0.01 means +-1%, NOT 1.0.\n"
        "\t\t* SpaceGroup,\n"
        "\t\t* P_Array, R_Array, PxX, PxY, NrPxX, NrPxY,\n"
        "\t\t* Elo, Ehi, MaxNrLaueSpots, ForwardFile, DoFwd,\n"
@@ -120,7 +127,9 @@ int main(int argc, char *argv[]) {
     printf("Could not open parameter file %s.\n", paramFN);
     return 1;
   }
-  char aline[1000], *str, dummy[1000], outfn[1000];
+  // outfn starts empty so a missing ForwardFile hits forwardCacheUsable()'s
+  // blank-path check deterministically instead of reading stack garbage.
+  char aline[1000], *str, dummy[1000], dummy2[1000], outfn[1000] = "";
   int LowNr, nrPxX = 0, nrPxY = 0, maxNrSpots = 500, minNrSpots = 5, doFwd = 1;
   sg_num = 225;
   double pArr[3] = {0, 0, 0}, rArr[3] = {0, 0, 0}, pxX = 0, pxY = 0, Elo = 5,
@@ -139,22 +148,32 @@ int main(int argc, char *argv[]) {
     str = "LatticeParameter";
     LowNr = strncmp(aline, str, strlen(str));
     if (LowNr == 0) {
-      sscanf(aline, "%s %lf %lf %lf %lf %lf %lf", dummy, &LatticeParameter[0],
-             &LatticeParameter[1], &LatticeParameter[2], &LatticeParameter[3],
-             &LatticeParameter[4], &LatticeParameter[5]);
+      if (!paramLineComplete(
+              sscanf(aline, "%s %lf %lf %lf %lf %lf %lf", dummy,
+                     &LatticeParameter[0], &LatticeParameter[1],
+                     &LatticeParameter[2], &LatticeParameter[3],
+                     &LatticeParameter[4], &LatticeParameter[5]),
+              7, "LatticeParameter", aline))
+        return 1;
       calcV(LatticeParameter);
       continue;
     }
     str = "P_Array";
     LowNr = strncmp(aline, str, strlen(str));
     if (LowNr == 0) {
-      sscanf(aline, "%s %lf %lf %lf", dummy, &pArr[0], &pArr[1], &pArr[2]);
+      if (!paramLineComplete(sscanf(aline, "%s %lf %lf %lf", dummy, &pArr[0],
+                                    &pArr[1], &pArr[2]),
+                             4, "P_Array", aline))
+        return 1;
       continue;
     }
     str = "R_Array";
     LowNr = strncmp(aline, str, strlen(str));
     if (LowNr == 0) {
-      sscanf(aline, "%s %lf %lf %lf", dummy, &rArr[0], &rArr[1], &rArr[2]);
+      if (!paramLineComplete(sscanf(aline, "%s %lf %lf %lf", dummy, &rArr[0],
+                                    &rArr[1], &rArr[2]),
+                             4, "R_Array", aline))
+        return 1;
       continue;
     }
     str = "tol_c_over_a";
@@ -178,13 +197,17 @@ int main(int argc, char *argv[]) {
     str = "Elo";
     LowNr = strncmp(aline, str, strlen(str));
     if (LowNr == 0) {
-      sscanf(aline, "%s %lf", dummy, &Elo);
+      if (!paramLineComplete(sscanf(aline, "%s %lf", dummy, &Elo), 2,
+                             "Elo", aline))
+        return 1;
       continue;
     }
     str = "Ehi";
     LowNr = strncmp(aline, str, strlen(str));
     if (LowNr == 0) {
-      sscanf(aline, "%s %lf", dummy, &Ehi);
+      if (!paramLineComplete(sscanf(aline, "%s %lf", dummy, &Ehi), 2,
+                             "Ehi", aline))
+        return 1;
       continue;
     }
     str = "DoFwd";
@@ -258,9 +281,9 @@ int main(int argc, char *argv[]) {
     str = "Optimizer";
     LowNr = strncmp(aline, str, strlen(str));
     if (LowNr == 0) {
-      sscanf(aline, "%s %s", dummy, dummy);
-      useBobyqa = 0; /* Nelder-Mead always; see LaueMatchingHeaders.h */
-      if (strncmp(dummy, "BOBYQA", 6) == 0)
+      sscanf(aline, "%s %s", dummy, dummy2); // two buffers, as in CPU.c
+      /* Parsed, never acted on: Nelder-Mead always (LaueMatchingHeaders.h). */
+      if (strncmp(dummy2, "BOBYQA", 6) == 0)
         printf("NOTE: Optimizer BOBYQA requested, but BOBYQA has been "
                "removed. Using Nelder-Mead, which measured better on "
                "this objective (median 0.0041 vs 0.0054 deg, p95 3.3x "
@@ -268,7 +291,13 @@ int main(int argc, char *argv[]) {
       continue;
     }
   }
+  // Validates the EFFECTIVE tolerances itself (it knows tol_c_over_a
+  // overrides tol_LatC), so its place relative to the zeroing below is moot.
+  if (validateCrystalFitTolerances())
+    return 1;
   if (tol_c_over_a != 0) {
+    // c/a is a ratio at CONSTANT cell volume, so it must not compete with
+    // per-parameter tolerances on a and c; it overrides them.
     for (iter = 0; iter < 6; iter++)
       tol_LatC[iter] = 0;
   }
@@ -285,24 +314,16 @@ int main(int argc, char *argv[]) {
     fprintf(stderr, "FATAL: LatticeParameter not set in parameter file.\n");
     return 1;
   }
+  if (validateDetectorDistance(pArr))
+    return 1;
+  if (validateEnergyBand(Elo, Ehi))
+    return 1;
   puts("Parameters read");
 
-  // Rotation matrix
-  double rotang = CalcLength(rArr[0], rArr[1], rArr[2]);
-  double rotvect[3] = {rArr[0] / rotang, rArr[1] / rotang, rArr[2] / rotang};
-  double rot[3][3] = {
-      {cos(rotang) + (1 - cos(rotang)) * (rotvect[0] * rotvect[0]),
-       (1 - cos(rotang)) * rotvect[0] * rotvect[1] - sin(rotang) * rotvect[2],
-       (1 - cos(rotang)) * rotvect[0] * rotvect[2] + sin(rotang) * rotvect[1]},
-      {(1 - cos(rotang)) * rotvect[1] * rotvect[0] + sin(rotang) * rotvect[2],
-       cos(rotang) + (1 - cos(rotang)) * (rotvect[1] * rotvect[1]),
-       (1 - cos(rotang)) * rotvect[1] * rotvect[2] - sin(rotang) * rotvect[0]},
-      {(1 - cos(rotang)) * rotvect[2] * rotvect[0] - sin(rotang) * rotvect[1],
-       (1 - cos(rotang)) * rotvect[2] * rotvect[1] + sin(rotang) * rotvect[0],
-       cos(rotang) + (1 - cos(rotang)) * (rotvect[2] * rotvect[2])}};
-  double rotTranspose[3][3] = {{rot[0][0], rot[1][0], rot[2][0]},
-                               {rot[0][1], rot[1][1], rot[2][1]},
-                               {rot[0][2], rot[1][2], rot[2][2]}};
+  // Rotation matrix (transpose = inverse). A zero R_Array is a legitimate
+  // unrotated detector; the helper guards its 0/0 axis. See the header.
+  double rotTranspose[3][3];
+  detectorRotationTranspose(rArr, rotTranspose);
 
   // Read orientations
   puts("Reading orientations");
@@ -365,6 +386,11 @@ int main(int argc, char *argv[]) {
     return 1;
   }
   int *hkls = (int *)calloc(MaxNHKLS * 3, sizeof(*hkls));
+  if (hkls == NULL) {
+    fprintf(stderr, "FATAL: could not allocate hkls (%zu bytes).\n",
+            (size_t)MaxNHKLS * 3 * sizeof(*hkls));
+    return 1;
+  }
   int nhkls = 0;
   while (fgets(aline, 1000, hklf) != NULL) {
     if (nhkls >= MaxNHKLS) { // FIX: bounds check
@@ -387,14 +413,15 @@ int main(int argc, char *argv[]) {
     printf("Could not read image file %s.\n", imageFN);
     return 1;
   }
-  double *image = (double *)malloc(nrPxX * nrPxY * sizeof(*image));
+  double *image = (double *)malloc((size_t)nrPxX * nrPxY * sizeof(*image));
   if (image == NULL) {
     fprintf(stderr, "FATAL: Could not allocate image (%zu bytes).\n",
             (size_t)nrPxX * nrPxY * sizeof(*image));
     fclose(imageFile);
     return 1;
   }
-  size_t read_cts = fread(image, nrPxX * nrPxY * sizeof(*image), 1, imageFile);
+  size_t read_cts =
+      fread(image, (size_t)nrPxX * nrPxY * sizeof(*image), 1, imageFile);
   if (read_cts != 1) {
     if (ferror(imageFile)) {
       perror("Error reading image file");
@@ -480,38 +507,53 @@ int main(int argc, char *argv[]) {
   } else
     printf("Forward simulation was requested, will be saved to %s.\n", outfn);
 
+  // Forward-cache writer: one writer at a time (lock on <outfn>.lock), a
+  // sibling's fresh publication is reused, and the cache is written as
+  // <outfn>.partial.<host>.<pid> and renamed onto outfn only when complete
+  // and durable. See the forward-cache helpers in the header.
+  FwdCache fc;
+  int fwdFd = -1;
+  if (doFwd == 1) {
+    fwdFd = beginForwardCacheWrite(outfn, (size_t)nrOrients, maxNrSpots, &fc);
+    if (fwdFd == FWD_CACHE_REUSE)
+      doFwd = 0;
+    else if (fwdFd < 0) // reason already printed
+      return 1;
+  }
   if (doFwd == 1) {
     // Forward simulation using OpenMP on CPUs, then save to file
-    int fwdFd = open(outfn, O_CREAT | O_WRONLY,
-                     S_IRUSR | S_IWUSR); // FIX: open once
-    if (fwdFd < 0) {
-      printf("Could not open forward output file %s.\n", outfn);
-      return 1;
-    }
 #pragma omp parallel num_threads(numProcs)
     {
       int procNr = omp_get_thread_num();
-      int nrOrientsThread = (int)ceil((double)nrOrients / (double)numProcs);
-      uint16_t *outArrThis;
-      size_t szArr = nrOrientsThread * (1 + 2 * maxNrSpots);
-      size_t OffsetHere;
-      OffsetHere = procNr;
-      OffsetHere *= szArr;
-      OffsetHere *= sizeof(*outArrThis);
-      int startOrientNr = procNr * nrOrientsThread;
-      int endOrientNr = startOrientNr + nrOrientsThread;
-      if (endOrientNr > (int)nrOrients)
+      // size_t throughout, as in LaueMatchingGPUStream.cu. These were int:
+      // `count * (1 + 2*maxNrSpots)` overflowed at ~35M orientations per
+      // thread (MaxNrLaueSpots 30) and `orientNr * 9` at ~238M orientations.
+      size_t nrOrientsCeil =
+          (size_t)ceil((double)nrOrients / (double)numProcs);
+      size_t slabStride = (size_t)(1 + 2 * maxNrSpots);
+      size_t OffsetHere =
+          (size_t)procNr * nrOrientsCeil * slabStride * sizeof(uint16_t);
+      size_t startOrientNr = (size_t)procNr * nrOrientsCeil;
+      size_t endOrientNr = startOrientNr + nrOrientsCeil;
+      if (endOrientNr > nrOrients)
         endOrientNr = nrOrients;
-      nrOrientsThread = endOrientNr - startOrientNr;
-      szArr = nrOrientsThread * (1 + 2 * maxNrSpots);
-      outArrThis = (uint16_t *)calloc(szArr, sizeof(*outArrThis));
+      // A trailing thread can start past nrOrients (e.g. 5 orientations on 4
+      // threads): an empty slab. Its count used to go negative and become a
+      // huge size_t whose write failed quietly.
+      size_t nrOrientsThread =
+          (endOrientNr > startOrientNr) ? endOrientNr - startOrientNr : 0;
+      size_t szArr = nrOrientsThread * slabStride;
+      // calloc(0) may legally return NULL; never ask for 0.
+      uint16_t *outArrThis =
+          (uint16_t *)calloc(szArr ? szArr : 1, sizeof(uint16_t));
       if (outArrThis == NULL) {
-        printf("Could not allocate outArr per thread, needed %lldMB of RAM. "
-               "Behavior unexpected now.\n",
-               (long long int)nrOrientsThread * (10 + 5 * maxNrSpots) *
-                   sizeof(double) / (1024 * 1024));
+        fprintf(stderr,
+                "FATAL: thread %d could not allocate its %zu-byte forward-sim "
+                "slab.\n",
+                procNr, szArr * sizeof(uint16_t));
+        abandonForwardCache(fc.partial); // other threads may already be writing
       }
-      int orientNr;
+      size_t orientNr;
       int ipx, ipy; // FIX: int instead of uint16_t
       double tO[3][3], thisOrient[3][3];
       int i, j;
@@ -596,23 +638,16 @@ int main(int argc, char *argv[]) {
           matchedArr[orientNr] = totInt * sqrt((double)nSpots);
         }
       }
-      ssize_t rc =
-          pwrite(fwdFd, outArrThis, szArr * sizeof(*outArrThis), OffsetHere);
-      if (rc < 0)
-        printf("Could not write to output file\n");
-      else if (rc != (ssize_t)(szArr * sizeof(*outArrThis))) {
-        size_t off2 = OffsetHere + rc;
-        size_t offset_arr = rc / sizeof(*outArrThis);
-        size_t bytesRemaining = szArr * sizeof(*outArrThis) - rc;
-        rc = pwrite(fwdFd, outArrThis + offset_arr, bytesRemaining, off2);
-        if (rc != (ssize_t)bytesRemaining)
-          printf(
-              "Second try didn't work either. Too big array. Update code.\n");
-      }
+      // Retries short writes; on failure removes the partial cache and exits
+      // (this used to print and carry on). See LaueMatchingHeaders.h.
+      writeForwardSlabOrDie(fwdFd, outArrThis, szArr * sizeof(*outArrThis),
+                            OffsetHere, procNr, fc.partial);
       free(outArrThis);
     }
-    fsync(fwdFd);
-    close(fwdFd);
+    // Durable or abandoned: an fsync/close failure removes the cache, as a
+    // failed write does (this ignored fsync's result). See the header.
+    finishForwardCacheOrDie(fwdFd, fc.partial, fc.target);
+    releaseForwardCacheLock(&fc);
   } else {
     // ── Read forward simulation ────────────────────────────────────────
     double wt0 = omp_get_wtime();
@@ -831,6 +866,11 @@ int main(int argc, char *argv[]) {
   }
   sprintf(outFN, "%s.spots.txt", imageFN);
   FILE *ExtraInfo = fopen(outFN, "w");
+  if (ExtraInfo == NULL) {
+    printf("Could not open file for writing spots. Exiting.\n");
+    fclose(outF);
+    return (1);
+  }
   fprintf(ExtraInfo, "%%GrainNr\tSpotNr\th\tk\tl\tX\tY\tQhat[0]\tQhat[1]\tQhat["
                      "2]\tIntensity\n");
   fprintf(
@@ -851,6 +891,11 @@ int main(int argc, char *argv[]) {
   // Collect results
   double *mA = (double *)calloc(nrResults, sizeof(*mA));
   size_t *rowNrs = (size_t *)calloc(nrResults, sizeof(*rowNrs));
+  if ((mA == NULL || rowNrs == NULL) && nrResults > 0) {
+    fprintf(stderr, "FATAL: could not allocate result-collection arrays "
+            "(nrResults=%zu).\n", nrResults);
+    return 1;
+  }
   int resultNr = 0;
   if (h_matchIdx != NULL) {
     // GPU path: use compact arrays directly
@@ -875,6 +920,12 @@ int main(int argc, char *argv[]) {
   int *dArr = (int *)calloc(nrResults, sizeof(*dArr));
   int *bsArr = (int *)calloc(nrResults, sizeof(*bsArr));
   double *bsScoreArr = (double *)calloc(nrResults, sizeof(*bsScoreArr));
+  if ((FinOrientArr == NULL || dArr == NULL || bsArr == NULL ||
+       bsScoreArr == NULL) && nrResults > 0) {
+    fprintf(stderr, "FATAL: could not allocate merge arrays (nrResults=%zu).\n",
+            nrResults);
+    return 1;
+  }
   int totalSols = mergeDuplicateOrientations(orients, rowNrs, mA, nrResults,
                                              maxAngle, numProcs, FinOrientArr,
                                              dArr, bsArr, bsScoreArr);
