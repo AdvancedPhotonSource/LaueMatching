@@ -11,13 +11,18 @@ Fixes four defects in the pipeline's own quick-look figure:
 usage: catalog_figures.py
 """
 import os
+import sys
 import numpy as np
 import matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-W = os.environ.get("LAUE_WORK", "$LAUE_WORK")
-SQ2 = np.sqrt(2.0)
-PREFIX = os.environ.get("LAUE_OUT_PREFIX", "scan")                      # 45 deg mount: sample-frame Z = lab Z * sqrt(2)
+W = os.environ.get("LAUE_WORK") or sys.exit("LAUE_WORK is not set (peel_map/ and figures/ live under it)")
+# Slow-axis stage coordinates are de-projected to the sample surface by the MOUNT
+# angle (raster.mount_deg, required LAUE_MOUNT_DEG); this was a hard-coded sqrt(2).
+from raster import mount_deg
+ZSCALE = 1.0 / np.cos(np.radians(mount_deg()))
+from frame_peaks import out_prefix
+PREFIX = out_prefix()
 COL = {"alpha": "#4269d0", "beta": "#e8843c"}   # CVD-validated pair (dE 28.1 protan)
 GK = {"alpha": r"\alpha", "beta": r"\beta"}
 
@@ -44,7 +49,7 @@ for k, ph in enumerate(("alpha", "beta")):
         grid[zi[round(z, 4)], xi[round(x, 4)]] = n
     # sample-surface frame: X unchanged, Z de-projected by sqrt(2)
     xs = centers_to_edges(Xu - Xu.min())
-    zs = centers_to_edges((Zu - Zu.min()) * SQ2)
+    zs = centers_to_edges((Zu - Zu.min()) * ZSCALE)
     ax = fig.add_subplot(gs[0, k])
     m = ax.pcolormesh(xs, zs, grid, cmap="viridis", shading="flat", rasterized=True)
     cb = fig.colorbar(m, ax=ax, fraction=0.046, pad=0.04)
@@ -83,9 +88,16 @@ ax.set_title(r"C $\cdot$ recurrence spectrum (unvalidated catalog)", fontsize=10
 ax.grid(alpha=0.25, lw=0.5)
 ax.tick_params(labelsize=8)
 
-fig.suptitle(r"a two-phase hcp/bcc alloy ID26 fine scan — 81$\times$81 raster, 0.25 $\mu$m step, "
-             r"20$\times$20 $\mu$m in the sample frame "
-             r"(45$^\circ$ mount; 20$\times$14.14 $\mu$m projected in the lab)",
-             fontsize=12)
+# Title geometry MEASURED from the stage coordinates (it used to state one scan's
+# 81x81 raster, 0.25 um step and 45 deg mount whatever was plotted).
+_pos = data["alpha"][0]
+_Xu = np.unique(np.round(_pos[:, 0], 4)); _Zu = np.unique(np.round(_pos[:, 1], 4))
+_dx = float(np.median(np.diff(_Xu))) if len(_Xu) > 1 else 0.0
+_dz = float(np.median(np.diff(_Zu))) if len(_Zu) > 1 else 0.0
+_sx, _sz = float(np.ptp(_Xu)), float(np.ptp(_Zu))
+fig.suptitle(rf"{PREFIX}: {len(_Xu)}$\times${len(_Zu)} raster, steps {_dx:.3g} (fast) / "
+             rf"{_dz:.3g} (slow, stage) $\mu$m; {_sx:.3g}$\times${_sz*ZSCALE:.3g} $\mu$m in the "
+             rf"sample frame ({mount_deg():g}$^\circ$ mount; {_sx:.3g}$\times${_sz:.3g} $\mu$m "
+             rf"stage travel)", fontsize=12)
 fig.savefig(f"{W}/figures/{PREFIX}_report_catalog.png", dpi=150)
 print(f"saved {PREFIX}_report_catalog.png")

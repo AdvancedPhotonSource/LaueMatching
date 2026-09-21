@@ -7,8 +7,9 @@ which are crystallographically identical to well within the tolerance.
 
 Three discriminators, each with its own null:
 
- 1. SPATIAL CONNECTIVITY. Map the cluster's beam positions and count 4-connected
-    components. One compact blob is consistent with a single grain (or a column of
+ 1. SPATIAL CONNECTIVITY. Map the cluster's beam positions and count connected
+    components (raster.connectivity(): 8-neighbour unless LAUE_CONNECTIVITY=4;
+    this script used ndimage's 4-neighbour default before 2026-09). One compact blob is consistent with a single grain (or a column of
     stacked grains, which is indistinguishable without depth). Many scattered
     patches point to separate laths sharing an orientation.
     Null: the same number of positions scattered at random over the occupied map.
@@ -30,9 +31,35 @@ import matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from scipy import ndimage as ndi
 
-W = os.environ.get("LAUE_WORK", "$LAUE_WORK")
-PREFIX = os.environ.get("LAUE_OUT_PREFIX", "scan")
-SQ2 = np.sqrt(2.0)
+from laue_material import Phase
+from raster import structure, connectivity
+
+W = os.environ.get("LAUE_WORK") or sys.exit("LAUE_WORK is not set (peel_map/ and figures/ live under it)")
+from frame_peaks import out_prefix
+PREFIX = out_prefix()
+# Symmetry follows the alpha phase's space group (laue_material), not a
+# hard-coded hex table. misorientation() returns DEGREES.
+_PH_A = Phase.load("alpha")
+def miso(A, Bs):
+    return _PH_A.misorientation(A, Bs)
+# Grain connectivity is the shared raster convention (raster.py), not ndimage's
+# 4-neighbour default.
+STRUCT = structure()
+print(f"connectivity: {connectivity()}-neighbour (LAUE_CONNECTIVITY)")
+# Surface-frame geometry. Slow-axis stage coordinates are de-projected by the
+# MOUNT angle (raster.mount_deg, required LAUE_MOUNT_DEG; this was a hard-coded
+# sqrt(2), i.e. 45 deg). Steps are MEASURED from the stage coordinates in the npz
+# (median spacing), not assumed: the 0.25 um literals this replaced were one scan's
+# fast-axis step, and that scan's slow-axis stage step was different (0.177 um).
+from raster import mount_deg
+ZSCALE = 1.0 / np.cos(np.radians(mount_deg()))
+
+
+def _step(u):
+    """Median spacing of sorted unique stage coordinates (um); 0 if only one."""
+    d = np.diff(np.asarray(u, float))
+    d = d[d > 1e-9]
+    return float(np.median(d)) if len(d) else 0.0
 RANK = int(sys.argv[1]) if len(sys.argv) > 1 else 0
 NSHUF = int(sys.argv[2]) if len(sys.argv) > 2 else 400
 
@@ -59,7 +86,7 @@ print(f"  occupies {npos} distinct beam positions of {int(occupied.sum())} occup
       f"({100*npos/occupied.sum():.1f}% of the mapped area)")
 
 # --- 1. connectivity vs a scattered null -------------------------------------
-lab_cc, ncc = ndi.label(grain)
+lab_cc, ncc = ndi.label(grain, structure=STRUCT)
 sizes = np.bincount(lab_cc.ravel())[1:]
 big = sizes.max()
 print(f"\n1. CONNECTIVITY")
@@ -72,7 +99,7 @@ null_ncc, null_big = [], []
 for _ in range(NSHUF):
     pick = occ_idx[rng.choice(len(occ_idx), npos, replace=False)]
     m = np.zeros((nz, nx), bool); m[pick[:, 0], pick[:, 1]] = True
-    l2, n2 = ndi.label(m)
+    l2, n2 = ndi.label(m, structure=STRUCT)
     s2 = np.bincount(l2.ravel())[1:]
     null_ncc.append(n2); null_big.append(s2.max())
 null_ncc = np.array(null_ncc); null_big = np.array(null_big)
@@ -91,22 +118,10 @@ bh, bw = int(np.ptp(rows)) + 1, int(np.ptp(cols)) + 1
 fill = main.sum() / (bh * bw)
 print(f"\n2. SHAPE OF THE LARGEST COMPONENT")
 print(f"   bounding box {bw} x {bh} positions "
-      f"({bw*0.25:.1f} x {bh*0.25*SQ2/SQ2:.1f} um in sample frame), fill {100*fill:.0f}%")
+      f"({bw*_step(Xu):.2f} x {bh*_step(Zu)*ZSCALE:.2f} um in the sample-surface frame), "
+      f"fill {100*fill:.0f}%")
 
 # --- 3. internal misorientation ----------------------------------------------
-def rmat(ax, deg):
-    u = np.asarray(ax, float); u /= np.linalg.norm(u); t = np.radians(deg)
-    K = np.array([[0, -u[2], u[1]], [u[2], 0, -u[0]], [-u[1], u[0], 0]])
-    return np.eye(3) + np.sin(t)*K + (1-np.cos(t))*(K@K)
-HEX = np.array([rmat([0, 0, 1], 60*k) for k in range(6)] +
-               [rmat([np.cos(np.radians(a)), np.sin(np.radians(a)), 0], 180)
-                for a in (0, 30, 60, 90, 120, 150)])
-def miso(A, Bs):
-    best = np.full(len(Bs), 999.)
-    for S in HEX:
-        tr = np.einsum('ij,kj,mki->m', S, A, Bs)
-        best = np.minimum(best, np.degrees(np.arccos(np.clip((tr-1)/2, -1, 1))))
-    return best
 sub = oms[sel]
 ref = sub[0]
 d = miso(ref, sub)
@@ -116,8 +131,9 @@ print(f"   mean {d.mean():.2f} deg, median {np.median(d):.2f}, 95th {np.percenti
 
 # --- figure ------------------------------------------------------------------
 fig, ax = plt.subplots(1, 3, figsize=(16.5, 5.2), constrained_layout=True)
-xs = (Xu - Xu.min()); zs = (Zu - Zu.min())*SQ2
-ext = [xs.min()-0.125, xs.max()+0.125, zs.min()-0.09, zs.max()+0.09]
+xs = (Xu - Xu.min()); zs = (Zu - Zu.min())*ZSCALE
+hx, hz = _step(Xu) / 2, _step(Zu) * ZSCALE / 2
+ext = [xs.min()-hx, xs.max()+hx, zs.min()-hz, zs.max()+hz]
 
 ax[0].imshow(occupied, origin="lower", extent=ext, cmap="Greys", alpha=.25, aspect="equal")
 shown = np.where(main, 2, np.where(grain, 1, 0)).astype(float)
@@ -149,5 +165,6 @@ ax[2].grid(alpha=.25, lw=.5)
 
 fig.suptitle(f"{PREFIX}: is the largest validated $\\alpha$ cluster one grain? "
              f"{npos} positions, {ncc} connected component(s)", fontsize=12)
+os.makedirs(f"{W}/figures", exist_ok=True)
 fig.savefig(f"{W}/figures/{PREFIX}_biggrain_rank{RANK}.png", dpi=150)
 print(f"\nsaved {PREFIX}_biggrain_rank{RANK}.png")

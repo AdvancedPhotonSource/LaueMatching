@@ -1,6 +1,6 @@
 """Full-map test: does the fluorescence pedestal predict spectral hardening?
 
-The hypothesis (Dina's, for Zn electroplated on Zn): a higher background marks
+The hypothesis (a collaborator's, for Zn electroplated on Zn): a higher background marks
 positions where the beam passes through more Zn. If so the DIFFRACTION must be
 hardened there too. This is REFLECTION geometry, so a reflection from a substrate
 grain UNDER the deposit round-trips through it (in + out, each leg ~45 deg to the
@@ -29,13 +29,16 @@ Controls, all reported whether or not they are flattering:
       whole rows are permuted instead.
 
 usage: hardening_fullmap.py <spot_energy_merged.npz> <full_pedestal.npz> <outdir>
+
+Needs LAUE_NR (raster columns) and LAUE_NROWS (rows); a position is placed from its
+frame number (raster.raster_positions).
 """
 import os
 import sys
 
 import numpy as np
 
-NR = 201
+from raster import frame_number, raster_positions, raster_shape
 
 
 def pearson(a, b):
@@ -74,6 +77,7 @@ def blocked_perm_p(a, b, rows, n=5000, seed=0):
 
 def main():
     spe, pedf, outdir = sys.argv[1], sys.argv[2], sys.argv[3]
+    shape = raster_shape()                 # LAUE_NROWS, LAUE_NR -- required
     os.makedirs(outdir, exist_ok=True)
 
     d = np.load(spe, allow_pickle=True)
@@ -83,9 +87,10 @@ def main():
     flat, halo, i0 = ped["flat"], ped["halo"], ped["i0"]
 
     rows, cols, medE, fracLo, nsp, pedv, halov, i0v, fno = ([] for _ in range(9))
+    src_row, src_col = raster_positions(sources, shape=shape)
     for i, src in enumerate(sources):
-        n = int(str(src).split("_")[-1].split(".")[0])
-        r, c = (n - 1) // NR, (n - 1) % NR
+        n = frame_number(src)
+        r, c = src_row[i], src_col[i]
         if not np.isfinite(flat[r, c]):
             continue
         a = spots[edges[i]:edges[i + 1]]

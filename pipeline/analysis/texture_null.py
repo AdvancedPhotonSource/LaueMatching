@@ -15,6 +15,11 @@ things make a texture claim non-trivial here:
      Statistics are computed on cluster REPRESENTATIVES (one orientation per
      grain), with the instance-weighted version reported alongside for contrast.
 
+Directions are direct-lattice [uvw] vectors (Phase.A), chosen by the phase's space
+group. Before 2026-09 they were reciprocal vectors B @ hkl: for hex, the rows labelled
+"a-axis [2-1-10]" and "[10-10]" were then BOTH <10-10> directions; the c-axis row was
+unaffected (c* || c).
+
 usage: texture_null.py <clustered.npz> <outdir> [phase]
 """
 import os
@@ -22,7 +27,7 @@ import sys
 
 import numpy as np
 
-from laue_material import Phase
+from laue_material import Phase, phase_name
 
 
 def rand_om(rng, n):
@@ -35,17 +40,47 @@ def rand_om(rng, n):
         np.stack([2*(x*z-w*y), 2*(y*z+w*x), 1-2*(x*x+y*y)], -1)], -2)
 
 
-def axis_directions(oms, hkl, B):
-    """Sample-frame unit vectors of a crystal direction for each orientation."""
-    v = B @ np.asarray(hkl, float)
+def axis_directions(oms, uvw, A):
+    """Sample-frame unit vectors of the crystal DIRECTION [uvw] for each orientation.
+
+    ``A`` is the DIRECT lattice (laue_material Phase.A, columns a, b, c). This used
+    to take the reciprocal ``B`` and compute ``B @ hkl`` -- a plane NORMAL. For a hex
+    cell that made the row labelled a-axis [2-1-10] (fed (1,0,0)) actually the
+    (10-10) normal, a <10-10> direction, so both "a-axis" rows measured the SAME
+    family. The c-axis row was right only because (0001) normal || [0001].
+    """
+    v = A @ np.asarray(uvw, float)
     v = v / np.linalg.norm(v)
     d = np.einsum('nij,j->ni', oms, v)
     return d / np.linalg.norm(d, axis=1, keepdims=True)
 
 
+def texture_directions(sgnum):
+    """(label, three-index [uvw]) rows for the pole-density table, by crystal system.
+
+    Hexagonal (SG 168-194). Four-index [UVTW] -> three-index [uvw] is
+    u = U - T, v = V - T, w = W, so
+        [0001]   -> [0 0 1]   (c)
+        [2-1-10] -> [1 0 0]   (the a1 axis)
+        [10-10]  -> [2 1 0]   30 deg from [2-1-10], perpendicular to c.
+    Cubic: [001], [011], [111]. Any other system: the three cell edges, labelled
+    as such rather than with hexagonal names.
+    """
+    if 168 <= sgnum <= 194:
+        return (("c-axis [0001]", (0, 0, 1)),
+                ("a-axis [2-1-10]", (1, 0, 0)),
+                ("[10-10]", (2, 1, 0)))
+    if 195 <= sgnum <= 230:
+        return (("[001]", (0, 0, 1)), ("[011]", (0, 1, 1)), ("[111]", (1, 1, 1)))
+    return (("cell a [100]", (1, 0, 0)), ("cell b [010]", (0, 1, 0)),
+            ("cell c [001]", (0, 0, 1)))
+
+
 def main():
+    if len(sys.argv) < 3 or sys.argv[1] in ("-h", "--help"):
+        sys.exit(__doc__)
     src, outdir = sys.argv[1], sys.argv[2]
-    phase = sys.argv[3] if len(sys.argv) > 3 else os.environ.get("LAUE_PHASE", "zn")
+    phase = sys.argv[3] if len(sys.argv) > 3 else phase_name()
     os.makedirs(outdir, exist_ok=True)
     ph = Phase.load(phase)
 
@@ -80,11 +115,10 @@ def main():
     print("\n=== POLE DENSITY vs INDEXABILITY-MATCHED NULL ===")
     print(f"  {'direction':>12} {'measured max MRD':>18} {'null max MRD':>14} {'p':>8}")
     results = {}
-    for name, hkl in (("c-axis [0001]", (0, 0, 1)),
-                      ("a-axis [2-1-10]", (1, 0, 0)),
-                      ("[10-10]", (0, 1, 0))):
-        d_meas = axis_directions(oms_rep, hkl, ph.B)
-        d_null = axis_directions(null_oms, hkl, ph.B)
+    DIRS = texture_directions(ph.sgnum)
+    for name, uvw in DIRS:
+        d_meas = axis_directions(oms_rep, uvw, ph.A)
+        d_null = axis_directions(null_oms, uvw, ph.A)
 
         # density on an equal-area grid of the upper hemisphere
         def density(d, nb=24):
@@ -111,8 +145,8 @@ def main():
     # instance-weighted, for contrast: this is what you get if you forget that
     # one grain contributes many positions
     print("\n  instance-weighted (NOT independent -- shown for contrast only):")
-    for name, hkl in (("c-axis [0001]", (0, 0, 1)),):
-        d = axis_directions(oms, hkl, ph.B)
+    for name, uvw in DIRS[:1]:
+        d = axis_directions(oms, uvw, ph.A)
         dd = np.where(d[:, 2:3] < 0, -d, d)
         H, _, _ = np.histogram2d(dd[:, 2], np.arctan2(dd[:, 1], dd[:, 0]),
                                  bins=[24, 48], range=[[0, 1], [-np.pi, np.pi]])

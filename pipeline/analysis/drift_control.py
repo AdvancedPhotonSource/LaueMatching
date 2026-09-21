@@ -1,7 +1,9 @@
 """Is the background map sample structure, or detector/beam drift over scan time?
 
 This is the control that decides whether ANY of the background story survives.
-Scan order is a raster: frame index = (row-1)*201 + col. A temporal drift is
+Scan order is a raster: frame index = (row-1)*NR + col, with NR the number of
+columns (LAUE_NR) and row/col the 1-based raster indices stored in the survey
+map. A temporal drift is
 therefore a function of (row, col) that is monotone in row and repeats within
 each row -- i.e. horizontal banding. Sample structure is not obliged to align
 with either axis, and the observed map is a lobed diagonal ridge.
@@ -12,19 +14,31 @@ Three tests:
      the residual still contains the ridge;
   3. an axis-alignment statistic -- the gradient orientation of the background
      field. Drift gives gradients along the slow axis; the ridge does not.
+
+Environment: LAUE_WORK, LAUE_NR (columns), LAUE_NROWS (rows) and LAUE_STEP_UM
+(raster step, um), all required.
 """
+import os
+import sys
+
 import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-W = "$LAUE_WORK"
+from raster import centred_extent, raster_shape, step_um
+
+W = os.environ.get("LAUE_WORK")
+if not W:
+    sys.exit("LAUE_WORK is not set (work directory holding survey/ and analysis_out/)")
+NROWS, NR = raster_shape()              # LAUE_NROWS, LAUE_NR -- required
+EXT = centred_extent(NROWS, NR, step_um())   # plot extent in um; LAUE_STEP_UM required
 z = np.load(f"{W}/survey/bgmap_stride4.npz")
 rows, cols = z["rows"], z["cols"]
 bg, i0, npk = z["bg25"], z["i0"], z["npk"]
 
 R, C = np.meshgrid(rows, cols, indexing="ij")
-frame_idx = (R - 1) * 201 + C           # true acquisition order
+frame_idx = (R - 1) * NR + C            # true acquisition order
 ok = np.isfinite(bg) & np.isfinite(i0) & (i0 > 1000)   # drop beam-dropout frames
 print(f"grid {bg.shape}, {ok.sum()} usable of {bg.size} "
       f"({(~ok).sum()} dropped: beam dropouts / read failures)\n")
@@ -82,14 +96,14 @@ print(f"  axial concentration R = {Rlen:.3f}  (0 = isotropic, 1 = a single direc
 print("  a pure scan-time drift would put this at ~90 deg (gradient along the slow axis)")
 
 fig, ax = plt.subplots(1, 3, figsize=(16, 4.6))
-im = ax[0].imshow(bg, origin="lower", extent=[-100, 100, -100, 100]); ax[0].set_title("background (bg25)")
+im = ax[0].imshow(bg, origin="lower", extent=EXT); ax[0].set_title("background (bg25)")
 plt.colorbar(im, ax=ax[0])
 P = np.full(bg.shape, np.nan); P[ok] = pred_time
-im = ax[1].imshow(P, origin="lower", extent=[-100, 100, -100, 100],
+im = ax[1].imshow(P, origin="lower", extent=EXT,
                   vmin=np.nanmin(bg), vmax=np.nanmax(bg))
 ax[1].set_title(f"best cubic-in-scan-time model\n$R^2$={r2_time:.3f}"); plt.colorbar(im, ax=ax[1])
 Rz = np.full(bg.shape, np.nan); Rz[ok] = resid
-im = ax[2].imshow(Rz, origin="lower", extent=[-100, 100, -100, 100], cmap="coolwarm")
+im = ax[2].imshow(Rz, origin="lower", extent=EXT, cmap="coolwarm")
 ax[2].set_title("residual (structure a drift cannot explain)"); plt.colorbar(im, ax=ax[2])
 for a in ax: a.set_xlabel("X (um)"); a.set_ylabel("45-deg axis (um)")
 fig.tight_layout(); fig.savefig(f"{W}/analysis_out/drift_control.png", dpi=115, bbox_inches="tight", pad_inches=0.35)

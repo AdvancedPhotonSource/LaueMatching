@@ -37,35 +37,44 @@ largest "grain" from 1,833 positions to 1,298 -- the 1,833 was a chain. Feed thi
 diameter labels and read the 1.0 deg row, or treat the sweep as indicative only.
 
 usage: regrain.py [phase] [gap]
-  gap: allowed gap in positions when deciding connectivity (default 1 = strict 4-conn)
+  gap: allowed gap in positions when deciding connectivity (default 1 = no gap
+       bridging). Connectivity itself is raster.connectivity(): 8-neighbour
+       unless LAUE_CONNECTIVITY=4 -- 8 is what every reported grain count used.
+env: LAUE_WORK, LAUE_OUT_PREFIX, LAUE_PARAMS_<PHASE>; LAUE_GATE_STAT
+     (nhit | nhit_distinct, default nhit) picks the hit statistic the gold tier
+     gates on; the null for THAT statistic comes from null_model.py's
+     peel_map/<prefix>_null.json, or LAUE_NULLMAX_<PHASE> (which overrides it).
 """
 import os
 import sys
 import numpy as np
 from scipy import ndimage as ndi
 
-W = os.environ.get("LAUE_WORK", "$LAUE_WORK")
-PREFIX = os.environ.get("LAUE_OUT_PREFIX", "scan")
-PHASE = sys.argv[1] if len(sys.argv) > 1 else "alpha"
+from frame_peaks import gate_counts, gate_statistic, load_null, out_prefix
+from raster import connectivity, structure
+
+W = os.environ.get("LAUE_WORK") or sys.exit("LAUE_WORK is not set (peel_map/ is read and written under it)")
+PREFIX = out_prefix()
+from laue_material import phase_name
+PHASE = sys.argv[1] if len(sys.argv) > 1 else phase_name()   # argv, else LAUE_PHASE / the single LAUE_PHASES entry
 GAP = int(sys.argv[2]) if len(sys.argv) > 2 else 1
 TOLS = [0.3, 0.5, 1.0]
 # Measured null maxima MUST come from the scan being re-grained: lambda depends on that
-# scan's own peak and reflection counts. Passed in via env by batch_regrain.sh, which
-# parses them from the scan's own analysis log. The ID26 values are only a last-resort
-# fallback and are announced loudly when used.
-_NM = os.environ.get(f"LAUE_NULLMAX_{PHASE.upper()}")
-if _NM is None:
-    # No silent default. Inheriting one scan's null maximum for another is the
-    # single error this whole chain exists to avoid, and the measured alpha
-    # maximum alone ranged 14-17 across nine Ti scans -- a fallback here would
-    # be wrong by more than the effect being measured.
-    sys.exit(f"LAUE_NULLMAX_{PHASE.upper()} is not set. Run null_model.py on THIS scan "
-             f"and pass its measured maximum; do not inherit a value from another scan.")
-NULLMAX = {PHASE: int(_NM)}
+# scan's own peak and reflection counts. They come from null_model.py's json for this
+# scan, or from LAUE_NULLMAX_<PHASE> (run_analysis_chain.sh exports it from that json).
+# No silent default. Inheriting one scan's null maximum for another is the single
+# error this whole chain exists to avoid, and the measured alpha maximum alone
+# ranged 14-17 across nine Ti scans -- a fallback here would be wrong by more than
+# the effect being measured. load_null exits when neither source is present.
+STAT = gate_statistic()
+_NULL = load_null(PHASE, W, PREFIX, STAT)
+NULLMAX = int(_NULL["max"])
+print(f"[{PHASE}] gold tier gates {STAT} > {NULLMAX} (null from {_NULL['source']})", flush=True)
 
-z = np.load(f"{W}/peel_map/{PREFIX}_{PHASE}_validated.npz", allow_pickle=True)
+_src = f"{W}/peel_map/{PREFIX}_{PHASE}_validated.npz"
+z = np.load(_src, allow_pickle=True)
 oms, X, Z, lab = z["oms"], z["X"].astype(float), z["Z"].astype(float), z["labels"]
-nhit = z["nhit"].astype(int)
+nhit = gate_counts(z, STAT, _src)           # the statistic in force, whatever its name
 
 # Symmetry follows the space group of the phase, not its name. The old
 # "alpha -> hex-12, anything else -> cubic-24" rule silently gave cubic
@@ -86,7 +95,8 @@ Xu = np.unique(np.round(X, 4)); Zu = np.unique(np.round(Z, 4))
 xi = {v: i for i, v in enumerate(Xu)}; zi = {v: i for i, v in enumerate(Zu)}
 gi = np.array([zi[round(v, 4)] for v in Z]); gj = np.array([xi[round(v, 4)] for v in X])
 shape = (len(Zu), len(Xu))
-struct = ndi.generate_binary_structure(2, 2)     # 8-connectivity
+struct = structure()                              # shared: raster.connectivity()
+print(f"[{PHASE}] connectivity: {connectivity()}-neighbour (LAUE_CONNECTIVITY)", flush=True)
 
 def split_spatial(idx):
     """Split one orientation cluster into spatially connected components."""
@@ -108,7 +118,7 @@ print(f"{PREFIX} {PHASE}: {len(oms):,} validated instances, "
       f"{len(base):,} orientation-only clusters at 1.0 deg, gap={GAP}\n")
 print(f"{'tol':>5} {'clusters':>10} {'grains':>9} {'grains>=5':>10} {'largest':>9} {'gold':>7}")
 
-nm = NULLMAX.get(PHASE, 16)
+nm = NULLMAX
 for tol in TOLS:
     clusters = []
     for idx in base:
@@ -130,5 +140,6 @@ for tol in TOLS:
         np.savez(f"{W}/peel_map/{PREFIX}_{PHASE}_regrained.npz",
                  grain_of=np.concatenate([np.full(len(g), k) for k, g in enumerate(grains)]),
                  inst=np.concatenate(grains), npos=npos)
-print("\ngold = grain recurs at >=5 positions AND has an instance above the measured null max")
+print(f"\ngold = grain recurs at >=5 positions AND has an instance with {STAT} above the "
+      f"measured {STAT} null max ({nm})")
 print(f"saved {PREFIX}_{PHASE}_regrained.npz (at 1.0 deg)")

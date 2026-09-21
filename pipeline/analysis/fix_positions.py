@@ -28,7 +28,7 @@ Run this BEFORE regrain.py. Uncorrected labels put one false hole and one double
 affected frame straight into the contiguity definition the grain count depends on.
 
 usage:
-    fix_positions.py --scan <folder> --nr 201 [--prefix G21_scan1_]      # census + validate
+    fix_positions.py --scan <folder> --nr 201 [--prefix sampleH_scan1_]      # census + validate
     fix_positions.py --scan <folder> --nr 201 --npz <validated.npz> [--out <fixed.npz>]
 """
 import argparse
@@ -46,7 +46,7 @@ except ImportError:  # census/validate need h5py; applying a cached table does n
 
 
 def frame_number(name):
-    """'G21_scan1_016081.h5' -> 16081. Tolerates zero padding from symlink shards."""
+    """'sampleH_scan1_016081.h5' -> 16081. Tolerates zero padding from symlink shards."""
     m = re.search(r"_(\d+)\.h5$", str(name))
     if not m:
         raise ValueError(f"cannot parse a frame number from {name!r}")
@@ -151,7 +151,7 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--scan", required=True, help="folder of raw .h5 frames")
     ap.add_argument("--nr", type=int, required=True, help="frames per raster row")
-    ap.add_argument("--prefix", default=None, help="filename prefix, e.g. G21_scan1_")
+    ap.add_argument("--prefix", default=None, help="filename prefix, e.g. sampleH_scan1_")
     ap.add_argument("--key", default="entry1/sample/sampleX", help="HDF5 path to the fast axis")
     ap.add_argument("--npz", default=None, help="validated npz to correct (needs a 'frames' field)")
     ap.add_argument("--out", default=None, help="output npz (default: <in>_xfix.npz)")

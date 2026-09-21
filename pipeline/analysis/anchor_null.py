@@ -9,31 +9,21 @@ nearest beta cluster of size>=2. If the parents' anchors sit inside this distrib
 the anchor is not evidence.
 """
 import os
+import sys
 import numpy as np
 
-W = os.environ.get("LAUE_WORK", "$LAUE_WORK")
-PREFIX = os.environ.get("LAUE_OUT_PREFIX", "scan")
+W = os.environ.get("LAUE_WORK") or sys.exit("LAUE_WORK is not set (peel_map/ is read under it)")
+from frame_peaks import out_prefix
+PREFIX = out_prefix()
 NDRAW = 3000
 
-def rmat(ax, deg):
-    u = np.asarray(ax, float); u /= np.linalg.norm(u); t = np.radians(deg)
-    K = np.array([[0, -u[2], u[1]], [u[2], 0, -u[0]], [-u[1], u[0], 0]])
-    return np.eye(3) + np.sin(t)*K + (1-np.cos(t))*(K@K)
-
-CUB = [np.eye(3)]
-for ax, d in [([1,0,0],90),([1,0,0],180),([1,0,0],270),([0,1,0],90),([0,1,0],180),([0,1,0],270),
-              ([0,0,1],90),([0,0,1],180),([0,0,1],270),([1,1,0],180),([1,-1,0],180),([1,0,1],180),
-              ([-1,0,1],180),([0,1,1],180),([0,1,-1],180),([1,1,1],120),([1,1,1],240),
-              ([1,-1,1],120),([1,-1,1],240),([-1,1,1],120),([-1,1,1],240),([1,1,-1],120),([1,1,-1],240)]:
-    CUB.append(rmat(ax, d))
-CUB = np.array(CUB)
+# Symmetry follows the beta phase's space group (laue_material), not a
+# hard-coded cubic table. misorientation() returns DEGREES.
+from laue_material import Phase
+_PH_B = Phase.load("beta")
 
 def cubmiso(A, Bs):
-    best = np.full(len(Bs), 999.)
-    for S in CUB:
-        tr = np.einsum('ij,kj,mki->m', S, A, Bs)
-        best = np.minimum(best, np.degrees(np.arccos(np.clip((tr-1)/2, -1, 1))))
-    return best
+    return _PH_B.misorientation(A, Bs)
 
 def rand_om(rng):
     q = rng.normal(size=4); q /= np.linalg.norm(q); w, x, y, z = q

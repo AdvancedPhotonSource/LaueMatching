@@ -12,6 +12,14 @@ Inputs are skipped individually if absent, so this can be run part-way through
 the chain.
 
 usage: zn_report_figures.py <analysis_out_dir> [outdir]
+
+The map plates need LAUE_STEP_UM (raster step, um); the grain plate also needs the
+raster shape, LAUE_NR (columns) and LAUE_NROWS (rows), and takes one orientation per
+position, top-ranked by distinct peaks matched (raster.winner_per_position). Positions
+are drawn LAUE_STEP_UM apart about the centre.
+
+The background plate is titled from its input: the ``scan_label`` fullped.py stores in
+full_pedestal.npz, else LAUE_SCAN_LABEL, else the npz path itself.
 """
 import os
 import sys
@@ -21,8 +29,20 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-NR = 201
-EXT = [-100, 100, -100, 100]          # um, both axes in the sample frame
+from raster import (centred_extent, raster_positions, raster_shape, ranking_counts, step_um,
+                    winner_per_position)
+
+
+def _ext(nrows, ncols):
+    """Extent in um, centred, LAUE_STEP_UM per position ([-100, 100, -100, 100] for 201 x 201 at 1 um)."""
+    return centred_extent(nrows, ncols, step_um())
+
+
+def _scan_label(z, path):
+    """What the background maps are OF: stored by fullped.py, else LAUE_SCAN_LABEL, else the file."""
+    if "scan_label" in z.files:
+        return str(z["scan_label"])
+    return os.environ.get("LAUE_SCAN_LABEL") or os.path.abspath(path)
 
 
 def _save(fig, path):
@@ -41,16 +61,20 @@ def plate_background(A, out):
         return
     z = np.load(f)
     flat, halo, i0 = z["flat"], z["halo"], z["i0"]
+    EXT = _ext(*flat.shape)
 
     fig, ax = plt.subplots(1, 3, figsize=(16, 4.8))
+    iv = i0[np.isfinite(i0)]
+    i0_spread = 100 * (iv.max() - iv.min()) / 2 / max(np.median(iv), 1e-9) if len(iv) else np.nan
     for a, (m, t) in zip(ax, ((flat, "flat pedestal (corners)\nisotropic — Zn K$\\alpha$ fluorescence"),
                               (halo, "halo excess (centre − corners)\nforward-peaked — air + thermal diffuse"),
-                              (i0, "beam monitor I0\n(flat to ±1.5%)"))):
+                              (i0, f"beam monitor I0\n(half-range ±{i0_spread:.1f}% of median)"))):
         im = a.imshow(m, origin="lower", extent=EXT, cmap="viridis")
         a.set_title(t, fontsize=10)
         a.set_xlabel("X (µm)"); a.set_ylabel("45° axis (µm)")
         plt.colorbar(im, ax=a)
-    fig.suptitle("Zn/Zn sampleG scan1_Laue2D — background decomposition, 201×201 positions", y=1.02)
+    fig.suptitle(f"{_scan_label(z, f)} -- background decomposition, "
+                 f"{flat.shape[1]}×{flat.shape[0]} positions", y=1.02)
     _save(fig, os.path.join(out, "plate_background.png"))
 
     v = flat[np.isfinite(flat)]
@@ -117,20 +141,20 @@ def plate_grainmap(A, out):
     if not os.path.exists(f):
         print("  (skip grain plate: no full_zn_clustered.npz)")
         return
+    nrows, ncols = raster_shape()            # LAUE_NROWS, LAUE_NR -- required
+    EXT = _ext(nrows, ncols)
     z = np.load(f, allow_pickle=True)
-    oms, lab, fr, nh = z["oms"], z["labels"], z["frames"], z["nhit"].astype(int)
-    n = np.array([int(str(x).split("_")[-1].split(".")[0]) for x in fr])
-    row, col = (n - 1) // NR, (n - 1) % NR
+    oms, lab, fr = z["oms"], z["labels"], z["frames"]
+    row, col = raster_positions(fr, Z=z["Z"] if "Z" in z.files else None,
+                                shape=(nrows, ncols))
     cnt = np.bincount(lab)
 
-    best = {}
-    for i in range(len(oms)):
-        k = (row[i], col[i])
-        if k not in best or nh[i] > best[k][1]:
-            best[k] = (i, nh[i])
+    # one orientation per position (winner-take-all), by distinct peaks matched
+    prim, sec, _ = ranking_counts(z)
+    best = winner_per_position(row, col, prim, sec, tiebreak=oms.reshape(len(oms), -1))
 
-    rgb = np.zeros((NR, NR, 4)); size = np.zeros((NR, NR))
-    for (r, c), (i, _) in best.items():
+    rgb = np.zeros((nrows, ncols, 4)); size = np.zeros((nrows, ncols))
+    for (r, c), i in best.items():
         v = np.abs(oms[i][:, 2]); v /= np.linalg.norm(v)
         rgb[r, c, :3] = v; rgb[r, c, 3] = 1.0
         size[r, c] = cnt[lab[i]]

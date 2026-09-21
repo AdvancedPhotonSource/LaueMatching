@@ -17,13 +17,17 @@ surface, so their cross product is the normal). See Phase 1 of the runbook.
 Configuration is by environment, matching the rest of the chain:
 
     LAUE_WORK        work directory                       (required)
-    LAUE_OUT_PREFIX  prefix of peel_map/<prefix>_<phase>_clustered.npz   (default "full")
-    LAUE_PHASE       phase name                           (default "zn")
-    LAUE_NR          frames per raster row                (default 201)
+    LAUE_OUT_PREFIX  prefix of peel_map/<prefix>_<phase>_clustered.npz   (frame_peaks.out_prefix)
+    LAUE_PHASE       phase name  (required unless LAUE_PHASES lists exactly one)
+    LAUE_NR          frames per raster row = columns      (required, no default)
+    LAUE_NROWS       number of raster rows                (required, no default)
+    LAUE_STEP_UM     raster step in micrometres           (required, no default)
     LAUE_IN_NPZ      explicit input npz, overrides the prefix/phase construction
 
-The number of rows is derived from the data rather than assumed square: the earlier
-hardcoded 201x201 silently mis-shaped any scan that was not (sampleH is 201x101).
+The raster shape is given explicitly rather than assumed: the earlier hardcoded
+201x201 silently mis-shaped any scan that was not (sampleH is 201x101), and the later
+``LAUE_NR`` default of 201 mis-placed any scan of another width. Position and the
+choice of one orientation per position come from ``raster.py``.
 """
 import os
 import sys
@@ -33,32 +37,34 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+from raster import raster_positions, raster_shape, ranking_counts, step_um, winner_per_position
+
 W = os.environ.get("LAUE_WORK")
 if not W:
     sys.exit("LAUE_WORK is not set (work directory holding peel_map/ and analysis_out/)")
-PREFIX = os.environ.get("LAUE_OUT_PREFIX", "full")
-PHASE = os.environ.get("LAUE_PHASE", "zn")
-NR = int(os.environ.get("LAUE_NR", "201"))
+from frame_peaks import out_prefix
+PREFIX = out_prefix()      # one default for every script (was "full" here only)
+from laue_material import phase_name
+PHASE = phase_name()
+NROW, NR = raster_shape()          # LAUE_NROWS, LAUE_NR -- required
+STEP = step_um()                   # LAUE_STEP_UM -- required
 SRC = os.environ.get("LAUE_IN_NPZ") or f"{W}/peel_map/{PREFIX}_{PHASE}_clustered.npz"
 
 z = np.load(SRC, allow_pickle=True)
-oms, lab, X, Z, nh, fr = (z["oms"], z["labels"], z["X"].astype(float),
-                          z["Z"].astype(float), z["nhit"].astype(int), z["frames"])
+oms, lab, X, Z, fr = (z["oms"], z["labels"], z["X"].astype(float),
+                      z["Z"].astype(float), z["frames"])
 print(f"{len(oms)} instances from {SRC}")
 
-# raster indices from the source filename (robust; X/Z are floats)
-n = np.array([int(str(f).split("_")[-1].split(".")[0]) for f in fr])
-row = (n - 1) // NR
-col = (n - 1) % NR
-NROW = int(row.max()) + 1
-print(f"raster {NR} x {NROW} (rows derived from the data, not assumed square)")
+# raster indices from the frame number and the explicit raster shape, checked
+# against the stage coordinates (see raster.raster_positions)
+row, col = raster_positions(fr, X=X, Z=Z, shape=(NROW, NR))
+print(f"raster {NR} x {NROW} (columns x rows, from LAUE_NR / LAUE_NROWS)")
 
-# one orientation per position: the highest-nhit validated instance there
-best = {}
-for i in range(len(oms)):
-    key = (row[i], col[i])
-    if key not in best or nh[i] > best[key][1]:
-        best[key] = (i, nh[i])
+# one orientation per position (winner-take-all): ranked by distinct peaks matched,
+# ties broken by nhit and then by the orientation itself (raster.winner_per_position)
+prim, sec, rank_name = ranking_counts(z)
+print(f"one orientation per position: top-ranked by {rank_name}")
+best = winner_per_position(row, col, prim, sec, tiebreak=oms.reshape(len(oms), -1))
 
 
 def caxis_rgb(OM):
@@ -72,12 +78,12 @@ rgb = np.zeros((NROW, NR, 3))
 alpha = np.zeros((NROW, NR))
 csize = np.zeros((NROW, NR))
 cnt = np.bincount(lab[lab >= 0])
-for (r, c), (i, _) in best.items():
+for (r, c), i in best.items():
     rgb[r, c] = caxis_rgb(oms[i])
     alpha[r, c] = 1.0
     csize[r, c] = cnt[lab[i]]
 
-EXT = [0, NR, 0, NROW]        # micrometres at 1 um steps
+EXT = [0, NR * STEP, 0, NROW * STEP]        # micrometres
 fig, ax = plt.subplots(1, 2, figsize=(14, 6))
 ax[0].imshow(np.dstack([rgb, alpha]), origin="lower", extent=EXT, interpolation="nearest")
 ax[0].set_title("orientation map — RGB = c-axis direction (lab frame)\n"

@@ -22,6 +22,10 @@ tested, because with thousands of candidate clusters something always looks
 structured.
 
 usage: substrate_deposit.py <clustered.npz> <pedestal.npz> <outdir>
+
+Needs LAUE_NR (raster columns) and LAUE_NROWS (rows); connected components use the
+shared neighbourhood of raster.structure() (LAUE_CONNECTIVITY, default 8 -- the
+value this script always used).
 """
 import os
 import sys
@@ -29,7 +33,7 @@ import sys
 import numpy as np
 from scipy import ndimage as ndi
 
-NR = 201
+from raster import raster_positions, raster_shape, structure
 
 
 def load(clustered, pedestal):
@@ -40,17 +44,12 @@ def load(clustered, pedestal):
     return oms, lab, X, Z, nh, fr, p
 
 
-def frame_to_rc(frames):
-    """G19_scan1_Laue2D_<i>.h5 -> (row, col) on the 201x201 raster."""
-    n = np.array([int(str(f).split("_")[-1].split(".")[0]) for f in frames])
-    return (n - 1) // NR, (n - 1) % NR
-
-
 def main():
     clustered, pedestal, outdir = sys.argv[1], sys.argv[2], sys.argv[3]
+    NROWS, NR = raster_shape()             # LAUE_NROWS, LAUE_NR -- required
     os.makedirs(outdir, exist_ok=True)
     oms, lab, X, Z, nh, fr, ped = load(clustered, pedestal)
-    row, col = frame_to_rc(fr)
+    row, col = raster_positions(fr, Z=Z, shape=(NROWS, NR))
     flat = ped["flat"]
     print(f"{len(oms)} re-gated instances, {len(np.unique(lab))} clusters, "
           f"{len(set(zip(row.tolist(), col.tolist())))} distinct positions\n", flush=True)
@@ -69,9 +68,9 @@ def main():
     for li in labs[order][:40]:
         m = lab == li
         rr, cc = row[m], col[m]
-        grid = np.zeros((NR, NR), bool)
+        grid = np.zeros((NROWS, NR), bool)
         grid[rr, cc] = True
-        ccl, ncc = ndi.label(grid, structure=ndi.generate_binary_structure(2, 2))
+        ccl, ncc = ndi.label(grid, structure=structure())
         sizes = np.bincount(ccl.ravel())[1:] if ncc else np.array([0])
         rows_out.append((int(li), int(m.sum()), int(len(set(zip(rr.tolist(), cc.tolist())))),
                          int(ncc), int(sizes.max()),
@@ -92,11 +91,11 @@ def main():
     print("\n=== B. IS THE DOMINANT ORIENTATION ABSENT WHERE THE PEDESTAL IS HIGH? ===")
     top = labs[order][0]
     m = lab == top
-    present = np.zeros((NR, NR), bool)
+    present = np.zeros((NROWS, NR), bool)
     present[row[m], col[m]] = True
     # only positions that produced any validated orientation are informative;
     # a position with nothing indexed is not evidence of burial
-    indexed = np.zeros((NR, NR), bool)
+    indexed = np.zeros((NROWS, NR), bool)
     indexed[row, col] = True
     ok = indexed & np.isfinite(flat)
     if ok.sum() < 100:

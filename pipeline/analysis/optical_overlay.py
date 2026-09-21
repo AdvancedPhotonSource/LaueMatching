@@ -1,23 +1,37 @@
 """Register the scan maps to the optical micrograph and test the deposit proxy.
 
-Registration (measured from optical.png):
-  scale     60 px = 100 um  -> 0.600 px/um
-  centre    the red/blue scan-centre markers at pixel (398, 284)
-  flip      the optical imager is vertically flipped vs the scan frame
-  no rotation, no x-flip (user: "vertically flipped, that's all")
+Registration, measured on the micrograph itself and supplied by environment
+(raster.optical_registration; all required, no defaults, because they belong to one
+image -- the values once hard-coded here were measured on one campaign's optical.png):
+  LAUE_OPTICAL_PX_PER_UM   scale, from the image's scale bar (e.g. 60 px = 100 um -> 0.6)
+  LAUE_OPTICAL_CX/_CY      the scan-centre markers' pixel
+  LAUE_OPTICAL_FLIP_Y      +1 if the optical imager is vertically flipped vs the scan frame
+  no rotation, no x-flip
 
-For each of the 201x201 scan positions (X = col, 45deg-axis = row) map to an
-optical pixel, sample the black/gold classification, and test whether the
+For each scan position (X = col = fast axis, 45deg-axis = row = slow axis) map to
+an optical pixel, sample the black/gold classification, and test whether the
 fluorescence pedestal (the deposit proxy) predicts the BLACK (grown-Zn) regions.
+Scan positions are LAUE_STEP_UM apart, centred on the markers.
+
+Environment: LAUE_WORK (work directory), LAUE_NR (columns), LAUE_NROWS (rows) and
+LAUE_STEP_UM (raster step, um), all required. The grain footprint takes one orientation per position, top-ranked by
+distinct peaks matched (raster.winner_per_position).
 """
+import os
+import sys
+
 import numpy as np
 from PIL import Image
 
-W = "$LAUE_WORK"
-NR = 201
-PX_PER_UM = 60.0 / 100.0                  # scale bar: 60 px = 100 um
-CX, CY = 398.0, 284.0                     # scan centre in optical pixels
-FLIP_Y = +1                               # +1 => vertical flip applied (imager is flipped)
+from raster import (centred_extent, optical_registration, raster_positions, raster_shape,
+                    ranking_counts, step_um, winner_per_position)
+
+W = os.environ.get("LAUE_WORK")
+if not W:
+    sys.exit("LAUE_WORK is not set (work directory holding optical.png, peel_map/ and analysis_out/)")
+NROWS, NR = raster_shape()                # LAUE_NROWS, LAUE_NR -- required
+STEP = step_um()                          # LAUE_STEP_UM -- required
+CX, CY, PX_PER_UM, FLIP_Y = optical_registration()   # LAUE_OPTICAL_* -- required
 
 # --- optical image -> black(deposit)/gold(substrate) classification ---------
 im = np.array(Image.open(f"{W}/optical.png").convert("RGB")).astype(float)
@@ -47,30 +61,27 @@ print(f"black/gold valley threshold = {thr:.0f}")
 print(f"black (deposit) area fraction (sample pixels): {(black & ~overlay).mean()/(~overlay).mean()*100:.1f}%")
 
 # --- map each scan position to an optical pixel, sample black/gold ----------
-r = np.arange(NR); c = np.arange(NR)
+r = np.arange(NROWS); c = np.arange(NR)
 CC, RR = np.meshgrid(c, r)                  # RR = 45deg axis (row), CC = X (col)
-Xum = (CC - (NR - 1) / 2)                    # -100..100 um
-Yum = (RR - (NR - 1) / 2)
+Xum = (CC - (NR - 1) / 2) * STEP             # -100..100 um for 201 columns at 1 um
+Yum = (RR - (NROWS - 1) / 2) * STEP
 px = CX + Xum * PX_PER_UM
 py = CY + FLIP_Y * Yum * PX_PER_UM           # vertical flip
 pxi = np.clip(np.round(px).astype(int), 0, im.shape[1] - 1)
 pyi = np.clip(np.round(py).astype(int), 0, im.shape[0] - 1)
-is_black = black[pyi, pxi].astype(float)     # (NR,NR) registered deposit mask
+is_black = black[pyi, pxi].astype(float)     # (NROWS,NR) registered deposit mask
 print(f"scan footprint on the optical image: x {pxi.min()}-{pxi.max()}, y {pyi.min()}-{pyi.max()} px")
 print(f"black fraction WITHIN the scan box: {is_black.mean()*100:.1f}%")
 
 # --- the maps ---------------------------------------------------------------
 flat = np.load(f"{W}/analysis_out/full_pedestal.npz")["flat"]        # (row=45deg, col=X)
 z = np.load(f"{W}/peel_map/full_zn_clustered.npz", allow_pickle=True)
-lab, fr, nh = z["labels"], z["frames"], z["nhit"].astype(int)
-n = np.array([int(str(f).split("_")[-1].split(".")[0]) for f in fr])
-gr, gc = (n - 1) // NR, (n - 1) % NR
+lab, fr = z["labels"], z["frames"]
+gr, gc = raster_positions(fr, Z=z["Z"] if "Z" in z.files else None, shape=(NROWS, NR))
 cnt = np.bincount(lab)
-foot = np.full((NR, NR), np.nan); best = {}
-for i in range(len(lab)):
-    k = (gr[i], gc[i])
-    if k not in best or nh[i] > nh[best[k]]:
-        best[k] = i
+foot = np.full((NROWS, NR), np.nan)
+prim, sec, _ = ranking_counts(z)
+best = winner_per_position(gr, gc, prim, sec, tiebreak=z["oms"].reshape(len(lab), -1))
 for (rr, cc2), i in best.items():
     foot[rr, cc2] = cnt[lab[i]]
 
@@ -104,18 +115,20 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 fig, ax = plt.subplots(1, 3, figsize=(17, 5.6))
 # 1: optical crop with scan box + centre
-x0, x1 = int(CX - 100 * PX_PER_UM), int(CX + 100 * PX_PER_UM)
-y0, y1 = int(CY - 100 * PX_PER_UM), int(CY + 100 * PX_PER_UM)
+EXT = centred_extent(NROWS, NR, STEP)        # [-100, 100, -100, 100] for 201 x 201 at 1 um
+HX, HY = EXT[1], EXT[3]
+x0, x1 = int(CX - HX * PX_PER_UM), int(CX + HX * PX_PER_UM)
+y0, y1 = int(CY - HY * PX_PER_UM), int(CY + HY * PX_PER_UM)
 ax[0].imshow(im.astype(np.uint8))
 ax[0].add_patch(plt.Rectangle((x0, y0), x1 - x0, y1 - y0, fill=False, ec="cyan", lw=2))
 ax[0].plot(CX, CY, "+", color="red", ms=12, mew=2)
 ax[0].set_title("optical: scan box (cyan) + centre"); ax[0].axis("off")
 # 2: registered deposit mask
-ax[1].imshow(is_black, origin="lower", extent=[-100, 100, -100, 100], cmap="gray_r")
+ax[1].imshow(is_black, origin="lower", extent=[-HX, HX, -HY, HY], cmap="gray_r")
 ax[1].set_title("optical deposit (black) registered to scan"); ax[1].set_xlabel("X µm")
 # 3: pedestal, same frame
-im3 = ax[2].imshow(flat, origin="lower", extent=[-100, 100, -100, 100], cmap="inferno")
-ax[2].contour(np.linspace(-100, 100, NR), np.linspace(-100, 100, NR), is_black,
+im3 = ax[2].imshow(flat, origin="lower", extent=[-HX, HX, -HY, HY], cmap="inferno")
+ax[2].contour(np.linspace(-HX, HX, NR), np.linspace(-HY, HY, NROWS), is_black,
               levels=[0.5], colors="cyan", linewidths=1.2)
 ax[2].set_title("pedestal (deposit proxy) + optical-deposit outline"); ax[2].set_xlabel("X µm")
 plt.colorbar(im3, ax=ax[2], fraction=0.046)
@@ -123,6 +136,6 @@ fig.suptitle(f"Optical registration: corr(pedestal, black) = {r_pb:+.2f}, AUC = 
 fig.tight_layout(); fig.savefig(f"{W}/analysis_out/optical_overlay.png", dpi=120,
                                 bbox_inches="tight", pad_inches=0.3)
 np.savez(f"{W}/analysis_out/optical_registration.npz",
-         is_black=is_black, px_per_um=PX_PER_UM, cx=CX, cy=CY, thr=thr, auc=auc, r_pb=r_pb)
+         is_black=is_black, px_per_um=PX_PER_UM, cx=CX, cy=CY, flip_y=FLIP_Y, step_um=STEP, thr=thr, auc=auc, r_pb=r_pb)
 print("\nwrote optical_overlay.png")
 print("OPTICAL_DONE")

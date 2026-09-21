@@ -3,13 +3,30 @@ or an artefact of a slightly-off registration? Scan small shift/rotation/scale
 around the measured values (scale bar + markers + vertical flip) and report where
 the agreement peaks. If the measured point is already near-optimal, the result is
 solid; the location of the optimum also refines the registration honestly.
+
+Environment: LAUE_WORK, LAUE_NR (columns), LAUE_NROWS (rows), LAUE_STEP_UM (raster
+step, um) and the measured registration LAUE_OPTICAL_CX/_CY/_PX_PER_UM/_FLIP_Y
+(raster.optical_registration), all required. The search is a fixed neighbourhood of
+the measured registration: centre +-10 px in 4 px steps, scale +-2 steps of 1/15 of
+the measured value, rotation +-12 deg (for 0.6 px/um this is the original grid). The grain footprint takes one orientation
+per position, top-ranked by distinct peaks matched (raster.winner_per_position).
 """
+import os
+import sys
+
 import numpy as np
 from PIL import Image
 from scipy import ndimage as ndi
 
-W = "$LAUE_WORK"
-NR = 201
+from raster import (optical_registration, raster_positions, raster_shape, ranking_counts,
+                    step_um, winner_per_position)
+
+W = os.environ.get("LAUE_WORK")
+if not W:
+    sys.exit("LAUE_WORK is not set (work directory holding optical.png, peel_map/ and analysis_out/)")
+NROWS, NR = raster_shape()                # LAUE_NROWS, LAUE_NR -- required
+STEP = step_um()                          # LAUE_STEP_UM -- required
+CX0, CY0, PPU0, FLIP_Y = optical_registration()      # LAUE_OPTICAL_* -- required
 
 im = np.array(Image.open(f"{W}/optical.png").convert("RGB")).astype(float)
 Rr, Gg, Bb = im[:, :, 0], im[:, :, 1], im[:, :, 2]
@@ -26,24 +43,21 @@ black = (lum_s < thr).astype(float)
 
 # grain footprint map
 z = np.load(f"{W}/peel_map/full_zn_clustered.npz", allow_pickle=True)
-lab, fr, nh = z["labels"], z["frames"], z["nhit"].astype(int)
-n = np.array([int(str(f).split("_")[-1].split(".")[0]) for f in fr])
-gr, gc = (n - 1) // NR, (n - 1) % NR
-cnt = np.bincount(lab); foot = np.full((NR, NR), np.nan); best = {}
-for i in range(len(lab)):
-    k = (gr[i], gc[i])
-    if k not in best or nh[i] > nh[best[k]]:
-        best[k] = i
+lab, fr = z["labels"], z["frames"]
+gr, gc = raster_positions(fr, Z=z["Z"] if "Z" in z.files else None, shape=(NROWS, NR))
+cnt = np.bincount(lab); foot = np.full((NROWS, NR), np.nan)
+prim, sec, _ = ranking_counts(z)
+best = winner_per_position(gr, gc, prim, sec, tiebreak=z["oms"].reshape(len(lab), -1))
 for (rr, cc2), i in best.items():
     foot[rr, cc2] = cnt[lab[i]]
 lf = np.log10(foot)
 okmap = np.isfinite(lf)
 
-rr, cc = np.meshgrid(np.arange(NR), np.arange(NR), indexing="ij")   # rr=45deg, cc=X
-Xum = cc - (NR - 1) / 2; Yum = rr - (NR - 1) / 2
+rr, cc = np.meshgrid(np.arange(NROWS), np.arange(NR), indexing="ij")   # rr=45deg, cc=X
+Xum = (cc - (NR - 1) / 2) * STEP; Yum = (rr - (NROWS - 1) / 2) * STEP
 
 
-def corr_at(cx, cy, ppu, rot_deg, flipy=1):
+def corr_at(cx, cy, ppu, rot_deg, flipy=FLIP_Y):
     th = np.radians(rot_deg)
     xr = Xum * np.cos(th) - Yum * np.sin(th)
     yr = Xum * np.sin(th) + Yum * np.cos(th)
@@ -58,12 +72,12 @@ def corr_at(cx, cy, ppu, rot_deg, flipy=1):
     return float(a @ b / d) if d > 0 else 0.0
 
 
-base = corr_at(398, 284, 0.6, 0)
+base = corr_at(CX0, CY0, PPU0, 0)
 print(f"measured registration: corr(log footprint, black) = {base:+.3f}")
-best_r = (base, 398, 284, 0.6, 0)
-for cx in range(388, 409, 4):
-    for cy in range(274, 295, 4):
-        for ppu in (0.52, 0.56, 0.60, 0.64, 0.68):
+best_r = (base, CX0, CY0, PPU0, 0)
+for cx in CX0 + np.arange(-10, 11, 4):
+    for cy in CY0 + np.arange(-10, 11, 4):
+        for ppu in PPU0 * (1 + np.arange(-2, 3) / 15):
             for rot in (-12, -8, -4, 0, 4, 8, 12):
                 r = corr_at(cx, cy, ppu, rot)
                 if r < best_r[0]:                    # most negative = best agreement

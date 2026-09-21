@@ -18,30 +18,52 @@ layers. This script computes per-orientation median assigned-spot energy, joins
 it to cluster footprint, and reports the relationship (with a null).
 
 Then it splits the map into a substrate layer and a deposit layer and writes both.
+
+Environment (all required, no defaults):
+  LAUE_WORK         work directory holding peel_map/ and analysis_out/
+  LAUE_PARAMS_ZN    the params_*.txt used for indexing (or LAUE_PARAMS)
+  LAUE_SHARD_GLOB   glob matching the indexer's shard result directories, e.g.
+                    <work>/results/alpha_*/
+  LAUE_NR, LAUE_NROWS  raster columns and rows (raster.raster_positions)
+Optional:
+  LAUE_SHARD_PROV_MATCH  keep only shard directories whose provenance.json contains
+                    this string (e.g. the stem shared by the per-shard params files),
+                    for a glob that also matches runs of another material
 """
 import os, sys, glob, json
 import numpy as np, h5py
 from concurrent.futures import ProcessPoolExecutor
 
-sys.path.insert(0, "$LAUE_WORK/analysis")
-from laue_material import Phase
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from laue_material import Phase, phase_name
+from raster import raster_positions, raster_shape
 
-W = "$LAUE_WORK"
-NR = 201
+W = os.environ.get("LAUE_WORK")
+if not W:
+    sys.exit("LAUE_WORK is not set (work directory holding peel_map/ and analysis_out/)")
+SHARD_GLOB = os.environ.get("LAUE_SHARD_GLOB")
+if not SHARD_GLOB:
+    sys.exit("LAUE_SHARD_GLOB is not set: give a glob matching the indexer's shard "
+             "result directories (each with provenance.json and frame_mapping.json)")
+SHAPE = raster_shape()                    # LAUE_NROWS, LAUE_NR -- required
 HC = 1.2398419739
-PH = Phase(f"{W}/params/params_Zn_h_s1.txt", "zn")
+PH = Phase.load(phase_name())            # LAUE_PHASE (or the single LAUE_PHASES entry); its LAUE_PARAMS_<PHASE>
+PROV_MATCH = os.environ.get("LAUE_SHARD_PROV_MATCH", "")
 B, ROTI, P, KI, dx, dy, NPX = PH.B, PH.roti, PH.P, PH.ki, PH.dx, PH.dy, PH.npx_x
 Elo, Ehi = PH.Elo, PH.Ehi
-# stream layout columns
-OM0, GCOL = 23, 1
-S_G, S_H, S_K, S_L = 1, 3, 4, 5
+# Column maps by the table's own column count (laue_index.records via frame_peaks):
+# these were the stream positions hard-coded (OM 23, grain 1, spot grain/h/k/l 1,3,4,5).
+from frame_peaks import solution_format, spot_columns
 
-# ---- global frame -> (output.h5) map across all 6 shards --------------------
+# ---- global frame -> (output.h5) map across all shards -----------------------
 def build_frame_map():
     fmap = {}
-    for d in sorted(glob.glob(f"{W}/results/alpha_20260724_13[5-9]*/")):
+    dirs = sorted(glob.glob(SHARD_GLOB))
+    if not dirs:
+        sys.exit(f"LAUE_SHARD_GLOB={SHARD_GLOB!r} matches no directory")
+    for d in dirs:
         prov = open(f"{d}/provenance.json").read()
-        if "params_Zn_h_s" not in prov:
+        if PROV_MATCH and PROV_MATCH not in prov:
             continue
         mp = json.load(open(f"{d}/frame_mapping.json"))
         for k, v in mp.items():
@@ -77,8 +99,12 @@ def process_frame(args):
         return None
     if not len(ori):
         return None
-    out_oms = ori[:, OM0:OM0 + 9]                     # (M,9)
-    out_g = ori[:, GCOL].astype(int)
+    ori = np.atleast_2d(ori)
+    fmt = solution_format(ori.shape[1], h5path)
+    sc = spot_columns(fmt)
+    S_G, S_H, S_K, S_L = sc["grain"], sc["h"], sc["k"], sc["l"]
+    out_oms = ori[:, fmt.om_start:fmt.om_start + 9]   # (M,9)
+    out_g = ori[:, fmt.grain].astype(int)
     med = np.full(len(oms_req), np.nan)
     nasg = np.zeros(len(oms_req), int)
     for i, om in enumerate(oms_req):
@@ -101,8 +127,7 @@ def process_frame(args):
 def main():
     z = np.load(f"{W}/peel_map/full_zn_clustered.npz", allow_pickle=True)
     oms, lab, fr, nh = z["oms"], z["labels"], z["frames"], z["nhit"].astype(int)
-    n = np.array([int(str(f).split("_")[-1].split(".")[0]) for f in fr])
-    row, col = (n - 1) // NR, (n - 1) % NR
+    row, col = raster_positions(fr, Z=z["Z"] if "Z" in z.files else None, shape=SHAPE)
     foot = np.bincount(lab)[lab]                       # footprint per instance
     print(f"{len(oms)} instances, {len(np.unique(lab))} clusters", flush=True)
 

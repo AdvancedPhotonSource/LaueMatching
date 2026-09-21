@@ -16,6 +16,8 @@ run it is describing.  This module reads that file.
     from laue_material import Phase
 
     ph = Phase.load("alpha")          # -> $LAUE_PARAMS_ALPHA, else $LAUE_PARAMS
+                                      #    (the generic one only when a single
+                                      #    phase is in use)
     px = ph.project(OM)               # (n,2) predicted detector pixels
     ops = ph.sym_ops                  # proper rotations for this crystal system
 
@@ -39,9 +41,41 @@ from typing import Dict, Optional
 
 import numpy as np
 
-__all__ = ["Phase", "sym_ops_for_spacegroup", "selftest"]
+__all__ = ["Phase", "phase_name", "sym_ops_for_spacegroup", "selftest"]
 
 HC_KEV_NM = 1.2398419739
+
+# realpath(params file) -> the phase name that first loaded it in this process.
+# Phase.load refuses a second, different name for the same file.
+_RESOLVED: Dict[str, str] = {}
+
+
+def phase_name() -> str:
+    """THE phase a single-phase script works on, from the environment. No material default.
+
+    * ``LAUE_PHASE`` set -> that name (and, if ``LAUE_PHASES`` is also set, it must
+      be one of the phases listed there).
+    * unset, and ``LAUE_PHASES`` lists exactly one phase -> that phase.
+    * otherwise (``LAUE_PHASES`` lists several, or neither is set) -> exit naming
+      ``LAUE_PHASE``.
+
+    Before 2026-09 the scripts defaulted the singular variable to "alpha" in some
+    places and "zn" in others, so the same unset environment meant a different
+    material depending on which script ran.
+    """
+    listed = [p.strip() for p in os.environ.get("LAUE_PHASES", "").split(",") if p.strip()]
+    v = os.environ.get("LAUE_PHASE", "").strip()
+    if v:
+        if listed and v not in listed:
+            raise SystemExit(f"LAUE_PHASE={v!r} is not one of LAUE_PHASES={listed}")
+        return v
+    if len(listed) == 1:
+        return listed[0]
+    if listed:
+        raise SystemExit(f"LAUE_PHASE is not set and LAUE_PHASES lists {len(listed)} phases "
+                         f"{listed}: set LAUE_PHASE (or pass the phase argument) to choose one")
+    raise SystemExit("LAUE_PHASE is not set (and LAUE_PHASES does not name a single phase): "
+                     "set it to the phase whose LAUE_PARAMS_<PHASE> file describes this run")
 
 
 # --------------------------------------------------------------------------
@@ -197,6 +231,25 @@ def read_params(path: str) -> Dict[str, list]:
     return out
 
 
+def _direct_A(latt) -> np.ndarray:
+    """
+    Direct-lattice matrix, columns = a, b, c, in nm, in the SAME Cartesian frame
+    as :func:`_reciprocal_B` (a along x, b in the xy plane), so ``A.T @ B == 2*pi*I``.
+
+    Use this for crystal DIRECTIONS [uvw] (``A @ uvw``); ``B @ hkl`` is a plane
+    NORMAL. The two coincide only for cubic cells and for hex [0001] || (0001).
+    """
+    a, b, c, alpha, beta, gamma = [float(v) for v in latt]
+    ca, cb, cg = cos(radians(alpha)), cos(radians(beta)), cos(radians(gamma))
+    sg = sin(radians(gamma))
+    phi = sqrt(1.0 - ca * ca - cb * cb - cg * cg + 2 * ca * cb * cg)
+    av = np.array([a, 0.0, 0.0])
+    bv = np.array([b * cg, b * sg, 0.0])
+    cv = np.array([c * cb, c * (ca - cb * cg) / sg, c * phi / sg])
+    cv[np.abs(cv) < 1e-11] = 0.0
+    return np.column_stack([av, bv, cv])
+
+
 def _reciprocal_B(latt) -> np.ndarray:
     """
     Reciprocal-lattice matrix, columns = a*, b*, c*, in 1/nm (with the 2*pi).
@@ -206,15 +259,11 @@ def _reciprocal_B(latt) -> np.ndarray:
     """
     a, b, c, alpha, beta, gamma = [float(v) for v in latt]
     ca, cb, cg = cos(radians(alpha)), cos(radians(beta)), cos(radians(gamma))
-    sg = sin(radians(gamma))
     phi = sqrt(1.0 - ca * ca - cb * cb - cg * cg + 2 * ca * cb * cg)
     Vc = a * b * c * phi
     pv = 2 * pi / Vc
 
-    av = np.array([a, 0.0, 0.0])
-    bv = np.array([b * cg, b * sg, 0.0])
-    cv = np.array([c * cb, c * (ca - cb * cg) / sg, c * phi / sg])
-    cv[np.abs(cv) < 1e-11] = 0.0
+    av, bv, cv = _direct_A(latt).T
 
     return np.column_stack([np.cross(bv, cv), np.cross(cv, av), np.cross(av, bv)]) * pv
 
@@ -232,6 +281,7 @@ class Phase:
         self.symmetry = p.get("Symmetry", ["P"])[0]
         self.lattice = [float(v) for v in p["LatticeParameter"]]
         self.B = _reciprocal_B(self.lattice)
+        self.A = _direct_A(self.lattice)        # direct lattice, for [uvw] directions
         self.sym_ops = sym_ops_for_spacegroup(self.sgnum)
 
         self.P = np.array([float(v) for v in p["P_Array"]])
@@ -269,15 +319,41 @@ class Phase:
         another's reflection list is the exact failure this module exists to
         prevent.
         """
+        generic = False
         if params_path is None:
-            params_path = os.environ.get(f"LAUE_PARAMS_{phase.upper()}") or os.environ.get("LAUE_PARAMS")
+            params_path = os.environ.get(f"LAUE_PARAMS_{phase.upper()}")
+            if not params_path and os.environ.get("LAUE_PARAMS"):
+                params_path, generic = os.environ["LAUE_PARAMS"], True
         if not params_path:
             raise RuntimeError(
                 f"no parameter file for phase {phase!r}: set LAUE_PARAMS_{phase.upper()} "
-                f"(or LAUE_PARAMS) to the params_*.txt used for indexing."
+                f"(or LAUE_PARAMS, single-phase only) to the params_*.txt used for indexing."
             )
+        if generic:
+            # The generic LAUE_PARAMS names no phase, so it is only unambiguous when
+            # one phase is in use. With two, Phase.load("alpha") and
+            # Phase.load("beta") would both land on it and an "alpha vs beta"
+            # analysis would silently compare one material with itself.
+            listed = [p.strip() for p in os.environ.get("LAUE_PHASES", "").split(",") if p.strip()]
+            if len(listed) > 1:
+                raise RuntimeError(
+                    f"LAUE_PARAMS is set but LAUE_PHASES lists {len(listed)} phases {listed}: "
+                    f"the generic file cannot describe more than one. Set "
+                    f"LAUE_PARAMS_{phase.upper()} (and one per other phase).")
         if not os.path.exists(params_path):
             raise FileNotFoundError(f"parameter file not found: {params_path}")
+        # Two different phase names resolving to ONE file in one process is the
+        # same failure by another route (LAUE_PARAMS used for both, or two
+        # LAUE_PARAMS_<PHASE> pointing at one file): refuse it.
+        key = os.path.realpath(params_path)
+        prev = _RESOLVED.get(key)
+        if prev is not None and prev != phase:
+            raise RuntimeError(
+                f"phases {prev!r} and {phase!r} both resolve to {params_path}"
+                f"{' (via the generic LAUE_PARAMS)' if generic else ''}: two phases "
+                f"cannot share one material description. Set LAUE_PARAMS_{phase.upper()} "
+                f"to that phase's own params file.")
+        _RESOLVED[key] = phase
         return cls(params_path, name=phase)
 
     # -- forward projection ----------------------------------------------
@@ -368,6 +444,11 @@ def selftest() -> None:
     old_cub = np.eye(3) * 2 * pi / 0.33065
     new_cub = _reciprocal_B([0.33065] * 3 + [90, 90, 90])
     assert np.allclose(old_cub, new_cub, atol=1e-9), (old_cub, new_cub)
+
+    # direct and reciprocal matrices share a frame: A^T B = 2 pi I
+    for latt in ([a, b, c, 90, 90, 120], [0.33065] * 3 + [90, 90, 90]):
+        assert np.allclose(_direct_A(latt).T @ _reciprocal_B(latt), 2 * pi * np.eye(3),
+                           atol=1e-9)
 
     assert len(sym_ops_for_spacegroup(194)) == 12     # HCP  (Ti alpha, Zn)
     assert len(sym_ops_for_spacegroup(229)) == 24     # BCC  (Ti beta)

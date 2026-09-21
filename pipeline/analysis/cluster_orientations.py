@@ -34,7 +34,7 @@ from scipy.spatial import cKDTree
 from scipy.sparse import coo_matrix
 from scipy.sparse.csgraph import connected_components
 
-from laue_material import Phase
+from laue_material import Phase, phase_name
 
 
 def om_to_quat(oms: np.ndarray) -> np.ndarray:
@@ -300,15 +300,18 @@ def selftest(ph, n=400, tol=1.0, seed=0):
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--selftest":
-        ph = Phase.load(sys.argv[2] if len(sys.argv) > 2 else "zn")
+        ph = Phase.load(sys.argv[2] if len(sys.argv) > 2 else phase_name())
         selftest(ph)
         sys.exit(0)
 
     argv = [a for a in sys.argv[1:] if a != "--diameter"]
     diameter = "--diameter" in sys.argv
+    if len(argv) < 2 or argv[0] in ("-h", "--help"):
+        sys.exit(__doc__ + "\n       cluster_orientations.py --selftest [phase]\n"
+                 "       add --diameter for complete-linkage (diameter) clusters")
     src, dst = argv[0], argv[1]
     tol = float(argv[2]) if len(argv) > 2 else 1.0
-    phase = argv[3] if len(argv) > 3 else os.environ.get("LAUE_PHASE", "zn")
+    phase = argv[3] if len(argv) > 3 else phase_name()
     ph = Phase.load(phase)
 
     z = np.load(src, allow_pickle=True)

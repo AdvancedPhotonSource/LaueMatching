@@ -19,7 +19,7 @@ import os
 import numpy as np, sys
 import matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-WORK = os.environ.get("LAUE_WORK", "$LAUE_WORK")
+WORK = os.environ.get("LAUE_WORK") or sys.exit("LAUE_WORK is not set (peel_map/ and figures/ live under it)")
 TOL=2.0   # deg, orientation match tolerance (Burgers OR scatter in Ti-64 ~1-2 deg)
 # argv[1]=min alpha cluster size, argv[2]=scan prefix ("parentbeta" | "id6_10x10").
 # The prefix selects which *_validated.npz pair to read and names the outputs.
@@ -30,22 +30,17 @@ def rmat(ax,deg):
     u=np.asarray(ax,float); u/=np.linalg.norm(u); t=np.radians(deg)
     K=np.array([[0,-u[2],u[1]],[u[2],0,-u[0]],[-u[1],u[0],0]])
     return np.eye(3)+np.sin(t)*K+(1-np.cos(t))*(K@K)
-HEX=np.array([rmat([0,0,1],60*k) for k in range(6)]+
-             [rmat([np.cos(np.radians(x)),np.sin(np.radians(x)),0],180) for x in (0,30,60,90,120,150)])
-CUB=[np.eye(3)]
-for ax,d in [([1,0,0],90),([1,0,0],180),([1,0,0],270),([0,1,0],90),([0,1,0],180),([0,1,0],270),
-    ([0,0,1],90),([0,0,1],180),([0,0,1],270),([1,1,0],180),([1,-1,0],180),([1,0,1],180),([-1,0,1],180),
-    ([0,1,1],180),([0,1,-1],180),([1,1,1],120),([1,1,1],240),([1,-1,1],120),([1,-1,1],240),([-1,1,1],120),
-    ([-1,1,1],240),([1,1,-1],120),([1,1,-1],240)]:
-    CUB.append(rmat(ax,d))
-CUB=np.array(CUB)
-def miso(A,Bs,OPS):
-    best=np.full(len(Bs),999.)
-    for S in OPS:
-        tr=np.einsum('ij,kj,mki->m',S,A,Bs); best=np.minimum(best,np.degrees(np.arccos(np.clip((tr-1)/2,-1,1))))
-    return best
-def hexmiso(A,Bs): return miso(A,Bs,HEX)
-def cubmiso(A,Bs): return miso(A,Bs,CUB)
+# Symmetry from each phase's space group (laue_material), not hard-coded
+# hex/cubic tables. The Burgers relation below is specifically bcc -> hcp, so
+# refuse phases whose Laue classes are not hexagonal (alpha) and cubic (beta)
+# rather than produce a variant analysis that means nothing.
+from laue_material import Phase
+_PH_A=Phase.load("alpha"); _PH_B=Phase.load("beta")
+if not (168<=_PH_A.sgnum<=194 and 195<=_PH_B.sgnum<=230):
+    sys.exit(f"Burgers reconstruction needs a hexagonal alpha and a cubic beta; got "
+             f"alpha SG {_PH_A.sgnum}, beta SG {_PH_B.sgnum}")
+def hexmiso(A,Bs): return _PH_A.misorientation(A,Bs)     # degrees
+def cubmiso(A,Bs): return _PH_B.misorientation(A,Bs)     # degrees
 def burgers_Cv():
     planes=[(1,1,0),(1,-1,0),(1,0,1),(1,0,-1),(0,1,1),(0,1,-1)]; Cs=[]
     for n in planes:
@@ -90,22 +85,22 @@ def load(phase):
 aom,aX,aZ,alab=load("alpha"); bom,bX,bZ,blab=load("beta")
 print(f"validated alpha instances {len(aom)}, beta instances {len(bom)}")
 
-# cluster reps (use saved labels if valid, else recluster with given OPS)
-def reps_from(oms, labels, OPS, tol=1.0):
+# cluster reps (use saved labels if valid, else recluster with the phase's misorientation)
+def reps_from(oms, labels, miso, tol=1.0):
     if labels.max()>=0 and (labels>=0).all():
         L=labels
     else:
         L=np.full(len(oms),-1); cid=0
         for i in range(len(oms)):
             if L[i]>=0: continue
-            un=np.where(L<0)[0]; d=miso(oms[i],oms[un],OPS); L[un[d<tol]]=cid; cid+=1
+            un=np.where(L<0)[0]; d=miso(oms[i],oms[un]); L[un[d<tol]]=cid; cid+=1
     reps=[]; idxs=[]
     for c in range(L.max()+1):
         ii=np.where(L==c)[0]
         if len(ii): reps.append(oms[ii[0]]); idxs.append(ii)
     return np.array(reps), idxs, L
-a_reps_all,a_idx_all,alab=reps_from(aom,alab,HEX)
-b_reps_all,b_idx_all,blab=reps_from(bom,blab,CUB)
+a_reps_all,a_idx_all,alab=reps_from(aom,alab,hexmiso)
+b_reps_all,b_idx_all,blab=reps_from(bom,blab,cubmiso)
 a_sz_all=np.array([len(x) for x in a_idx_all]); b_sz_all=np.array([len(x) for x in b_idx_all])
 print(f"alpha clusters {len(a_reps_all)} (top sizes {sorted(a_sz_all,reverse=True)[:14]})")
 print(f"beta  clusters {len(b_reps_all)} (top sizes {sorted(b_sz_all,reverse=True)[:8]})")

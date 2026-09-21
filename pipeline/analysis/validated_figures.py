@@ -5,34 +5,45 @@ compare the raw catalog against what survives a random-orientation null.
 Panels
   A, B  validated alpha / beta grains per beam position (sample-surface frame)
   C     recurrence spectrum of the VALIDATED clusters, both phases, log-log
-  D     observed spot-hit counts vs the Poisson null expectation -- the evidence
+  D     observed spot-hit counts vs the random-orientation null measured on this
+        scan by null_model.py (same statistic, LAUE_GATE_STAT) -- the evidence
         that the surviving instances are not chance fits
 
 usage: validated_figures.py
 """
 import os
+import sys
 import numpy as np
 import matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-W = os.environ.get("LAUE_WORK", "$LAUE_WORK")
-SQ2 = np.sqrt(2.0)
-PREFIX = os.environ.get("LAUE_OUT_PREFIX", "scan")
+from frame_peaks import gate_counts, gate_statistic, load_null, out_prefix
+
+W = os.environ.get("LAUE_WORK") or sys.exit("LAUE_WORK is not set (peel_map/ and figures/ live under it)")
+# Slow-axis stage coordinates are de-projected to the sample surface by the MOUNT
+# angle (raster.mount_deg, required LAUE_MOUNT_DEG); this was a hard-coded sqrt(2).
+from raster import mount_deg
+ZSCALE = 1.0 / np.cos(np.radians(mount_deg()))
+PREFIX = out_prefix()
 COL = {"alpha": "#4269d0", "beta": "#e8843c"}
 GK = {"alpha": r"\alpha", "beta": r"\beta"}
-# Random-orientation null MEASURED ON THIS SCAN by analysis/null_model.py
-# (120 frames x 150 draws = 18,000 draws per phase). Do NOT substitute the
-# SmallArea scan's numbers -- lambda differs with peak and reflection counts.
-NULL = {"alpha": dict(mean=2.95, p999=12, mx=16, lam=3.08),
-        "beta":  dict(mean=1.81, p999=10, mx=15, lam=1.91)}
+# Random-orientation null MEASURED ON THIS SCAN by analysis/null_model.py, read
+# through frame_peaks.load_null (peel_map/<prefix>_null.json, LAUE_NULLMAX_<PHASE>
+# overrides the max). No built-in values: this file used to carry one Ti scan's
+# null and draw it on every scan's figure.
+STAT = gate_statistic()
+print(f"gate statistic: {STAT} (LAUE_GATE_STAT)")
+XLABEL = {"nhit": "predicted reflections landing on a real peak",
+          "nhit_distinct": "distinct real peaks explained"}
 
 def centers_to_edges(c):
     c = np.asarray(c, float); d = np.diff(c).mean()
     return np.concatenate([[c[0]-d/2], (c[:-1]+c[1:])/2, [c[-1]+d/2]])
 
 def load(phase):
-    z = np.load(f"{W}/peel_map/{PREFIX}_{phase}_validated.npz", allow_pickle=True)
-    return z["X"].astype(float), z["Z"].astype(float), z["labels"], z["nhit"].astype(int)
+    src = f"{W}/peel_map/{PREFIX}_{phase}_validated.npz"
+    z = np.load(src, allow_pickle=True)
+    return z["X"].astype(float), z["Z"].astype(float), z["labels"], gate_counts(z, STAT, src)
 
 data = {}
 for ph in ("alpha", "beta"):
@@ -43,6 +54,9 @@ for ph in ("alpha", "beta"):
 phases = [p for p in ("alpha", "beta") if p in data]
 if not phases:
     raise SystemExit("no validated npz yet")
+NULL = {ph: load_null(ph, W, PREFIX, STAT) for ph in phases}
+for ph in phases:
+    print(f"[{ph}] null: {STAT} max {NULL[ph]['max']}  [{NULL[ph]['source']}]")
 
 fig = plt.figure(figsize=(17, 9.6), constrained_layout=True)
 gs = fig.add_gridspec(2, 2)
@@ -55,7 +69,7 @@ for k, ph in enumerate(phases):
     for x, z in zip(X, Z):
         grid[zi[round(z, 4)], xi[round(x, 4)]] += 1
     xs = centers_to_edges(Xu - Xu.min())
-    zs = centers_to_edges((Zu - Zu.min()) * SQ2)
+    zs = centers_to_edges((Zu - Zu.min()) * ZSCALE)
     ax = fig.add_subplot(gs[0, k])
     m = ax.pcolormesh(xs, zs, grid, cmap="viridis", shading="flat", rasterized=True)
     cb = fig.colorbar(m, ax=ax, fraction=0.046, pad=0.04)
@@ -90,29 +104,35 @@ ax.set_ylabel("number of validated grains", fontsize=9)
 ax.set_title(r"C $\cdot$ recurrence spectrum, validated grains only", fontsize=10)
 ax.grid(alpha=0.25, lw=0.5); ax.tick_params(labelsize=8)
 
-# --- D: observed hits vs the Poisson null ---
+# --- D: observed hits vs the measured null ---
 ax = fig.add_subplot(gs[1, 1])
-nullmax = max(NULL[ph]["mx"] for ph in phases)
+nullmax = max(int(NULL[ph]["max"]) for ph in phases)
 ax.axvspan(0, nullmax, color="#999", alpha=0.16, lw=0)
 for j, ph in enumerate(phases):
     nhit = data[ph][3]
     b = np.arange(0, max(nhit.max(), 2) + 2)
     ax.hist(nhit, bins=b, histtype="step", lw=2, color=COL[ph], density=True)
-    ax.axvline(NULL[ph]["mean"], color=COL[ph], ls=":", lw=1.6)
+    mean = NULL[ph].get("mean")
+    if mean is not None:
+        ax.axvline(mean, color=COL[ph], ls=":", lw=1.6)
     ax.text(0.97, 0.94 - 0.10 * j,
             rf"${GK[ph]}$: median {int(np.median(nhit))} hits "
-            rf"(null mean {NULL[ph]['mean']}, max {NULL[ph]['mx']})",
+            + (f"(null mean {mean:.2f}, max {NULL[ph]['max']})" if mean is not None
+               else f"(null max {NULL[ph]['max']})"),
             transform=ax.transAxes, ha="right", va="top",
             fontsize=9.5, color=COL[ph], fontweight="bold")
+ndraws = [NULL[ph].get("n_draws") for ph in phases]
 ax.text(nullmax + 0.8, ax.get_ylim()[1]*0.92,
-        f"shaded: entire measured null,\n18,000 random draws/phase (max {nullmax})",
+        "shaded: entire measured null,\n"
+        + (f"{min(ndraws):,} random draws/phase (max {nullmax})" if all(ndraws)
+           else f"max {nullmax}"),
         fontsize=8.5, color="#555", va="top")
-ax.set_xlabel("predicted reflections landing on a real peak", fontsize=9)
+ax.set_xlabel(f"{XLABEL[STAT]} ({STAT})", fontsize=9)
 ax.set_ylabel("fraction of validated instances", fontsize=9)
 ax.set_title(r"D $\cdot$ evidence per validated instance vs the null", fontsize=10)
 ax.grid(alpha=0.25, lw=0.5); ax.tick_params(labelsize=8)
 
-fig.suptitle(r"a two-phase hcp/bcc alloy ID26 fine scan — grains surviving the per-frame Poisson spot test "
+fig.suptitle(f"{PREFIX}: grains surviving the per-frame Poisson spot test "
              r"($p<10^{-4}$ against a random-orientation null)", fontsize=12)
 fig.savefig(f"{W}/figures/{PREFIX}_report_validated.png", dpi=150)
 print(f"saved {PREFIX}_report_validated.png")

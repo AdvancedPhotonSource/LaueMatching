@@ -5,8 +5,9 @@ the resulting per-position variant assignment forms contiguous domains, that is
 independent confirmation: nothing in the calculation could have produced spatial
 structure by construction.
 
-Statistic: majority variant per beam position, then the fraction of 4-neighbour
-position pairs sharing it. Null: the same statistic after shuffling the majority-variant
+Statistic: majority variant per beam position, then the fraction of neighbouring
+position pairs sharing it (neighbours per raster.connectivity(): 8 by default,
+LAUE_CONNECTIVITY=4 for the edge-only pairs this script used before 2026-09). Null: the same statistic after shuffling the majority-variant
 labels across positions (destroys spatial arrangement, preserves variant proportions).
 
 The original figure foregrounded the 'retained-beta anchor', which anchor_null.py
@@ -16,14 +17,31 @@ anchor is NOT drawn as corroboration here.
 usage: variant_coherence.py
 """
 import os
+import sys
 import numpy as np
 import matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-W = os.environ.get("LAUE_WORK", "$LAUE_WORK")
-SQ2 = np.sqrt(2.0)
+from raster import connectivity
+
+W = os.environ.get("LAUE_WORK") or sys.exit("LAUE_WORK is not set (peel_map/ and figures/ live under it)")
+# Surface-frame geometry. Slow-axis stage coordinates are de-projected by the
+# MOUNT angle (raster.mount_deg, required LAUE_MOUNT_DEG; this was a hard-coded
+# sqrt(2), i.e. 45 deg). Steps are MEASURED from the stage coordinates in the npz
+# (median spacing), not assumed: the 0.25 um literals this replaced were one scan's
+# fast-axis step, and that scan's slow-axis stage step was different (0.177 um).
+from raster import mount_deg
+ZSCALE = 1.0 / np.cos(np.radians(mount_deg()))
+
+
+def _step(u):
+    """Median spacing of sorted unique stage coordinates (um); 0 if only one."""
+    d = np.diff(np.asarray(u, float))
+    d = d[d > 1e-9]
+    return float(np.median(d)) if len(d) else 0.0
 NSHUF = 500
-PREFIX = os.environ.get("LAUE_OUT_PREFIX", "scan")
+from frame_peaks import out_prefix
+PREFIX = out_prefix()
 
 z = np.load(f"{W}/peel_map/{PREFIX}_reconstruction.npz", allow_pickle=True)
 inst_var = z["inst_var"]; aX = z["aX"].astype(float); aZ = z["aZ"].astype(float)
@@ -41,12 +59,26 @@ for v, x, zc in zip(inst_var, aX, aZ):
 tot = votes.sum(axis=2)
 maj = np.where(tot > 0, votes.argmax(axis=2), -1)
 
+# Neighbour pairs follow the shared raster connectivity (raster.py): the two
+# edge offsets for 4-neighbour, plus the two diagonals for 8 (the default).
+# BEHAVIOUR CHANGE 2026-09: this used 4-neighbour pairs only; LAUE_CONNECTIVITY=4
+# reproduces the earlier statistic.
+CONN = connectivity()
+OFFSETS = ((0, 1), (1, 0)) + (((1, 1), (1, -1)) if CONN == 8 else ())
+print(f"neighbour pairs: {CONN}-connectivity (LAUE_CONNECTIVITY)")
+
+def _pair(arr, di, dj):
+    """(arr[i, j], arr[i+di, j+dj]) views over every in-bounds pair."""
+    j0, j1 = (0, nx - dj) if dj >= 0 else (-dj, nx)
+    return arr[:nz-di, j0:j1], arr[di:, j0+dj:j1+dj]
+
 def coherence(m):
     ok = tot > 0
     same = 0; n = 0
-    for di, dj in ((0, 1), (1, 0)):
-        a = m[:nz-di, :nx-dj]; b = m[di:, dj:]
-        va = ok[:nz-di, :nx-dj] & ok[di:, dj:]
+    for di, dj in OFFSETS:
+        a, b = _pair(m, di, dj)
+        oa, ob = _pair(ok, di, dj)
+        va = oa & ob
         same += int(((a == b) & va).sum()); n += int(va.sum())
     return same / max(n, 1), n
 
@@ -69,9 +101,10 @@ print(f"z = {(obs-null.mean())/null.std():.1f}")
 # ---- figure ----
 fig, ax = plt.subplots(1, 2, figsize=(15, 6.2), constrained_layout=True,
                        gridspec_kw={"width_ratios": [1.15, 1]})
-xs = np.concatenate([[Xu[0]-0.125], (Xu[:-1]+Xu[1:])/2, [Xu[-1]+0.125]]) - Xu.min()
-zc = (Zu - Zu.min())*SQ2
-zs = np.concatenate([[zc[0]-0.125], (zc[:-1]+zc[1:])/2, [zc[-1]+0.125]])
+hx, hz = _step(Xu) / 2, _step(Zu) * ZSCALE / 2
+xs = np.concatenate([[Xu[0]-hx], (Xu[:-1]+Xu[1:])/2, [Xu[-1]+hx]]) - Xu.min()
+zc = (Zu - Zu.min())*ZSCALE
+zs = np.concatenate([[zc[0]-hz], (zc[:-1]+zc[1:])/2, [zc[-1]+hz]])
 cmap = plt.get_cmap("tab20", 12)
 m = np.ma.masked_where(maj < 0, maj)
 pc = ax[0].pcolormesh(xs, zs, m, cmap=cmap, vmin=-.5, vmax=11.5, shading="flat")

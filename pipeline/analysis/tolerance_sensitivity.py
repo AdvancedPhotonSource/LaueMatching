@@ -19,9 +19,11 @@ import numpy as np
 import matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-W = os.environ.get("LAUE_WORK", "$LAUE_WORK")
-PREFIX = os.environ.get("LAUE_OUT_PREFIX", "scan")
-PHASE = sys.argv[1] if len(sys.argv) > 1 else "alpha"
+W = os.environ.get("LAUE_WORK") or sys.exit("LAUE_WORK is not set (peel_map/ and figures/ live under it)")
+from frame_peaks import out_prefix
+PREFIX = out_prefix()
+from laue_material import phase_name
+PHASE = sys.argv[1] if len(sys.argv) > 1 else phase_name()   # argv, else LAUE_PHASE / the single LAUE_PHASES entry
 TOLS = [0.2, 0.3, 0.4, 0.5, 0.75, 1.0]
 
 z = np.load(f"{W}/peel_map/{PREFIX}_{PHASE}_validated.npz", allow_pickle=True)

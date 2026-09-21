@@ -4,7 +4,11 @@ Pulls from each scan's analysis log (nulls, census, Burgers, coherence) and from
 saved npz (validated instances, geometry measured from the stage coordinates, grains
 under the contiguity-aware definition). Folder names are never trusted for geometry.
 
-usage: collect_scan_metrics.py > metrics.json
+Grains are split into connected pieces with the shared raster connectivity
+(raster.py); the above-null and gold counts use LAUE_GATE_STAT (nhit by default)
+against the null measured for that statistic on each scan.
+
+usage: LAUE_WORK=... collect_scan_metrics.py > metrics.json
 """
 import glob
 import json
@@ -14,34 +18,55 @@ import sys
 import numpy as np
 from scipy import ndimage as ndi
 
-W = "$LAUE_WORK"
+from frame_peaks import GATE_STATS, gate_statistic, null_json_path
+from raster import connectivity, structure
+
+W = os.environ.get("LAUE_WORK") or sys.exit("LAUE_WORK is not set (scans are read from $LAUE_WORK/analysis/*/)")
 ANA = f"{W}/analysis"
-SQ2 = np.sqrt(2.0)
+# Slow-axis stage coordinates are de-projected to the sample surface by the MOUNT
+# angle (raster.mount_deg, required LAUE_MOUNT_DEG); this was a hard-coded sqrt(2).
+from raster import mount_deg
+ZSCALE = 1.0 / np.cos(np.radians(mount_deg()))
+# The hit statistic the above-null / gold counts use; the null is read for the SAME
+# statistic. Per-scan nulls only -- a LAUE_NULLMAX_<PHASE> override is deliberately
+# NOT applied here, since one value across many scans is exactly the inheritance
+# the chain forbids.
+STAT = gate_statistic()
 
 def grab(txt, pat, cast=float, default=None):
     m = re.search(pat, txt)
     return cast(m.group(1)) if m else default
 
-def rmat(ax, deg):
-    u = np.asarray(ax, float); u /= np.linalg.norm(u); t = np.radians(deg)
-    K = np.array([[0, -u[2], u[1]], [u[2], 0, -u[0]], [-u[1], u[0], 0]])
-    return np.eye(3) + np.sin(t)*K + (1-np.cos(t))*(K@K)
-HEXOPS = np.array([rmat([0, 0, 1], 60*k) for k in range(6)] +
-                  [rmat([np.cos(np.radians(a)), np.sin(np.radians(a)), 0], 180)
-                   for a in (0, 30, 60, 90, 120, 150)])
-CUBOPS = np.array([np.eye(3)] + [rmat(a, d) for a, d in
-    [([1,0,0],90),([1,0,0],180),([1,0,0],270),([0,1,0],90),([0,1,0],180),([0,1,0],270),
-     ([0,0,1],90),([0,0,1],180),([0,0,1],270),([1,1,0],180),([1,-1,0],180),([1,0,1],180),
-     ([-1,0,1],180),([0,1,1],180),([0,1,-1],180),([1,1,1],120),([1,1,1],240),([1,-1,1],120),
-     ([1,-1,1],240),([-1,1,1],120),([-1,1,1],240),([1,1,-1],120),([1,1,-1],240)]])
+def scan_null(d, pref, txt, ph):
+    """{mean, p999, max, source} for STAT: the scan's null json, else its analysis log.
+    The log only carries the nhit statistic in the parseable line."""
+    jp = null_json_path(d, pref)
+    if os.path.isfile(jp):
+        with open(jp) as fh:
+            rec = (json.load(fh).get("phases", {}).get(ph) or {}).get(STAT)
+        if rec:
+            return {"mean": rec.get("mean"), "p999": rec.get("p999"), "max": rec.get("max"),
+                    "statistic": STAT, "source": "null.json"}
+    if STAT != "nhit":
+        return {"mean": None, "p999": None, "max": None, "statistic": STAT,
+                "source": "none (no null.json; the log's null line is nhit)"}
+    blk = re.search(rf"\[{ph}\] RANDOM-ORIENTATION NULL.*?\n(.*?)\n", txt, re.S)
+    line = blk.group(1) if blk else ""
+    return {"mean": grab(line, r"mean hits ([0-9.]+)"),
+            "p999": grab(line, r"99\.9th ([0-9]+)", int),
+            "max": grab(line, r"max ([0-9]+)", int),
+            "statistic": STAT, "source": "analysis log"}
 
 def phase_metrics(d, pref, ph, nullmax):
     f = f"{d}/peel_map/{pref}_{ph}_validated.npz"
     if not os.path.isfile(f):
         return None
     z = np.load(f, allow_pickle=True)
-    X, Z, lab, nhit = z["X"].astype(float), z["Z"].astype(float), z["labels"], z["nhit"].astype(int)
-    out = {"instances": int(len(X))}
+    X, Z, lab = z["X"].astype(float), z["Z"].astype(float), z["labels"]
+    if STAT not in z.files:
+        return {"instances": int(len(X)), "error": f"no {STAT} column in {os.path.basename(f)}"}
+    nhit = z[STAT].astype(int)
+    out = {"instances": int(len(X)), "statistic": STAT}
 
     # geometry MEASURED from the stage coordinates, never from the folder name
     Xu = np.unique(np.round(X, 4)); Zu = np.unique(np.round(Z, 4))
@@ -53,18 +78,22 @@ def phase_metrics(d, pref, ph, nullmax):
         "span_x_um": round(float(Xu.max()-Xu.min()), 3) if len(Xu) > 1 else 0.0,
         "span_z_lab_um": round(float(Zu.max()-Zu.min()), 3) if len(Zu) > 1 else 0.0,
         "step_x_um": round(dx, 4), "step_z_lab_um": round(dz, 4),
-        # 45 deg mount: sample-frame Z is the lab Z de-projected
-        "span_z_sample_um": round(float(Zu.max()-Zu.min())*SQ2, 3) if len(Zu) > 1 else 0.0,
-        "step_z_sample_um": round(dz*SQ2, 4),
+        # sample-frame Z is the stage Z de-projected by the mount (LAUE_MOUNT_DEG)
+        "span_z_sample_um": round(float(Zu.max()-Zu.min())*ZSCALE, 3) if len(Zu) > 1 else 0.0,
+        "step_z_sample_um": round(dz*ZSCALE, 4),
+        "mount_deg": mount_deg(),
     }
     out["above_nullmax"] = int((nhit > nullmax).sum()) if nullmax else None
     out["above_nullmax_pct"] = round(100*float((nhit > nullmax).mean()), 1) if nullmax else None
     out["median_hits"] = int(np.median(nhit))
+    for other in GATE_STATS:                         # both counts, where the npz has them
+        if other in z.files:
+            out[f"median_{other}"] = int(np.median(z[other]))
 
     # contiguity-aware grains
     Xi = {v: i for i, v in enumerate(Xu)}; Zi = {v: i for i, v in enumerate(Zu)}
     gi = np.array([Zi[round(v, 4)] for v in Z]); gj = np.array([Xi[round(v, 4)] for v in X])
-    shape = (len(Zu), len(Xu)); st = ndi.generate_binary_structure(2, 2)
+    shape = (len(Zu), len(Xu)); st = structure()
     grains, gold = 0, 0
     ge5 = 0
     for c in range(lab.max()+1):
@@ -90,8 +119,13 @@ def phase_metrics(d, pref, ph, nullmax):
     out["gold"] = gold
     return out
 
+print(f"statistic {STAT} (LAUE_GATE_STAT), connectivity {connectivity()}-neighbour "
+      f"(LAUE_CONNECTIVITY)", file=sys.stderr)
 res = {}
-for d in sorted(glob.glob(f"{ANA}/*/")):
+dirs = sorted(glob.glob(f"{ANA}/*/"))
+if not dirs:
+    sys.exit(f"no scan directories under {ANA}/")
+for d in dirs:
     scan = os.path.basename(d.rstrip("/"))
     va = glob.glob(f"{d}/peel_map/*_alpha_validated.npz")
     if not va:
@@ -100,15 +134,7 @@ for d in sorted(glob.glob(f"{ANA}/*/")):
     logf = sorted(glob.glob(f"{d}/*analysis*.log"))
     txt = open(logf[0]).read() if logf else ""
 
-    nm = {}
-    for ph in ("alpha", "beta"):
-        blk = re.search(rf"\[{ph}\] RANDOM-ORIENTATION NULL.*?\n(.*?)\n", txt, re.S)
-        line = blk.group(1) if blk else ""
-        nm[ph] = {
-            "mean": grab(line, r"mean hits ([0-9.]+)"),
-            "p999": grab(line, r"99\.9th ([0-9]+)", int),
-            "max": grab(line, r"max ([0-9]+)", int),
-        }
+    nm = {ph: scan_null(d.rstrip("/"), pref, txt, ph) for ph in ("alpha", "beta")}
 
     entry = {
         "prefix": pref,
@@ -125,4 +151,6 @@ for d in sorted(glob.glob(f"{ANA}/*/")):
     res[scan] = entry
     print(f"collected {scan}", file=sys.stderr)
 
+if not res:
+    sys.exit(f"{len(dirs)} directories under {ANA}/ but none has peel_map/*_alpha_validated.npz")
 json.dump(res, sys.stdout, indent=1)

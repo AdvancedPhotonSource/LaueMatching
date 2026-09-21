@@ -1,9 +1,10 @@
 """Shared peak detection for one raw frame: saturation, halo and streak handling.
 
-`null_model.py` and `parentbeta_validate.py` both import `detect_peaks` from here.
-They must detect identically -- the null is what gates the validator's output, so
-any drift between them silently compares a count against a null measured with a
-different detector.
+`null_model.py`, `parentbeta_validate.py` and every other script that counts hits
+against a frame's peaks import `detect_peaks` and `count_matched_peaks` from here.
+They must detect and count identically -- the null is what gates the validator's
+output, so any drift between them silently compares a count against a null
+measured with a different detector or a different statistic.
 
 NOTHING IS DELETED. Every genuine reflection stays in the list, carrying flags
 that say what is trustworthy about it. Downstream code decides: indexing wants
@@ -56,6 +57,10 @@ The indexer is unaffected by all of this -- it runs its own percentile + MinArea
 watershed detection. Two separate code paths; check which produced a peak count
 before comparing numbers.
 """
+import json
+import os
+import re
+
 import numpy as np
 from scipy import ndimage as ndi
 
@@ -203,10 +208,15 @@ def subtract_halos(sub, centres, mad, rmax=HALO_RMAX, rbin=HALO_BIN):
     return out, done
 
 
-def detect_peaks(raw, npx, snr=8.0, maxfilt=9,
+def detect_peaks(raw, npx=None, snr=8.0, maxfilt=9,
                  drop_streaks=True, collapse_plateaus=True, remove_halos=True,
                  sat_level=SAT_LEVEL, return_flags=False):
     """Detect reflections on one raw frame.
+
+    ``npx`` is DEPRECATED and IGNORED: it was never used (every size comes from
+    ``raw.shape``). It stays the second positional parameter, now optional, so
+    existing ``detect_peaks(raw, NPX)`` and ``detect_peaks(raw, NPX, 8.0)`` calls
+    keep working unchanged; new code should omit it.
 
     Returns
     -------
@@ -269,6 +279,239 @@ def detect_peaks(raw, npx, snr=8.0, maxfilt=9,
     return xs, ys, info
 
 
+
+def count_matched_peaks(tree, predicted, tol, exclude=None):
+    """Count how many of ``predicted`` land on a detected peak, BOTH ways.
+
+    Returns ``(n_distinct, n_predicted)``:
+
+    * ``n_distinct``  -- distinct DETECTED PEAKS explained. This is the quantity
+      handbook invariant 15b asks a gate to use. Carried as ``nhit_distinct``.
+    * ``n_predicted`` -- predicted reflections that found support. This is what
+      the pipeline has always counted (``nhit``), and what the measured null
+      maxima in use (e.g. nhit > 11 on sampleH) were calibrated against.
+
+    ``exclude``, if given, is a boolean mask over the peaks in ``tree``: a
+    prediction whose nearest peak is excluded does not count either way. This is
+    the alpha-exclusion census's "lands on a peak no alpha grain claimed", with
+    the same nearest-peak rule the census always used.
+
+    They differ for two independent reasons, both real and both measured on sampleH:
+
+    1. HARMONICS. (001), (002), (003)... share a scattering direction exactly, so
+       they land on ONE pixel. ``Phase.project`` returns one row per hkl, so all
+       of them are counted. The C indexer already removes these -- ``calcOverlap``
+       in ``LaueMatchingHeaders.h`` rejects any reflection whose q-hat matches one
+       already recorded to 1e-6 -- so the C and Python sides have been counting
+       differently. Measured on the Zn hkl list: 7,984 entries reduce to 6,638
+       distinct directions, and on the detector a typical orientation gives 60.1
+       predicted rows at 50.7 distinct positions, a 1.186x inflation.
+    2. UNRESOLVED DISTINCT REFLECTIONS. Two genuinely different reflections can
+       fall within ``tol`` of the same detected peak. You still only saw one peak.
+       Measured residual ~1.18x, which matches the indexer's own post-dedup
+       stacking of 1.15-1.22x.
+
+    Together: 1.186 x 1.18 = 1.40, which is the median inflation measured in
+    ``nhit`` on sampleH (94.3% of instances affected).
+
+    BOTH are returned deliberately. Redefining ``nhit`` in place would silently
+    invalidate every gate threshold measured against the old statistic; a gate on
+    ``n_distinct`` needs its own null, measured with this same function.
+    """
+    if predicted is None or len(predicted) == 0:
+        return 0, 0
+    d, idx = tree.query(predicted)
+    m = d < tol
+    if exclude is not None:
+        m &= ~np.asarray(exclude, bool)[np.minimum(idx, len(exclude) - 1)]
+    if not m.any():
+        return 0, 0
+    return int(np.unique(idx[m]).size), int(m.sum())
+
+
+# --- which hit statistic a gate uses, and the null measured for it -----------
+# A gate and its null must be the SAME statistic: an nhit_distinct count compared
+# with an nhit null maximum is optimistic by the ~1.4x stacking factor above, and
+# the reverse is pessimistic by the same. Everything that gates on a hit count
+# goes through these three functions so the choice is made once and printed.
+GATE_STATS = ("nhit", "nhit_distinct")
+
+
+# --- indexer output layout ----------------------------------------------------
+def solution_format(n_cols, where="solution table"):
+    """The ``laue_index.records.SolutionFormat`` whose column count is ``n_cols``.
+
+    The indexer writes two layouts (``laue_index.records.SOLUTION_FORMATS``, the
+    authoritative map): ``runimage`` (34 columns, orientation matrix at 22..30) and
+    ``stream`` (35 columns, ImageNr prepended, matrix at 23..31). Scripts used to
+    hard-code the stream columns (``23:32``), which on a RunImage file reads the
+    wrong numbers as a matrix without any error. Anything else exits.
+    """
+    try:
+        from laue_index.records import SOLUTION_FORMATS
+    except ImportError as exc:                      # pragma: no cover - env problem
+        raise SystemExit(f"laue_index is not importable ({exc}); it holds the solution "
+                         f"column map (laue_index.records.SOLUTION_FORMATS)")
+    for fmt in SOLUTION_FORMATS.values():
+        if fmt.n_cols == int(n_cols):
+            return fmt
+    known = {f.name: f.n_cols for f in SOLUTION_FORMATS.values()}
+    raise SystemExit(f"{where}: {n_cols}-column solution table matches no known layout "
+                     f"{known}; refusing to guess the column map")
+
+
+def orientation_block(filt, where="filtered_orientations"):
+    """``(n, 9)`` orientation matrices (row-major) from a solution table of either layout."""
+    filt = np.atleast_2d(np.asarray(filt))
+    fmt = solution_format(filt.shape[1], where)
+    return filt[:, fmt.om_start:fmt.om_start + 9]
+
+
+def spot_columns(fmt):
+    """Column map of the ``filtered_spots`` table that accompanies layout ``fmt``.
+
+    ``records`` pins grain / x / y. The h, k, l and intensity columns sit at fixed
+    offsets from x in both layouts (the stream layout is the RunImage one with
+    ImageNr prepended, every field +1): h,k,l = x-3..x-1, intensity = x+5 -- the
+    stream positions 3,4,5 and 11 that spot_energy.py and separate_layers.py
+    hard-coded.
+    """
+    x = fmt.spot_x
+    return {"grain": fmt.spot_grain, "h": x - 3, "k": x - 2, "l": x - 1,
+            "x": x, "y": fmt.spot_y, "intensity": x + 5}
+
+
+def image_number(path):
+    """``.../image_000123.output.h5`` -> 123, from the FULL digit run after ``image_``.
+
+    The scripts used ``int(h5.split("image_")[1][:5])``, which truncates to five
+    digits: image 100000 and above silently mapped to the wrong frame.
+    """
+    m = re.search(r"image_(\d+)", os.path.basename(str(path)))
+    if not m:
+        raise ValueError(f"no image_<number> in {path!r}")
+    return int(m.group(1))
+
+
+DEFAULT_OUT_PREFIX = "scan"
+
+
+def out_prefix():
+    """``LAUE_OUT_PREFIX``, default ``scan``: THE basename prefix of every
+    ``peel_map/<prefix>_*`` file the chain reads and writes.
+
+    One helper so a producer and its consumer cannot default differently. Before
+    2026-09 the census defaulted to ``env``, its null (exclusion_null.py) to
+    ``scan`` and exposure_signal_check.py to ``parentbeta``, so with the variable
+    unset the census and its null read different files.
+
+    The default only serves a script run by hand: it names output files, it does
+    not select anyone's data. run_analysis_chain.sh requires LAUE_OUT_PREFIX and
+    passes it through, so a chain run never reaches this default.
+    """
+    p = os.environ.get("LAUE_OUT_PREFIX", DEFAULT_OUT_PREFIX).strip()
+    if not p or "/" in p:
+        raise SystemExit(f"LAUE_OUT_PREFIX must be a non-empty file-name prefix, got {p!r}")
+    return p
+
+
+def analytic_gate_note(script):
+    """Say, at run time, that a per-frame ANALYTIC Poisson gate ignores LAUE_GATE_STAT.
+
+    The analytic lambda (n_predicted * n_peaks * pi * TOL^2 / Npx^2) is the
+    expected number of PREDICTED reflections landing on a peak by chance -- a
+    model of ``nhit``. There is no matching closed form for ``nhit_distinct``
+    (it depends on how predictions cluster on the detector), so these gates stay
+    on ``nhit`` whatever ``LAUE_GATE_STAT`` says. Printed rather than silently
+    ignored; the empirical-null gates downstream do follow the variable.
+    """
+    stat = os.environ.get("LAUE_GATE_STAT", "nhit").strip() or "nhit"
+    msg = (f"[{script}] per-frame analytic Poisson gate is on nhit (the analytic lambda "
+           f"models predicted reflections; no closed form exists for nhit_distinct)")
+    if stat != "nhit":
+        msg += (f" -- LAUE_GATE_STAT={stat} is NOT applied here; it applies to the "
+                f"empirical-null gates downstream. Both counts are saved.")
+    print(msg, flush=True)
+
+
+def gate_statistic():
+    """``LAUE_GATE_STAT`` = ``nhit`` (default, reproduces existing results) or
+    ``nhit_distinct``. Anything else exits."""
+    s = os.environ.get("LAUE_GATE_STAT", "nhit").strip()
+    if s not in GATE_STATS:
+        raise SystemExit(f"LAUE_GATE_STAT must be one of {GATE_STATS}, got {s!r}")
+    return s
+
+
+def null_json_path(work, prefix):
+    """Where null_model.py writes the measured null for a scan."""
+    return os.path.join(work, "peel_map", f"{prefix}_null.json")
+
+
+def load_null(phase, work, prefix, stat=None):
+    """The measured random-orientation null for ``phase``, for statistic ``stat``.
+
+    Sources, in order:
+
+    * ``$LAUE_NULLMAX_<PHASE>`` -- overrides ``max``. It must be the maximum of the
+      statistic in force; if the null json is present and the value equals the
+      OTHER statistic's maximum instead, this exits rather than gate one
+      statistic against the other's null.
+    * ``<work>/peel_map/<prefix>_null.json`` written by null_model.py -- supplies
+      mean / median / p99 / p999 / max / n_draws for both statistics.
+
+    Neither present -> exit. There is deliberately no built-in fallback: a null
+    maximum is a property of one scan's peak field and reflection list.
+
+    Returns a dict with at least ``statistic``, ``max`` and ``source``.
+    """
+    stat = stat or gate_statistic()
+    other = [s for s in GATE_STATS if s != stat][0]
+    path = null_json_path(work, prefix)
+    rec = rec_other = None
+    if os.path.isfile(path):
+        with open(path) as fh:
+            ent = json.load(fh).get("phases", {}).get(phase) or {}
+        rec, rec_other = ent.get(stat), ent.get(other)
+        if rec is not None and rec.get("statistic", stat) != stat:
+            raise SystemExit(f"{path}: entry {phase}/{stat} says statistic "
+                             f"{rec.get('statistic')!r} -- the file is inconsistent")
+    var = f"LAUE_NULLMAX_{phase.upper()}"
+    env = os.environ.get(var)
+    if env is not None:
+        try:
+            mx = int(env)
+        except ValueError:
+            raise SystemExit(f"{var}={env!r} is not an integer")
+        if rec is not None and mx != int(rec["max"]):
+            if rec_other is not None and mx == int(rec_other["max"]):
+                raise SystemExit(
+                    f"{var}={mx} is the {other} null maximum in {path}, but the gate "
+                    f"statistic is {stat} (null max {rec['max']}). A gate and its null "
+                    f"must be the same statistic; set LAUE_GATE_STAT={other} or fix {var}.")
+            print(f"WARNING: {var}={mx} overrides the measured {stat} null max "
+                  f"{rec['max']} in {path}", flush=True)
+        out = dict(rec) if rec is not None else {}
+        out.update(statistic=stat, max=mx, source=f"${var}")
+        return out
+    if rec is None:
+        raise SystemExit(
+            f"no measured {stat} null for phase {phase!r}: set {var} or run "
+            f"null_model.py on THIS scan (it writes {path}). Do not inherit a null "
+            f"from another scan.")
+    out = dict(rec)
+    out.update(statistic=stat, source=path)
+    return out
+
+
+def gate_counts(z, stat, where="npz"):
+    """The per-instance hit counts for ``stat`` from a validated npz; exits if absent."""
+    if stat not in z.files:
+        raise SystemExit(
+            f"{where} has no {stat!r} column (it was written before {stat} existed). "
+            f"Re-run parentbeta_validate.py, or gate on LAUE_GATE_STAT=nhit.")
+    return np.asarray(z[stat]).astype(int)
+
 if __name__ == "__main__":
     rng = np.random.default_rng(0)
     N = 512
@@ -314,8 +557,23 @@ if __name__ == "__main__":
             -((yy2-spot_y)**2 + (xx2-spot_x)**2)/8.0)
     xg0, _, _ = detect_peaks(g, N, drop_streaks=False, collapse_plateaus=False,
                              remove_halos=False)
-    xg1, _, ig = detect_peaks(g, N)
+    xg1, _, ig = detect_peaks(g)
+    # npx is deprecated and ignored: any value (or none) gives the same peaks
+    xg2, _, _ = detect_peaks(g, 12345)
+    assert np.array_equal(xg1, xg2), "detect_peaks must ignore its deprecated npx argument"
     assert abs(len(xg1) - len(xg0)) <= 1, (
         f"a tall column of REAL unsaturated spots was altered: {len(xg0)} -> {len(xg1)}")
+
+    # count_matched_peaks: a harmonic pair (two predicted rows on one pixel) is
+    # ONE distinct peak but two predicted hits; two separate peaks are two of each.
+    from scipy.spatial import cKDTree
+    tr = cKDTree(np.array([[100.0, 100.0], [300.0, 300.0]]))
+    assert count_matched_peaks(tr, np.array([[100.0, 100.0], [100.4, 99.8]]), 8.0) == (1, 2)
+    assert count_matched_peaks(tr, np.array([[100.0, 100.0], [300.0, 301.0]]), 8.0) == (2, 2)
+    assert count_matched_peaks(tr, np.array([[500.0, 500.0]]), 8.0) == (0, 0)
+    assert count_matched_peaks(tr, np.array([[100.0, 100.0], [300.0, 301.0]]), 8.0,
+                               exclude=np.array([True, False])) == (1, 1)
     print("frame_peaks selftest OK (clipped spot -> one flagged peak, weak "
-          "neighbour kept, bloom removed, real spots untouched)")
+          "neighbour kept, bloom removed, real spots untouched; harmonic pair "
+          "counts (1 distinct, 2 predicted))")
+
