@@ -240,6 +240,28 @@ def _ensure_shm_files(orient_file: str) -> None:
 # Orchestrator
 # ---------------------------------------------------------------------------
 
+def _streaming_postprocess_settings(config_file: str, min_unique=None) -> dict:
+    """What the STREAMING post-processor will actually apply, for provenance.
+
+    ``provenance.json``'s ``config`` block is a ``ConfigurationManager`` snapshot, which
+    fills an absent ``RobustFilter`` with RunImage's default (1). The streaming path
+    treats an absent key as 0 (legacy filter; ``laue_postprocess._robust_in_force``), so
+    the snapshot alone misreported the filter a streaming run used (0.7.2 known issue).
+    This reads the params file with the streaming parser and applies the same rules.
+    """
+    import laue_stream_utils as _lsu
+    import laue_postprocess as _pp
+    cfg = _lsu.parse_config(config_file)
+    rf = cfg.get("robust_filter")
+    floor = int(min_unique) if min_unique is not None else int(cfg.get("min_good_spots", 2))
+    return {
+        "robust_filter_key_present": rf is not None,
+        "robust_filter_effective": bool(_pp._robust_in_force(cfg)),
+        "min_unique_effective": floor,
+        "min_unique_source": "--min-unique" if min_unique is not None else "MinGoodSpots (2 if absent)",
+    }
+
+
 def run_pipeline(
     config_file: str,
     folder: str,
@@ -381,6 +403,15 @@ def run_pipeline(
             },
             executable=daemon_bin,
         )
+        try:
+            spp = _streaming_postprocess_settings(config_file, min_unique)
+            run_prov.setdefault("extra", {})["streaming_postprocess"] = spp
+            run_prov.setdefault("config_notes", {})["robust_filter"] = (
+                "config.robust_filter is the ConfigurationManager default when the key is "
+                "absent; the filter this streaming run applies is "
+                "extra.streaming_postprocess.robust_filter_effective.")
+        except Exception as spp_exc:          # never fail a run over a provenance note
+            run_prov.setdefault("extra", {})["streaming_postprocess"] = f"ERROR: {spp_exc}"
         _lp.write_sidecar_json(os.path.join(output_dir, "provenance.json"), run_prov)
         logger.info(f"Wrote run provenance: {os.path.join(output_dir, 'provenance.json')}")
     except Exception as prov_exc:
@@ -543,6 +574,16 @@ def run_pipeline(
         pp_cmd.extend(["--indexfile-out", indexfile_dir])
     logger.info(f"Running: {' '.join(os.path.basename(c) for c in pp_cmd)}")
     pp_result = subprocess.run(pp_cmd, capture_output=True, text=True)
+    # Keep the post-processor's own output: it was captured and dropped on success,
+    # so its startup warnings (e.g. the absent-RobustFilter notice) reached no log.
+    pp_log = os.path.join(output_dir, "postprocess.log")
+    try:
+        with open(pp_log, "w") as _f:
+            _f.write(f"# {' '.join(pp_cmd)}\n# exit {pp_result.returncode}\n")
+            _f.write("## stdout\n" + (pp_result.stdout or "") + "\n## stderr\n" + (pp_result.stderr or ""))
+        logger.info(f"Post-processing output: {pp_log}")
+    except OSError as exc:
+        logger.warning(f"Could not write {pp_log}: {exc}")
 
     if pp_result.returncode != 0:
         # Fail the run. This used to log the error and then "Pipeline complete"

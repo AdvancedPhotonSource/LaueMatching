@@ -101,3 +101,46 @@ def test_success_keeps_the_completion_line(stubbed, caplog):
     with caplog.at_level(logging.INFO, logger="laue_orchestrator"):
         go()
     assert "Pipeline complete" in caplog.text
+
+
+# --------------------------------------------------------------------------- #
+# 0.7.3: the run-level provenance records the filter streaming actually applies #
+# --------------------------------------------------------------------------- #
+
+def _prov(out):
+    import json
+    return json.loads((out / "provenance.json").read_text())
+
+
+def test_provenance_records_the_effective_streaming_filter(stubbed, tmp_path):
+    state, go = stubbed
+    go()
+    p = _prov(tmp_path / "run")
+    spp = p["extra"]["streaming_postprocess"]
+    # params.txt has no RobustFilter line: ConfigurationManager says True, streaming uses legacy
+    assert p["config"]["robust_filter"] is True
+    assert spp["robust_filter_key_present"] is False
+    assert spp["robust_filter_effective"] is False
+    assert spp["min_unique_effective"] == 2
+    assert "robust_filter" in p["config_notes"]
+
+
+@pytest.mark.parametrize("lines,expect_rf,expect_floor", [
+    ("RobustFilter 1\nMinGoodSpots 4\n", True, 4),
+    ("RobustFilter 0\n", False, 2),
+    ("MinGoodSpots 4\n", False, 4),
+])
+def test_streaming_settings_helper(tmp_path, lines, expect_rf, expect_floor):
+    f = tmp_path / "p.txt"
+    f.write_text("SpaceGroup 225\n" + lines)
+    s = lo._streaming_postprocess_settings(str(f))
+    assert s["robust_filter_effective"] is expect_rf
+    assert s["min_unique_effective"] == expect_floor
+    assert lo._streaming_postprocess_settings(str(f), min_unique=3)["min_unique_effective"] == 3
+
+
+def test_postprocess_output_is_kept_on_success(stubbed, tmp_path):
+    state, go = stubbed
+    go()
+    log = (tmp_path / "run" / "postprocess.log").read_text()
+    assert "laue_postprocess.py" in log and "# exit 0" in log and "Traceback: boom" in log
