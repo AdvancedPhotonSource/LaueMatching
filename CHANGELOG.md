@@ -27,8 +27,15 @@ A correctness release. Several items change results; each says how to reproduce
   **On a config carrying `MinGoodSpots 4` the exclusive-label floor rises from 2
   to 4**; `MinGoodSpots 2` reproduces 0.7.1. Measured on one 2,613-frame shard of
   the texture-case sample: filtered orientations 8,870 -> 7,340 (−17%), 1,528 of the
-  1,548 dropped having 2 or 3 own labels; the raw C output was unchanged within
-  the pipeline's own run-to-run variation. **A config written by laue-index
+  1,548 dropped having 2 or 3 own labels. That config has no `RobustFilter` line and
+  `DoFwd 0`, so it does not exercise the robust filter, hexagonal near-duplicate
+  removal or the forward-cache write. Raw C output (six runs, three per version):
+  per-frame disagreement between versions (10-39 frames) lay within the range between
+  runs of one version (21-35); a per-solution check found one frame of 2,613 that
+  differs reproducibly by version (one extra low-NMatches solution in every 0.7.1
+  run), plausibly the stream kernel's new bounds check, not yet confirmed. (An
+  earlier line here, "raw C output unchanged within run-to-run variation", rested on
+  a single repeat pair and was withdrawn after adversarial review.) **A config written by laue-index
   itself** (`RunImage config`, `write_config`) has always carried an explicit
   `RobustFilter 1`, so streaming runs from such a file now use the robust filter;
   set `RobustFilter 0` to reproduce 0.7.1.
@@ -94,6 +101,16 @@ A correctness release. Several items change results; each says how to reproduce
 - **Analysis scripts exit naming the variable** instead of falling back to another
   campaign's data paths, a Ti null, a 201-column raster or a 1 µm step; five
   scripts that raised `NameError` on import now run.
+
+### Known issues in 0.7.2
+
+- **Provenance misreports the streaming filter.** The orchestrator stamps provenance
+  from `ConfigurationManager`, which fills an absent `RobustFilter` with RunImage's
+  default (1), so `provenance.json` says `robust_filter: true` for a streaming run that
+  applied the legacy filter (absent key). Read the params file, not provenance, for
+  the filter a streaming run used.
+- A forward cache of the right size built for a different geometry is still accepted
+  (see `manuals/laue/DIAGNOSIS.md`).
 
 ### Worker sizing (the 0.7.0 defect)
 
