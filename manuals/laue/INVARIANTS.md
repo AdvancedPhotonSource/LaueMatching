@@ -445,6 +445,10 @@ free number (or a letter suffix beside its family) and none is ever renumbered.
     transitive merge of grains sharing a position within 5 deg (D2). Grains of >= 5 positions
     ranged **302 to 1,213** and Kish n 77 to 222, while the texture statistic (% of grain area
     with c-axis > 60 deg from the surface normal) stayed at **86.7-87.1%** under all seven.
+    That is invariance of the POINT ESTIMATE, not precision: at these Kish n the statistic
+    itself carries about +-4 points (grain bootstrap, 87.3% [82.9, 91.1] under D0) and the
+    difference between two definitions about +-7 (D2 vs D0: [-7.6, +6.1]). Quote it with its
+    interval.
     Each definition fails in its own way, and each failure was measured, not argued:
     - D0 FRAGMENTS: about half its grains share raster positions with another grain within
       5 deg (0.40-0.47 at every tolerance), because complete linkage cuts a grain whose
@@ -453,8 +457,10 @@ free number (or a letter suffix beside its family) and none is ever renumbered.
       at the same positions -- depth superposition along the beam, or near-duplicate
       solutions -- and no neighbour-edge threshold separates them.
     - D2 passes a fragmentation/chaining screen (0.019 / 0.035) and still CHAINS: merges on a
-      single shared pixel, a median 2.85 deg per hop, and one "grain" of 24 D0 grains
-      spanning 10 deg. The 95th-percentile spread metric did not see it; the maximum span did.
+      single shared pixel, a median 2.85 deg per hop, and one "grain" of 24 D0 grains whose
+      pieces lie up to 10 deg apart. The 95th-percentile spread metric did not see it; the
+      maximum span did. It also passed only where its merge angle equalled the metrics'
+      angle (1 of 9 grid points) and is less stable than D0 (count range 3.3x vs 2.5x).
     So the campaign keeps D0 and stops treating its count as a sample property. `pipeline/
     analysis/grain_graph.py` carries the flood-fill, the merge and both metrics for anyone
     who takes this further; read the D2 note there before using the merge. Provenance:
