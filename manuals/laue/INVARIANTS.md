@@ -436,3 +436,26 @@ free number (or a letter suffix beside its family) and none is ever renumbered.
     or defaulted band. In 0.1.3 none of this existed: no marker, `LaueScanLoader` read the
     orientation matrix from the wrong columns and did not transpose. Same family as invariant 21 (`h5[...][0]` is a row, not a
     frame): an axis convention that produces a plausible array rather than an error.
+
+39. **A GRAIN COUNT IS A PROPERTY OF THE GRAIN DEFINITION, NOT OF THE SAMPLE. Quote it with
+    its definition and its range across definitions; lean on what does not move.** On
+    sampleH (scan 1, `nhit > 11`, 2026-09-21) seven definitions were measured: orientation
+    clustering by complete linkage at 0.5 / 1 / 2 deg with an 8-connected spatial split (D0,
+    the campaign's), spatial flood-fill at 0.5 / 1 / 2 deg (D1), and D0 followed by a
+    transitive merge of grains sharing a position within 5 deg (D2). Grains of >= 5 positions
+    ranged **302 to 1,213** and Kish n 77 to 222, while the texture statistic (% of grain area
+    with c-axis > 60 deg from the surface normal) stayed at **86.7-87.1%** under all seven.
+    Each definition fails in its own way, and each failure was measured, not argued:
+    - D0 FRAGMENTS: about half its grains share raster positions with another grain within
+      5 deg (0.40-0.47 at every tolerance), because complete linkage cuts a grain whose
+      internal spread exceeds the tolerance and the pieces overlap.
+    - D1 does not fix that (0.27-0.42): two slightly different orientations genuinely coexist
+      at the same positions -- depth superposition along the beam, or near-duplicate
+      solutions -- and no neighbour-edge threshold separates them.
+    - D2 passes a fragmentation/chaining screen (0.019 / 0.035) and still CHAINS: merges on a
+      single shared pixel, a median 2.85 deg per hop, and one "grain" of 24 D0 grains
+      spanning 10 deg. The 95th-percentile spread metric did not see it; the maximum span did.
+    So the campaign keeps D0 and stops treating its count as a sample property. `pipeline/
+    analysis/grain_graph.py` carries the flood-fill, the merge and both metrics for anyone
+    who takes this further; read the D2 note there before using the merge. Provenance:
+    `$ANALYSIS/<sampleH re-run>/PREREGISTER_grain_definition.md`, `grain_definition_eval.py`.

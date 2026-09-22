@@ -237,6 +237,7 @@ and are what the rest of the doc set cites.
 | 36 | `NMatches` is not evidence of independence; the unit of uniqueness is the reflection. |
 | 37 | A spatial-coherence null cannot validate a finely-stepped raster. |
 | 38 | A simulated laue_torch frame is transposed relative to a real one, silently. |
+| 39 | A grain count is a property of the grain definition; quote it with its range. |
 
 ## Worked example
 

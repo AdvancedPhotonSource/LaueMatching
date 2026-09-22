@@ -87,6 +87,16 @@ What each identity answers:
 - **`config.processing_type`** is a config label (RunImage's `-g`; `"CPU"` by default, even
   on a streaming GPU run), not a record of the binary. Whenever the config snapshot carries it,
   the record adds `config_notes.processing_type` saying so and pointing at `build.executable`.
+- **`config.robust_filter`** in the orchestrator's `provenance.json` is the
+  `ConfigurationManager` value, which is RunImage's default (1) when the params file has no
+  `RobustFilter` line. A streaming run applies the legacy filter in that case. From
+  laue-index 0.7.3 the orchestrator also writes **`extra.streaming_postprocess`**
+  (`robust_filter_key_present`, `robust_filter_effective`, `min_unique_effective`,
+  `min_unique_source`: what the streaming post-processor actually applies) and
+  `config_notes.robust_filter` pointing at it. In 0.7.2 records, read the params file instead.
+  The per-image `/entry/provenance` and the image server's sidecar were always correct (they
+  record the streaming parser's `null` for an absent key).
+- The post-processor's own stdout/stderr are in `<output_dir>/postprocess.log` (0.7.3 and later).
 - **`laue_version`** and, on a pip install, **`git`** identify nothing; they are kept so older
   records stay readable.
 
