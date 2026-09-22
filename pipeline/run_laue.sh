@@ -64,11 +64,11 @@ if [ -z "$SCRIPTS" ]; then
     SCRIPTS=$("$PY" -c 'from laue_index.pipeline import PIPELINE_DIR; print(PIPELINE_DIR)' 2>/dev/null || true)
   fi
 fi
-[ -n "$SCRIPTS" ] && [ -f "$SCRIPTS/laue_orchestrator.py" ] || {
+if [ -z "$SCRIPTS" ] || [ ! -f "$SCRIPTS/laue_orchestrator.py" ]; then
   echo "ERROR: laue_orchestrator.py not found in SCRIPTS='$SCRIPTS'." >&2
   echo "  Set SCRIPTS to <checkout>/scripts, or install laue-index into PY='$PY'." >&2
   exit 1
-}
+fi
 command -v "$PY" >/dev/null 2>&1 || { echo "ERROR: PY='$PY' is not an executable python." >&2; exit 1; }
 [ -d "$FOLDER" ] || { echo "ERROR: DATA_FOLDER not found: $FOLDER" >&2; exit 1; }
 for c in "$ALPHA_CONFIG" "$BETA_CONFIG"; do
