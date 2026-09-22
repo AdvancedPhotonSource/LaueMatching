@@ -11,7 +11,20 @@ value of `laue_index/pipeline/_version.py`, which older provenance records wrote
 0.7.2) records the package version and source/binary hashes instead.
 
 
-## laue-index 0.7.2 (unreleased)
+## laue-index 0.7.3 (unreleased)
+
+- **Run-level provenance records the filter a streaming run actually applies.** The
+  orchestrator stamps `provenance.json` from `ConfigurationManager`, which fills an absent
+  `RobustFilter` with RunImage's default (1), so a streaming run that applied the legacy
+  filter was recorded as `robust_filter: true` (0.7.2 known issue). The record now also
+  carries `extra.streaming_postprocess` (`robust_filter_effective`, whether the key was
+  present, and the exclusive-label floor in force with its source) and a
+  `config_notes.robust_filter` line saying which field to read.
+- **The post-processor's output is kept.** It was captured and dropped on success, so its
+  startup warnings (including the absent-`RobustFilter` notice) reached no log. It is now
+  written to `<output_dir>/postprocess.log` on every run.
+
+## laue-index 0.7.2 (2026-09-21)
 
 A correctness release. Several items change results; each says how to reproduce
 0.7.1.
@@ -32,8 +45,13 @@ A correctness release. Several items change results; each says how to reproduce
   removal or the forward-cache write. Raw C output (six runs, three per version):
   per-frame disagreement between versions (10-39 frames) lay within the range between
   runs of one version (21-35); a per-solution check found one frame of 2,613 that
-  differs reproducibly by version (one extra low-NMatches solution in every 0.7.1
-  run), plausibly the stream kernel's new bounds check, not yet confirmed. (An
+  differed in every 0.7.1 run and no 0.7.2 run (a pair of candidates within MaxAngle merged
+  differently). It is not attributable to the version: 0.7.1 and 0.7.2 sources built
+  with the same toolchain give the same solutions on that frame in isolation, the
+  forward cache has no off-detector entries (so the new bounds check is inert here),
+  and the six runs confound version with GPU load (the 0.7.1 runs shared GPUs with
+  seven sibling shards, the 0.7.2 runs did not), which can reorder the candidates the
+  greedy duplicate merge sees. (An
   earlier line here, "raw C output unchanged within run-to-run variation", rested on
   a single repeat pair and was withdrawn after adversarial review.) **A config written by laue-index
   itself** (`RunImage config`, `write_config`) has always carried an explicit
@@ -108,7 +126,7 @@ A correctness release. Several items change results; each says how to reproduce
   from `ConfigurationManager`, which fills an absent `RobustFilter` with RunImage's
   default (1), so `provenance.json` says `robust_filter: true` for a streaming run that
   applied the legacy filter (absent key). Read the params file, not provenance, for
-  the filter a streaming run used.
+  the filter a streaming run used. (Fixed in 0.7.3.)
 - A forward cache of the right size built for a different geometry is still accepted
   (see `manuals/laue/DIAGNOSIS.md`).
 
@@ -152,7 +170,7 @@ A correctness release. Several items change results; each says how to reproduce
   said BOBYQA was the default).
 - Handbook invariant 38: laue_torch renders `[X, Y]`, real frames are `[row, col]`.
 
-## laue-torch 0.1.4 (unreleased)
+## laue-torch 0.1.4 (2026-09-21)
 
 ### Fixed (results change)
 
