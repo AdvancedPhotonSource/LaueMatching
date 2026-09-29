@@ -64,7 +64,7 @@ For the by-hand architecture check use the full path, `/usr/local/cuda-*/bin/cuo
 bare `cuobjdump` is not on PATH on the beamline hosts and prints nothing, which reads as "no
 cubins". Empty output is a failed check (`DIAGNOSIS.md`, first entry).
 
-**Current release is 0.7.1; 0.7.2 is prepared and not yet published.** Anything older than
+**Current release is 0.7.3; 0.8.0 is prepared (it changes indexing results and rebuilds every forward cache once; CHANGELOG).** Anything older than
 0.3.1 built CUDA for the build machine's own card and did not check the kernel launch, so a
 binary moved between hosts could index nothing and report success. `laue-index --version`.
 The beamline's 0.7.1 build was reported as nvcc 12.1 with PTX for sm_90 as its newest

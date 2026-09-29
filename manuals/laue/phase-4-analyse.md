@@ -35,7 +35,8 @@ Every variable the analysis scripts read is in the table at the end of this phas
 - after `null_model.py`, reads the measured null from `peel_map/<prefix>_null.json` (prefix =
   `LAUE_OUT_PREFIX`; the scripts' own default is `scan`) and **exports
   `LAUE_NULLMAX_<PHASE>`** for each phase in `LAUE_PHASES`, for the statistic in force
-  (`LAUE_GATE_STAT`). A value already in your environment is replaced by the measured one, and
+  (`LAUE_GATE_STAT`) and the null the gates select (the search null by default; see "Which
+  null" below). A value already in your environment is replaced by the measured one, and
   the log says so.
 - step 1 (`parentbeta_validate.py`) **exits without writing** when nothing validates, rather
   than printing "VALIDATED 0" and writing an empty npz for the next step to read.
@@ -69,6 +70,20 @@ neither that file nor the override below exists; there is no built-in fallback. 
 be the maximum of the statistic in force: a value equal to the OTHER statistic's maximum in the
 JSON is refused. Symmetry comes from the phase's **space group**, never its name.
 
+**Which null: the SEARCH, by default (2026-09).** Invariant 29: a gate safe against one random
+orientation is not safe against the indexer's best of its whole database. `search_null.py
+<phase> [nframes] [scrambles] [ncpus]` runs the scan's own indexer (same params, orientation DB,
+HKL file, `laue_index.indexer.run_indexer`) on spot-scrambled frames (`scramble_frames.py`:
+same component count, intensities and lit-pixel total; positions random inside the frame's
+2theta band, never on a masked pixel or gap) and re-scores its solutions with the validator's
+`count_matched_peaks`; it adds a `search_null` block to `<prefix>_null.json` beside
+`null_model.py`'s per-draw entries, with the unscrambled frames as a positive control
+(`real_control`). Every gate uses the search null when present and otherwise falls back to the
+per-draw null **with a warning**; `LAUE_NULL_KIND=search|draw` forces one, and every gate prints
+which it used. The chain runs `search_null.py` after `null_model.py` unless
+`LAUE_NULL_KIND=draw` (which reproduces pre-2026-09 gating). `--keep-positions` (with `--out`)
+is the method's negative control; a block written that way is refused by every gate.
+
 **Which count.** The validated npz carries `nhit` and `nhit_distinct` side by side (glossary:
 `INVARIANTS.md` invariant 15b). The gates default to **`nhit`**; `LAUE_GATE_STAT=nhit_distinct`
 switches, also selects the matching null, and every gate prints which it used.
@@ -98,8 +113,15 @@ full 201x201 raster gives ~2e5 and it never finishes. For a full raster:
 
 ```bash
 LAUE_SKIP_CLUSTER=1 python parentbeta_validate.py <phase> <nw> env    # stops after the npz
-python cluster_orientations.py <validated.npz> <clustered.npz> 1.0 <phase>
+python cluster_orientations.py peel_map/<prefix>_<phase>_validated.npz peel_map/<prefix>_<phase>_validated.npz 1.0 <phase>
 ```
+
+Write the labels **back to `<prefix>_<phase>_validated.npz`**: that is the file every later
+step reads. Writing them to a separate `<clustered.npz>` (as this recipe used to say) leaves
+the validated npz at label -1, and every consumer now refuses that with a message naming
+`cluster_orientations.py` (before 2026-09 the census crashed after its full frame pass,
+`anchor_null` crashed, `empirical_gate` reported nothing and `parentbeta_reconstruct`
+silently re-clustered O(n^2)).
 
 `cluster_orientations.py` is KD-tree based (quaternions; a misorientation cut theta becomes a radius
 `sqrt(2-2cos(theta/2))`), and clusters are **connected components**, which — unlike greedy
@@ -223,7 +245,13 @@ variable when it is unset; nothing below silently falls back to another campaign
 | `LAUE_LM` | a LaueMatching checkout | default: the checkout holding the script | `batch_peel_driver.py` |
 | `LAUE_H5LOC` | image dataset inside each frame | default `/entry1/data/data` | `batch_peel_driver.py`, `map_validate_cluster.py` |
 | `LAUE_IN_NPZ` | explicit input npz | optional | `ipf_map.py` |
-| `LAUE_SKIP_CLUSTER` | `1` = stop after the validated npz | optional | `parentbeta_validate.py` |
+| `LAUE_SKIP_CLUSTER` | `1` = stop after the validated npz (labels -1; every consumer refuses them until `cluster_orientations.py` writes labels back into the same npz) | optional | `parentbeta_validate.py` |
+| `LAUE_NULL_KIND` | `search` or `draw`: which null the gates use | default: `search` if `search_null.py` wrote one, else `draw` with a warning; `draw` reproduces pre-2026-09 gates | `frame_peaks.load_null` (every gate), `collect_scan_metrics.py`, chain |
+| `LAUE_SEARCH_NULL_FRAMES`, `LAUE_SEARCH_NULL_SCRAMBLES` | frames per phase and scrambles per frame for `search_null.py` | default `20`, `1` | chain |
+| `LAUE_CLUSTER_TOL` | the one orientation-clustering cut, degrees, recorded in each npz | default `1.0`; `0.7` (`beta_map_validate`, `map_validate_cluster`) and `1.5` (`scan_map`) reproduce those scripts' old counts | `frame_peaks.cluster_tol` via the clustering scripts |
+| `LAUE_CLUSTERED_NPZ` | the clustered npz for the map scripts | default: the one `peel_map/<prefix>_*_clustered.npz` | `separate_layers`, `optical_overlay`, `reg_refine` |
+| `LAUE_NULL_REPS` | toroidal shifts for the spatial nulls (`raster.toroidal_shift_null`) | default 1000 (`reg_refine`: 200, each re-runs the grid) | `substrate_deposit`, `optical_overlay`, `reg_refine`, `separate_layers` |
+| `LAUE_CENSUS_NULL_K`, `LAUE_CENSUS_P` | matched exclusion null draws; `matched` or `analytic` census p | default `99`, `matched`; `analytic` reproduces the old (uncalibrated) Fisher counts | `beta_alpha_exclusion_census.py` |
 | `PY`, `SCRIPTDIR`, `NW` | python; the analysis scripts; worker count | `PY` default `python` (set a full path); `SCRIPTDIR` default the chain's own directory; `NW` default 16 | `run_analysis_chain.sh` |
 
 ---

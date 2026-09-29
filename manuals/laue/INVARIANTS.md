@@ -317,7 +317,7 @@ free number (or a letter suffix beside its family) and none is ever renumbered.
     Measure the null with the criterion, budget and image the indexer actually uses.
     **The cheap way to do all of that at once: run the SAME search against a spot-SCRAMBLED
     image** — same component count, same pixel intensities, same lit-pixel total, positions
-    randomised and never onto a masked region (`scramble_bin.py`, campaign-local, not in this repo). Whatever the best-of-1e8
+    randomised and never onto a masked region (in-repo since 0.8.0: `pipeline/analysis/scramble_frames.py` + `search_null.py`, the gates' default null; `LAUE_NULL_KIND=draw` for the per-draw one). Whatever the best-of-1e8
     reaches on that is the bar, and it is measured rather than modelled. Measured at TPS 21A:
     **0 solutions** on scrambled Si (83 on the real frame) and **0** on scrambled Ni — but
     **NMatches 8** on scrambled Ti, because those frames carry 123,720 lit px against Si's
@@ -574,3 +574,31 @@ free number (or a letter suffix beside its family) and none is ever renumbered.
       to modelled + unexplained over all detected pixels.
     All are fixed in `pipeline/analysis/column_content/fit.py`, which is checked against the
     original sampleH code.
+
+50. **A symmetry operator is only right in the frame its B matrix was built in.** The indexer
+    and laue_torch put a along Cartesian x; MIDAS and `midas_stress` put a* along x. The frames
+    coincide for orthogonal cells and differ by 30 deg about c for trigonal and hexagonal
+    ones, so `midas_stress` operators used as they are made every symmetry-equivalent trigonal
+    pair read 60 deg apart (laue_material, laue_torch), and the C's own trigonal table had its
+    2-folds perpendicular to a for every group. Conjugate into the frame in use
+    (`laue_index.lattice.laue_class_operators`, `laue_torch.symmetry`), and test an operator
+    table against the LATTICE it is used with (`A^-1 S A` integer, R-centring kept), never
+    against another table: `midas_stress` is correct in its own frame, and a first reading of
+    this defect blamed it. Two further traps from the same review:
+    - the misorientation convention is crystal side, `min_S angle(A^T B S)` for OM crystal ->
+      lab; a refuter that reduced `A B^T S` "found" 60 deg between identical grains
+      (`feedback_misorientation_symmetry_side`);
+    - the R groups can be given on hexagonal or rhombohedral axes; before 0.8.0 the setting
+      came from the space group alone and hexagonal axes built a cube of edge a.
+
+51. **Every data artifact says what made it, and a run refuses one that says otherwise.** The
+    orientation database, HKL lists, forward caches and backgrounds carry `<file>.meta.json`
+    (0.8.0): the full generating configuration, inputs by hash, and the producer. Before it,
+    a right-sized forward cache from another detector was reused silently, a background came
+    from whichever frame was first, and an HKL list from another lattice indexed nothing
+    while looking fine. A missing record warns; a record that disagrees with the file or with
+    the params file refuses (the HKL list's crystal, the forward cache's key). Check a file
+    with `laue-index provenance verify`, a whole configuration with `laue-index doctor
+    --params`; stamp legacy files with `laue-index provenance stamp`, which never invents
+    what is unknown. The released orientation database is recognised by its full SHA-256
+    (`docs/provenance.md`).

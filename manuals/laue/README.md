@@ -248,6 +248,8 @@ and are what the rest of the doc set cites.
 | 47 | A predicted spot on a streak does not make the streak that crystal's; fit ownership. |
 | 48 | A chance null must match the data's crowding. |
 | 49 | Joint-fit windows come from detected blobs; lr 3e-4; re-solve from the best iterate; share over modelled + unexplained. |
+| 50 | A symmetry operator is only right in the frame its B matrix was built in; test it against the lattice, not another table. |
+| 51 | Every data artifact says what made it (`<file>.meta.json`); a run refuses one that disagrees. |
 
 ## Worked example
 

@@ -50,8 +50,7 @@ alarms on the dense scans and silence on the broken ones. Every row carries its 
 
 **State.** Three stations are covered: 34-ID-E and **TPS 21A** (reflection; TPS 21A is the
 first XMAS-calibrated station, `LAB_NOTEBOOK_TPS21A.md`) and **16-BM-D** (transmission,
-`LAB_NOTEBOOK_16BMD_Si.md`). Current release is **laue-index 0.7.1**; **0.7.2** (with
-laue-torch 0.1.4) is prepared and not yet published. The beamline install is now a
+`LAB_NOTEBOOK_16BMD_Si.md`). Current release is **laue-index 0.7.3**; **0.8.0** (with laue-torch 0.1.5, laue-jax 0.1.2) is prepared and changes indexing results (CHANGELOG, "measured on 101 real frames of one hexagonal sample"). The beamline install is now a
 pip environment with laue-index plus a separate editable-checkout environment; the old
 `laue_rt` environment and the old checkout (archived 2026-08-30) are gone (Phase 3).
 Invariants run to **38**; 33–38 (energy-window count, monotonic nulls, unique `ResultDir`,
@@ -90,5 +89,4 @@ orientation-floor and depth-projection rows.
 9. **`nhit_distinct` is not yet validated as a gate.** The gates default to `nhit`; whether
    the extra grains `nhit_distinct` admits are real awaits the raw-image hit test on the newly
    admitted grains (Phase 4).
-10. **A right-sized forward cache from a different geometry is still accepted** (open;
-    `DIAGNOSIS.md`). Delete `ForwardFile` after any geometry or lattice change.
+10. **Closed in 0.8.0:** a forward cache is reused only if its `<ForwardFile>.meta.json` record matches this configuration (format + key over geometry, lattice, energy window, HKL list). A cache with no record is rebuilt with a warning; a record for another configuration REFUSES the run (`DoFwd 1` rebuilds it on purpose).
