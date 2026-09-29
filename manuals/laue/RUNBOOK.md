@@ -50,7 +50,7 @@ alarms on the dense scans and silence on the broken ones. Every row carries its 
 
 **State.** Three stations are covered: 34-ID-E and **TPS 21A** (reflection; TPS 21A is the
 first XMAS-calibrated station, `LAB_NOTEBOOK_TPS21A.md`) and **16-BM-D** (transmission,
-`LAB_NOTEBOOK_16BMD_Si.md`). Current release is **laue-index 0.7.3**; **0.8.0** (with laue-torch 0.1.5, laue-jax 0.1.2) is prepared and changes indexing results (CHANGELOG, "measured on 101 real frames of one hexagonal sample"). The beamline install is now a
+`LAB_NOTEBOOK_16BMD_Si.md`). Current release is **laue-index 0.8.0** (with laue-torch 0.1.5, laue-jax 0.1.2); it changes indexing results against 0.7.3 (CHANGELOG, "measured on 101 real frames of one hexagonal sample"). The beamline install is now a
 pip environment with laue-index plus a separate editable-checkout environment; the old
 `laue_rt` environment and the old checkout (archived 2026-08-30) are gone (Phase 3).
 Invariants run to **38**; 33–38 (energy-window count, monotonic nulls, unique `ResultDir`,
