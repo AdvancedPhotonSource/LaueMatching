@@ -7,7 +7,8 @@ description: >-
   a measured null, and report. Use when asked to index, analyse or diagnose a
   Laue / polychromatic / white-beam microdiffraction scan, when handed a raster
   of Laue frames, or when a Laue grain map, orientation or correlation looks
-  wrong. Covers both REFLECTION geometry (34-ID-E and TPS 21A, panel edge-on
+  wrong, or when asked which orientations one beam column (interaction volume)
+  contains, with their intensity shares and spreads (column content). Covers both REFLECTION geometry (34-ID-E and TPS 21A, panel edge-on
   above the sample) and TRANSMISSION geometry (16-BM-D / HPCAT, panel
   downstream and centred near the direct beam), through the LaueMatching chain,
   including converting an XMAS detector calibration to the pose the indexer
@@ -169,6 +170,26 @@ degrees.
 11. **Check the campaign's `CHECKPOINT` and notes for prior measurements before asserting a
     defect.** Asserting one without that check cost a wrong claim in the 2026-09 campaign.
 
+## Column content: more than one grain per frame
+
+A frame is a column holding several crystals, and they are the answer, not contamination. For
+"which orientations are here, with what share and spread", use
+`pipeline/analysis/column_content/` (reference implementation). The method, interface, validated
+envelope and traps are in MIDAS **`manuals/column-content/`**. Five things it cost to learn:
+
+12. **Validate on synthetic columns of known content before reading real frames.** The
+    recall-by-share and by-spread-class table IS the completeness statement. There is no reliable
+    per-frame completeness number: C_int does not track misses.
+13. **Recall is limited by discovery, not the fit.** The C indexer finds point-like crystals at
+    88-96% but 1-D streaks of +/-0.8 deg only 38% of the time, and wide 3-D clouds 15%.
+14. **Shares are intensity shares.** A spectrum-constrained brightness does not close the
+    budget: per-spot scatter is ~2x, so a coincident missed crystal stays hidden.
+15. **Never pick the spots you score with the model you score.** A fitted cutoff on its bound
+    "passed" by removing the spots it mis-predicted.
+16. **Unexplained arcs are not the found crystals' spread** (coincidence is not ownership). On
+    sampleH they are beaded chains. Per-frame rotation axes are not recoverable on this panel;
+    a pooled common axis is detectable only as a band. See `column_content/arcs.py`.
+
 ## When something looks wrong
 
 Go to **`manuals/laue/DIAGNOSIS.md`** — symptom → discriminating test → cause →
@@ -189,4 +210,5 @@ Before re-arguing anything, read the lab notebook for your geometry:
 ## Sibling doc sets
 
 In the MIDAS repository: `manuals/ff-hedm/` (skill `ff-hedm`) and `manuals/nf-hedm/`
-(skill `nf-hedm`). All three follow `beamreport/DOCS_SPEC.md`.
+(skill `nf-hedm`). All three follow `beamreport/DOCS_SPEC.md`. Column content (this data, and
+the monochromatic-rotation implementation `midas_defect.column_content`): `manuals/column-content/`.

@@ -238,6 +238,16 @@ and are what the rest of the doc set cites.
 | 37 | A spatial-coherence null cannot validate a finely-stepped raster. |
 | 38 | A simulated laue_torch frame is transposed relative to a real one, silently. |
 | 39 | A grain count is a property of the grain definition; quote it with its range. |
+| 40 | A texture is read from grain-area-weighted pole densities in the indexer's crystal frame, against a matched null. |
+| 41 | A composite (overlaid-frame) null is biased low; peel a real crystal instead. |
+| 42 | Per-grain c/a from positions is limited by geometry precision, not the estimator. |
+| 43 | `filtered_spots` SpotNr is a per-solution counter, not a peak id. |
+| 44 | Spot energy uses hc in keV*nm (`Phase.B` is 1/nm); assert energies inside Elo-Ehi. |
+| 45 | A column's orientation content is validated on known-content synthetics; its completeness is the recall table. |
+| 46 | Never choose the spots you score with the model you are scoring. |
+| 47 | A predicted spot on a streak does not make the streak that crystal's; fit ownership. |
+| 48 | A chance null must match the data's crowding. |
+| 49 | Joint-fit windows come from detected blobs; lr 3e-4; re-solve from the best iterate; share over modelled + unexplained. |
 
 ## Worked example
 

@@ -465,3 +465,112 @@ free number (or a letter suffix beside its family) and none is ever renumbered.
     analysis/grain_graph.py` carries the flood-fill, the merge and both metrics for anyone
     who takes this further; read the D2 note there before using the merge. Provenance:
     `$ANALYSIS/<sampleH re-run>/PREREGISTER_grain_definition.md`, `grain_definition_eval.py`.
+40. **A Laue TEXTURE is read from grain-area-weighted pole densities, with symmetry families in the
+    indexer's crystal frame, against a matched null.** Four choices, each of which changed a
+    number when made wrongly:
+    - **Weight by grain area.** Per-frame instances weight by residence and depth, not by volume.
+    - **Expand the family and fold the hemisphere by the SIGN of v.n.** A `np.sign` fold zeroes an
+      in-plane pole (v.n = 0), and the zero vector spreads as uniform density.
+    - **Use LaueMatching's crystal frame: a along x.** In that frame <2-1-10> is (1,0,0), whereas
+      MIDAS far-field puts a* along x. Pass `frame=A_ALONG_X` to `midas_plotting.ipf`, or a- and
+      m-axis poles land 30 deg off.
+    - **Compare MRD with random orientations of the same grain count, weights and kernel.** Raw
+      MRD maxima move 20-40% with bandwidth.
+    Check that the pipeline does not prefer the texture orientation. On sampleH, across 12,000
+    random orientations per scan, the gate statistic nhit did not depend on where the a- or c-axis
+    points (|r| <= 0.012). Geometric acceptance was lowest at a || n.
+    Result, sampleH 2026-09-22 (PROVISIONAL, claim 6bba2e4166ec): <2-1-10> || surface normal,
+    c in the plane. Area with the normal near [2-1-10]: 60% / 71% (two scans), against 17% random,
+    stable over bandwidth 5-15 deg, weighting, and D0 at 0.5-2 deg. sampleG as a whole shows none
+    (17.7% vs 16.5% random), so it is not the substrate texture if the stock is shared.
+    `midas_plotting.laue.pole_figure_density` / `pole_density` / `ipf_scatter` implement this.
+    Provenance: `$ANALYSIS/<sampleH re-run>/<texture script and json>`,
+    `claims/texture_fibre.md`.
+41. **A composite (overlaid-frame) null is biased LOW, not conservative. To bound chance built
+    from real crystals' peaks, PEEL a real crystal instead.** Summing two real frames doubles the
+    crowding. The post-processing exclusive-spot filter (>= 4 exclusive spots) then kept 0.43% of
+    chance-type raw candidates in composites against 4.41% in real frames, and crowding removed 77%
+    of weak real solutions (nhit 11-15), which is exactly where chance solutions sit. The overlay
+    read CLEAN and was refuted.
+    - **Peeling** (erase the strongest crystal's blobs from a real frame, then re-index) keeps
+      real texture and reduces crowding. On sampleH it bounds cross-crystal chance at <= 0.36
+      NEW solutions per frame (95%), about 21% of the extras.
+    - **Most NEW solutions are real,** not chance. They are crystals the frame had hidden: 71% were
+      never raw candidates, and a third lie within 5 deg of the peeled crystal (its subgrains).
+      Only the +-1 um neighbourhood excess (72.5% vs a texture-matched 7.9%) survives as evidence.
+    - **Isolated-peak chance** (peak-scrambled frames) is about 0.003 per frame at nhit > 11.
+    Provenance: `PREREGISTER_{search_null,overlay_null,peel_null}.md` in `$ANALYSIS/<sampleH re-run>/`.
+42. **Per-grain c/a from spot positions is limited by GEOMETRY PRECISION, not by the estimator.**
+    The estimator:
+    - **Validated form:** fit a 2D elliptical Gaussian to each spot, re-centre the region on the
+      current prediction, then Gauss-Newton on (rotation, c/a at constant volume). On synthetics it
+      recovers an injected 1e-3 with bias <= 5e-6 and sd 1e-5 (6e-5 with a skewed mosaic), and has
+      no tilt bias.
+    - **Windows centred on the seed prediction TRUNCATE displaced spots:** they recovered only
+      52-71% of the injected c/a. A small fixed window fails on broad (mosaic) spots even when
+      re-centred.
+    On sampleH real data:
+    - Per-grain c/a varies (sd 3.6e-4) and tracks the c-axis tilt, with a population offset of
+      +8.7e-4 that replicates in scan 2.
+    - With a FREE intercept, detector deviations of about 1 px, 0.02% of distance and 0.02-0.03 deg
+      reproduce R^2 = 0.53 of that pattern. Without an intercept the same regression gave -0.21 and
+      was misread as "not geometry" (claim cf597aed93da REFUTED). **Always run a geometry-exclusion
+      regression both ways.**
+    - Sensitivity: 0.1% of detector distance moves c/a by 1e-3. A roll of the detector about the
+      beam is exactly null, because orientation absorbs it.
+    - The sample's position relative to the calibrant acts like a detector translation, and a
+      detector calibration does not fix it.
+    **Quote Laue c/a as strain only with the calibration uncertainty and the sample-calibrant offset
+    below those levels.** Provenance: `PREREGISTER_ca_peakfit{,_v2,_v3}.md`,
+    `PREREGISTER_ca_geometry.md`, `claims/ca_tilt_scan1.md`.
+43. **`filtered_spots` column 2 (SpotNr) is a per-solution counter over predicted spots, not an
+    observed-peak id.** Every solution numbers its spots 0, 1, 2, ..., so "shared SpotNr" between
+    two solutions is meaningless. A refuter's "78% shared peaks" came from exactly this.
+    - **Test peak sharing by pixel distance, or by the image-server blob labels (`labels.h5`,
+      indexed [y, x]).** On sampleH, co-located solutions more than 5 deg apart share 0.55% of
+      observed spots within 5 px, against 97% for the same crystal indexed twice, so they are not
+      ghosts.
+    - The writer is `LaueMatchingHeaders.h`, where `outArrThis[3*spotNr]` shows the per-solution
+      counter.
+44. **Spot energy from the stored hkl uses hc in keV*nm, because `Phase.B` is in 1/nm:
+    E = 1.2398 * |q| / (4 pi sin theta).** Using 12.398 (keV*A) gives energies 10x too high,
+    65-260 keV on sampleH, which evaluates attenuation at the wrong energy. That silently produced
+    a "design-broken" depth-gradient result and a physical story that had to be retracted. Guard
+    every spot-energy computation with an assertion that energies fall inside the params'
+    Elo-Ehi band.
+45. **The orientation content of a frame is validated on synthetic columns of known content, and
+    its completeness IS the recall table.** A frame is a column of several crystals, and the
+    joint fit (`pipeline/analysis/column_content/`) reports shares and spreads for the ones found.
+    No per-frame number tells you what was missed: on 240 synthetic sampleH-geometry frames C_int
+    tracked the found fraction at Spearman 0.18, and the unexplained flux bounded the missed share
+    in only 53% of frames with a miss. Quote the recall by share and by spread class from a
+    validation run at the data's own geometry and crowding. Recall is limited by DISCOVERY: the C
+    indexer finds point-like crystals at 88-96% but +/-0.8 deg streaks at 38% and wide clouds at
+    15%. Provenance: MIDAS `manuals/column-content/ENVELOPE.md` §1 and LAB_NOTEBOOK.
+46. **Never choose the spots you score with the model you are scoring.** A spectrum model whose
+    bright-spot set was selected by its own prediction "met the bar" (0.581) because a fitted
+    rolloff sat on its width bound, predicted the 21-23 keV spots dim, and so removed them.
+    On a union spot set chosen independently of the model it read 0.911, with a +8.2 log residual
+    at 21-23 keV. Fix the scored set with a selector that does not depend on any candidate model
+    (a union over models, or a geometric rule) before comparing or fitting. A parameter on its
+    bound is the tell.
+47. **A predicted spot lying on a streak does not make the streak that crystal's.** On sampleH,
+    64% of streak flux lay on spots predicted by found orientations (null 3.6%), which read as
+    "the unexplained half is under-fitted spread". Widening the found crystals' clouds (adaptive
+    windows to 121 px, K = 24) left the arcs untouched: unexplained 0.474 -> 0.421. To test
+    ownership, fit it; do not infer it from coincidence.
+48. **A chance null must match the data's crowding.** Controls with four crystals per frame
+    cannot say whether unrelated spots chain into streaks in a frame with ~200 peaks. On sampleH a
+    crowded null (10-80 compact crystals, up to 491 detected peaks) produced no component >= 20 px
+    long (the longest was 17.7 px) in 200 frames, against 5.7 real arcs per frame, and that
+    closed the attack. Match the peak count before trusting "chance cannot do it".
+49. **Joint-fit plumbing that failed silently.** Each of these returned a plausible-looking answer:
+    - Fixed 25x25 windows truncate 20-80 px streaks. Take windows from DETECTED components
+      touching each prediction, never from the model.
+    - An Adam step of 2e-3 rad moves sub-orientations ~0.1 deg per iteration and collapses the
+      fit. Alternating NNLS has an absorbing zero state. Use lr 3e-4, re-solve from the BEST
+      iterate, and reset (a, w) on collapse.
+    - Normalising shares to the MODELLED flux makes a missed crystal inflate the others. Normalise
+      to modelled + unexplained over all detected pixels.
+    All are fixed in `pipeline/analysis/column_content/fit.py`, which is checked against the
+    original sampleH code.

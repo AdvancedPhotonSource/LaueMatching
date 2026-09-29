@@ -7,6 +7,10 @@
 
 ## Phase 4 — Analyse
 
+> **More than one crystal per frame?** For the orientation CONTENT of each frame (shares and spreads of every
+> crystal in the column, with a validated completeness), use `pipeline/analysis/column_content/` and the MIDAS
+> `manuals/column-content/` doc set. Invariants 45-49.
+
 ```bash
 env LAUE_WORK=$WORK/analysis/<scan> \
     LAUE_PHASES=alpha,beta \
