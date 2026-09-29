@@ -1,6 +1,7 @@
 """Differentiable Laue forward projection — JAX port of laue_torch.forward.
 
-Math identical to ``laue_torch/forward.py`` (and scripts/GenerateSimulation.py /
+Math identical to ``laue_torch/forward.py`` (and
+packages/laue_index/laue_index/pipeline/GenerateSimulation.py /
 packages/laue_index/c_src/LaueMatchingCPU.c), as a single functional entry
 point ``laue_forward`` so
 it composes with JAX-CPFEM in one autodiff graph (Plan A, Option 7.1).
@@ -78,20 +79,24 @@ def laue_forward(
     tau_E: float = 0.05,
     reduce: str = "sum",
     source_xyz=None,
+    sg_num: Optional[int] = None,
 ):
     """Render a differentiable Laue exposure.
 
     Parameters mirror ``laue_torch.LaueForwardModel`` (constructor + forward call
     merged). ``hkls`` is an integer (H, 3) array; ``n_pix=(Nx, Ny)``;
     ``px_size=(dx, dy)`` in meters. Returns (Nx, Ny) for ``reduce='sum'`` or
-    (G, Nx, Ny) for ``reduce='stack'``.
+    (G, Nx, Ny) for ``reduce='stack'``. ``sg_num`` (optional) picks the lattice
+    embedding for the R-centred space groups (see ``geometry.lattice_setting``).
     """
     if reduce not in ("sum", "stack"):
         raise ValueError(f"reduce must be 'sum' or 'stack', got {reduce!r}")
     dtype = lattice.dtype
 
     if render_window is None:
-        rr = int(math.ceil(3 * psf_sigma))
+        # 3 sigma for a Gaussian, 6 sigma for a pseudo-Voigt (as laue_torch).
+        k = 6 if (isinstance(psf_eta, (int, float)) and psf_eta > 0) else 3
+        rr = int(math.ceil(k * psf_sigma))
         render_window = 2 * rr + 1
     if render_window % 2 == 0:
         render_window += 1
@@ -105,10 +110,10 @@ def laue_forward(
 
     # B0 from lattice (shared or per-grain).
     if lattice.ndim == 1:
-        B0 = reciprocal_matrix(lattice)                       # (3,3)
+        B0 = reciprocal_matrix(lattice, sg_num)               # (3,3)
         B0_g = jnp.broadcast_to(B0[None], (G, 3, 3))
     else:
-        B0_g = reciprocal_matrix(lattice)                     # (G,3,3)
+        B0_g = reciprocal_matrix(lattice, sg_num)             # (G,3,3)
         if B0_g.shape[0] != G:
             raise ValueError(f"lattice batch {B0_g.shape[0]} != grains {G}")
 

@@ -13,11 +13,33 @@ the fixtures skip.
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 import pytest
 
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+
+# Run from ``packages/`` (``python -m pytest laue_jax/tests``), the cwd is on
+# sys.path and holds the PROJECT dirs ``laue_torch/`` and ``laue_jax/``. Those
+# import as empty PEP 420 namespace packages ahead of the editable-install
+# finders, so ``from laue_torch import LaueForwardModel`` failed at collection.
+# Drop that entry; the real packages come from the install.
+_PACKAGES_DIR = Path(__file__).resolve().parents[2]
+
+
+def _is_packages_dir(entry: str) -> bool:
+    try:
+        return Path(entry or os.getcwd()).resolve() == _PACKAGES_DIR
+    except OSError:
+        return False
+
+
+sys.path[:] = [p for p in sys.path if not _is_packages_dir(p)]
+for _name in ("laue_torch", "laue_jax"):
+    _mod = sys.modules.get(_name)
+    if _mod is not None and getattr(_mod, "__file__", None) is None:
+        del sys.modules[_name]      # a namespace-package shadow already imported
 
 _MARKER = Path("simulation") / "params_sim.txt"
 

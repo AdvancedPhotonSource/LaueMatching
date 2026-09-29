@@ -12,7 +12,10 @@ numerics of the torch reference.
 from __future__ import annotations
 
 import math
+from typing import Optional
+
 import jax.numpy as jnp
+import numpy as np
 
 
 # ── Constants ──────────────────────────────────────────────────────────────
@@ -28,22 +31,31 @@ def rodrigues_to_matrix(rvec):
 
     rvec shape (..., 3). Direction is the axis; magnitude is the angle in
     radians (matches the R_Array convention).
+
+    Smooth at zero, like ``laue_torch.geometry.rodrigues_to_matrix``. The old
+    version normalised the axis and switched to I with ``jnp.where`` below
+    1e-12: the value was right but the gradient at rvec = 0 was NaN (reverse
+    mode: 0/0 through the unselected branch) or 0 (forward mode), where the
+    analytic limit is ``dR/d rvec_k = [e_k]x``. Refining a delta composed onto
+    a seed starts at exactly 0, so that gradient matters. This form evaluates
+    ``sin(θ)/θ`` and ``(1-cos θ)/θ² = ½ (sin(θ/2)/(θ/2))²`` (no cancellation,
+    also in float32) with θ = sqrt(|r|² + eps), so no quantity is divided by
+    a vanishing norm.
     """
-    theta = jnp.linalg.norm(rvec, axis=-1, keepdims=True)
-    safe = jnp.maximum(theta, 1e-30)
-    axis = rvec / safe
-    x, y, z = axis[..., 0], axis[..., 1], axis[..., 2]
-    c = jnp.cos(theta)[..., 0]
-    s = jnp.sin(theta)[..., 0]
-    C = 1.0 - c
-    R = jnp.stack([
-        c + x * x * C,         x * y * C - z * s,     x * z * C + y * s,
-        y * x * C + z * s,     c + y * y * C,         y * z * C - x * s,
-        z * x * C - y * s,     z * y * C + x * s,     c + z * z * C,
-    ], axis=-1).reshape(*rvec.shape[:-1], 3, 3)
-    eye = jnp.broadcast_to(jnp.eye(3, dtype=rvec.dtype), R.shape)
-    near_zero = (theta[..., 0] < 1e-12)[..., None, None]
-    return jnp.where(near_zero, eye, R)
+    eps = 1e-12
+    theta = jnp.sqrt(jnp.sum(rvec * rvec, axis=-1, keepdims=True) + eps)
+    sinc = jnp.sin(theta) / theta                                  # sin θ / θ
+    half = 0.5 * theta
+    cosc = 0.5 * (jnp.sin(half) / half) ** 2                      # (1 - cos θ) / θ²
+    x, y, z = rvec[..., 0], rvec[..., 1], rvec[..., 2]
+    zero = jnp.zeros_like(x)
+    K = jnp.stack([
+        jnp.stack([zero, -z, y], axis=-1),
+        jnp.stack([z, zero, -x], axis=-1),
+        jnp.stack([-y, x, zero], axis=-1),
+    ], axis=-2)
+    eye = jnp.eye(3, dtype=rvec.dtype)
+    return eye + sinc[..., None] * K + cosc[..., None] * jnp.matmul(K, K)
 
 
 def quat_to_matrix(q):
@@ -84,12 +96,62 @@ def to_rotation_matrix(U):
 
 # ── Lattice → reciprocal B0 ────────────────────────────────────────────────
 
-def reciprocal_matrix(lattice):
+RHOMBOHEDRAL_SPACE_GROUPS = frozenset({146, 148, 155, 160, 161, 166, 167})
+"""The R-centred trigonal space groups (hexagonal OR rhombohedral axes)."""
+
+_SETTING_ANGLE_TOL_DEG = 1e-4
+_SETTING_LENGTH_RTOL = 1e-6
+
+
+def lattice_setting(lattice, sg_num: Optional[int]) -> str:
+    """``"standard"`` or ``"rhombohedral"``; same rule as laue_torch.
+
+    ``sg_num=None`` or a non-R space group -> ``"standard"`` (a along x). For
+    SG 146/148/155/160/161/166/167: hexagonal axes (alpha = beta = 90,
+    gamma = 120) -> ``"standard"``; rhombohedral axes (a = b = c,
+    alpha = beta = gamma != 90) -> ``"rhombohedral"`` (3-fold along [111], as
+    C ``calcRecipArray``); anything else raises ``ValueError``. The lattice
+    must be concrete (not a traced value) when ``sg_num`` is an R group.
+    """
+    if sg_num is None or int(sg_num) not in RHOMBOHEDRAL_SPACE_GROUPS:
+        return "standard"
+    try:
+        lat = np.asarray(lattice, dtype=np.float64).reshape(-1, 6)
+    except Exception as exc:        # a jit tracer cannot be classified
+        raise ValueError(
+            f"sg_num={sg_num} needs a concrete lattice to choose between "
+            f"hexagonal and rhombohedral axes; pass the lattice as a constant "
+            f"(closure / static) rather than a traced argument") from exc
+    a, b, c = lat[:, 0], lat[:, 1], lat[:, 2]
+    al, be, ga = lat[:, 3], lat[:, 4], lat[:, 5]
+    tol = _SETTING_ANGLE_TOL_DEG
+    hexagonal = ((np.abs(al - 90.0) < tol) & (np.abs(be - 90.0) < tol)
+                 & (np.abs(ga - 120.0) < tol))
+    equal_len = ((np.abs(b - a) <= _SETTING_LENGTH_RTOL * np.abs(a))
+                 & (np.abs(c - a) <= _SETTING_LENGTH_RTOL * np.abs(a)))
+    rhombohedral = (equal_len & (np.abs(be - al) < tol) & (np.abs(ga - al) < tol)
+                    & (np.abs(al - 90.0) >= tol))
+    if hexagonal.all():
+        return "standard"
+    if rhombohedral.all():
+        return "rhombohedral"
+    raise ValueError(
+        f"space group {int(sg_num)} is R-centred: give the cell on hexagonal "
+        f"axes (a, a, c, 90, 90, 120) or rhombohedral axes (a, a, a, alpha, "
+        f"alpha, alpha with alpha != 90); got {lat.tolist()}")
+
+
+def reciprocal_matrix(lattice, sg_num: Optional[int] = None):
     """Reciprocal-lattice matrix B0 (columns are a*, b*, c*).
 
     lattice shape (..., 6) holds (a, b, c, alpha, beta, gamma). Lengths in nm,
-    angles in degrees. Returns B0 in 1/nm. Mirrors GenerateHKLs.py:55-100.
+    angles in degrees. Returns B0 in 1/nm. Mirrors ``GenerateHKLs.calcRecipArray``
+    (packages/laue_index/laue_index/pipeline/GenerateHKLs.py).
+
+    ``sg_num`` (optional): picks the embedding via :func:`lattice_setting`;
+    ``None`` (default) is a along x for every cell, as before 0.1.2.
     """
+    setting = lattice_setting(lattice, sg_num)
     a, b, c = lattice[..., 0], lattice[..., 1], lattice[..., 2]
     alpha = lattice[..., 3] * (math.pi / 180.0)
     beta = lattice[..., 4] * (math.pi / 180.0)
@@ -100,12 +162,22 @@ def reciprocal_matrix(lattice):
     Vc = a * b * c * phi
     pv = (2 * math.pi) / Vc
 
-    z = jnp.zeros_like(a)
-    a0, a1, a2 = a, z, z
-    b0, b1, b2 = b * cg, b * sg, z
-    c0 = c * cb
-    c1 = c * (ca - cb * cg) / sg
-    c2 = c * phi / sg
+    if setting == "standard":
+        z = jnp.zeros_like(a)
+        a0, a1, a2 = a, z, z
+        b0, b1, b2 = b * cg, b * sg, z
+        c0 = c * cb
+        c1 = c * (ca - cb * cg) / sg
+        c2 = c * phi / sg
+    else:
+        # C calcRecipArray rhombohedral branch: symmetric about [111].
+        p = jnp.sqrt(1.0 + 2 * ca)
+        q = jnp.sqrt(1.0 - ca)
+        pmq = (a / 3.0) * (p - q)
+        p2q = (a / 3.0) * (p + 2 * q)
+        a0, a1, a2 = p2q, pmq, pmq
+        b0, b1, b2 = pmq, p2q, pmq
+        c0, c1, c2 = pmq, pmq, p2q
 
     col0 = jnp.stack([b1 * c2 - b2 * c1, b2 * c0 - b0 * c2, b0 * c1 - b1 * c0], axis=-1) * pv[..., None]
     col1 = jnp.stack([c1 * a2 - c2 * a1, c2 * a0 - c0 * a2, c0 * a1 - c1 * a0], axis=-1) * pv[..., None]

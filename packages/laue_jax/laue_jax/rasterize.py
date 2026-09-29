@@ -33,7 +33,8 @@ def pseudo_voigt_splat(px, py, intensity, n_pix, sigma, window, eta=0.0,
 
     ``pV(r) = (1 − η)·G(r; σ) + η·L(r; γ)`` with both components FWHM-matched
     (γ = σ·√(2 ln 2)) and unnormalised (peak amplitude 1). ``eta=0`` recovers a
-    pure-Gaussian splat. Returns (Nx, Ny), or (n_grains, Nx, Ny) when
+    pure-Gaussian splat; for ``eta != 0`` the tail is tapered symmetrically
+    from R/2 to R = window//2 - 0.5 when R >= 5 sigma (as laue_torch). Returns (Nx, Ny), or (n_grains, Nx, Ny) when
     ``grain_idx`` is given with ``n_grains > 1``.
     """
     Nx, Ny = n_pix
@@ -70,6 +71,17 @@ def pseudo_voigt_splat(px, py, intensity, n_pix, sigma, window, eta=0.0,
         gauss_2d = gx[:, :, None] * gy[:, None, :]
         lorentz_2d = lx[:, :, None] * ly[:, None, :]
         tile = ((1.0 - eta) * gauss_2d + eta * lorentz_2d) * intensity[:, None, None]
+        # Symmetric raised-cosine taper of the tail from R/2 to R = r - 0.5,
+        # only when R >= 5 sigma: same rule as laue_torch.rasterize (keeps the
+        # truncated Lorentzian from biasing the centroid).
+        R_edge = r - 0.5
+        r0 = 0.5 * R_edge
+        do_taper = R_edge >= 5.0 * jnp.max(jnp.asarray(sigma))
+
+        def _taper(d2):
+            u = jnp.clip((jnp.sqrt(d2) - r0) / (R_edge - r0), 0.0, 1.0)
+            return jnp.where(do_taper, 0.5 * (1.0 + jnp.cos(math.pi * u)), 1.0)
+        tile = tile * (_taper(dx2)[:, :, None] * _taper(dy2)[:, None, :])
 
     valid = (valid_x[:, :, None] & valid_y[:, None, :]).astype(dtype)
     tile = tile * valid
