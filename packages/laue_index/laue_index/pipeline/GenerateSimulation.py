@@ -17,6 +17,8 @@ import sys
 import subprocess
 import logging
 
+from laue_index.config_schema import SYMMETRY_LETTERS
+
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -64,8 +66,9 @@ class ConfigParser:
                     self.params['sgNum'] = int(line.split()[1])
                 elif line.startswith('Symmetry'):
                     sym = line.split()[1]
-                    if sym not in 'FICAR' and len(sym) != 1:
-                        raise ValueError('Invalid value for sym, must be one character from F,I,C,A,R')
+                    if len(sym) != 1 or sym not in SYMMETRY_LETTERS:
+                        raise ValueError(f'Invalid value for sym, must be one character from '
+                                         f'{",".join(SYMMETRY_LETTERS)}')
                     self.params['sym'] = sym
                 elif line.startswith('LatticeParameter'):
                     self.params['latC'] = ' '.join(line.split()[1:7])
@@ -84,7 +87,7 @@ class ConfigParser:
                 elif line.startswith('Ehi'):
                     self.params['Ehi'] = float(line.split()[1])
                 elif line.startswith('SimulationSmoothingWidth'):
-                    self.params['gaussWidth'] = int(line.split()[1])
+                    self.params['gaussWidth'] = float(line.split()[1])
                 elif line.startswith('NrPxX'):
                     self.params['nPxX'] = int(line.split()[1])
                 elif line.startswith('NrPxY'):
@@ -166,35 +169,15 @@ class OrientationLoader:
 def calc_recip_array(lat, sg_num):
     """Reciprocal-lattice basis B (3x3) from lattice parameters.
 
-    Port of calcRecipArray in ../c_src/LaueMatchingHeaders.h (and GenerateHKLs.py),
-    so q = OM @ B @ hkl matches the C matcher for ALL crystal systems. The
-    previous `OM * astar` shortcut is only valid for cubic lattices and put
-    simulated spots in the wrong places for e.g. hexagonal Ti-alpha.
-    For cubic, B == astar * I, so cubic output is unchanged.
+    The indexer's own construction (laue_index.lattice mirrors calcRecipArray
+    in ../c_src/LaueMatchingHeaders.h), so q = OM @ B @ hkl matches the C
+    matcher for ALL crystal systems and both R-group settings.
     """
-    from math import cos, sin, sqrt, pi as _pi
-    a, b, c, alpha, beta, gamma = [float(x) for x in lat]
-    d2r = _pi / 180.0
-    rhomb = 1 if sg_num in [146, 148, 155, 160, 161, 166, 167] else 0
-    ca, cb, cg, sg = cos(alpha*d2r), cos(beta*d2r), cos(gamma*d2r), sin(gamma*d2r)
-    phi = sqrt(1.0 - ca*ca - cb*cb - cg*cg + 2*ca*cb*cg)
-    pv = (2*_pi) / (a*b*c*phi)
-    zo = lambda v: 0.0 if abs(v) < 1e-11 else v
-    if rhomb == 0:
-        a0, a1, a2 = a, 0.0, 0.0
-        b0, b1, b2 = b*cg, b*sg, 0.0
-        c0, c1, c2 = c*cb, c*(ca-cb*cg)/sg, c*phi/sg
-    else:
-        p = sqrt(1.0 + 2*ca); q = sqrt(1.0 - ca)
-        pmq = (a/3.0)*(p-q); p2q = (a/3.0)*(p+2*q)
-        a0, a1, a2 = p2q, pmq, pmq
-        b0, b1, b2 = pmq, p2q, pmq
-        c0, c1, c2 = pmq, pmq, p2q
-    B = np.zeros((3, 3))
-    B[0][0] = zo((b1*c2-b2*c1)*pv); B[1][0] = zo((b2*c0-b0*c2)*pv); B[2][0] = zo((b0*c1-b1*c0)*pv)
-    B[0][1] = zo((c1*a2-c2*a1)*pv); B[1][1] = zo((c2*a0-c0*a2)*pv); B[2][1] = zo((c0*a1-c1*a0)*pv)
-    B[0][2] = zo((a1*b2-a2*b1)*pv); B[1][2] = zo((a2*b0-a0*b2)*pv); B[2][2] = zo((a0*b1-a1*b0)*pv)
-    return B
+    from laue_index import lattice as _lattice
+    lat = [float(x) for x in lat]
+    sg = int(sg_num)
+    _lattice.validate_setting(sg, lat)
+    return _lattice.reciprocal_matrix(lat, sg)
 
 
 def orientations_to_recips(orientations, params):
@@ -243,7 +226,8 @@ class DiffractionSimulator:
         self._init_rotation_matrix()
         
         # Initialize arrays for simulation
-        self.img = np.zeros((self.params['nPxX'], self.params['nPxY']))
+        # rows x columns = (NrPxY, NrPxX): the layout the indexer reads
+        self.img = np.zeros((self.params['nPxY'], self.params['nPxX']))
         self.pos_arr = []
         self.ki = np.array([0, 0, 1.0])
         
@@ -251,7 +235,11 @@ class DiffractionSimulator:
         """Initialize the rotation matrix based on R parameters."""
         R = self.params['R']
         rotang = np.linalg.norm(R)
-        rotvect = R / np.linalg.norm(R)
+        if rotang < 1e-12:
+            # R_Array 0 0 0: an unrotated detector, the identity (as in the C).
+            self.rot = np.eye(3)
+            return
+        rotvect = R / rotang
         
         # Rotation matrix using Rodrigues' rotation formula
         self.rot = np.array([

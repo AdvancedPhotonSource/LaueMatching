@@ -237,3 +237,106 @@ def test_no_script_reads_laue_phase_directly():
                 r"else\s+[\"'](zn|alpha|beta)[\"']\s*(#.*)?$", code, re.M):
             bad.append(f"{p.name}: material/phase name as a default")
     assert not bad, bad
+
+
+# ---- the crystal frame (2026-09-28 code read) --------------------------------
+# The indexer builds lattices with a along x; midas_stress's operators assume
+# a* along x. For trigonal cells the two frames differ by 30 deg about c, so the
+# operators must be conjugated into the indexer's frame before use.
+
+TRIG_HEX = (0.476, 0.476, 1.299, 90, 90, 120)
+TRIG_RHOMB = (0.5128, 0.5128, 0.5128, 55.28, 55.28, 55.28)
+
+
+def _rand_om(rng):
+    q = rng.normal(size=4)
+    q /= np.linalg.norm(q)
+    w, x, y, z = q
+    return np.array([[1-2*(y*y+z*z), 2*(x*y-w*z), 2*(x*z+w*y)],
+                     [2*(x*y+w*z), 1-2*(x*x+z*z), 2*(y*z-w*x)],
+                     [2*(x*z-w*y), 2*(y*z+w*x), 1-2*(x*x+y*y)]])
+
+
+def _rot(axis, deg):
+    axis = np.asarray(axis, float) / np.linalg.norm(axis)
+    K = np.array([[0, -axis[2], axis[1]], [axis[2], 0, -axis[0]], [-axis[1], axis[0], 0]])
+    t = np.radians(deg)
+    return np.eye(3) + np.sin(t) * K + (1 - np.cos(t)) * K @ K
+
+
+# A true crystal symmetry, written in the indexer's frame (a along x):
+# -3m1 groups have a 2-fold ALONG a, -31m groups one PERPENDICULAR to a.
+@pytest.mark.parametrize("sg,axis_deg", [(150, 0), (164, 0), (166, 0), (167, 0),
+                                         (149, 90), (162, 90), (157, 90)])
+@pytest.mark.parametrize("use_midas", [True, False])
+def test_trigonal_symmetry_equivalent_orientations_are_zero_apart(
+        lm, tmp_path, monkeypatch, sg, axis_deg, use_midas):
+    if use_midas:
+        pytest.importorskip("midas_stress.orientation")
+    else:
+        monkeypatch.setattr(lm, "_midas_stress", lambda: None)
+        real_import = __builtins__["__import__"] if isinstance(__builtins__, dict) else __builtins__.__import__
+
+        def no_ms(name, *a, **k):
+            if name.startswith("midas_stress"):
+                raise ImportError("blocked for the test")
+            return real_import(name, *a, **k)
+        monkeypatch.setattr("builtins.__import__", no_ms)
+    monkeypatch.setenv("LAUE_PARAMS", str(_params(tmp_path, "t", sg, TRIG_HEX)))
+    ph = lm.Phase.load("t")
+    rng = np.random.default_rng(sg)
+    S = _rot([np.cos(np.radians(axis_deg)), np.sin(np.radians(axis_deg)), 0], 180)
+    for _ in range(5):
+        A = _rand_om(rng)
+        # q = OM @ B @ hkl, so a crystal symmetry S acts as OM -> OM @ S.
+        d = ph.misorientation(A, (A @ S)[None])
+        assert d[0] < 1e-4, f"SG {sg}: symmetry-equivalent pair reported {d[0]:.3f} deg apart"
+
+
+@pytest.mark.parametrize("sg,latt", [(194, HEX), (225, CUB), (229, CUB)])
+def test_hex_and_cubic_misorientation_unchanged(lm, tmp_path, monkeypatch, sg, latt):
+    # The frame fix must not move any hexagonal or cubic result: compare against
+    # the plain crystal-side einsum with the conventional operators.
+    ms = pytest.importorskip("midas_stress.orientation")
+    monkeypatch.setenv("LAUE_PARAMS", str(_params(tmp_path, "h", sg, latt)))
+    ph = lm.Phase.load("h")
+    rng = np.random.default_rng(7)
+    A = _rand_om(rng)
+    Bs = np.array([_rand_om(rng) for _ in range(50)])
+    ref = np.degrees(np.asarray(ms.misorientation_om_batch(
+        np.repeat(A.reshape(1, 9), 50, 0), Bs.reshape(50, 9), sg)))
+    assert np.allclose(ph.misorientation(A, Bs), ref, atol=1e-6)
+
+
+def test_rhombohedral_axes_give_the_indexers_b(lm, tmp_path, monkeypatch):
+    # Before 0.8.0 laue_material had no rhombohedral branch, so on rhombohedral
+    # axes its B disagreed with the indexer's and every projected spot moved.
+    from laue_index.lattice import reciprocal_matrix
+    monkeypatch.setenv("LAUE_PARAMS", str(_params(tmp_path, "r", 167, TRIG_RHOMB)))
+    ph = lm.Phase.load("r")
+    assert np.allclose(ph.B, reciprocal_matrix(TRIG_RHOMB, 167), atol=1e-12)
+    rng = np.random.default_rng(3)
+    A = _rand_om(rng)
+    S = _rot([1, -1, 0], 180)       # a 2-fold of the rhombohedral embedding
+    assert ph.misorientation(A, (A @ S)[None])[0] < 1e-4
+
+
+def test_r_group_on_neither_setting_is_refused(lm, tmp_path, monkeypatch):
+    monkeypatch.setenv("LAUE_PARAMS", str(_params(tmp_path, "x", 167, (0.5, 0.5, 0.7, 90, 90, 90))))
+    with pytest.raises(ValueError, match="rhombohedral"):
+        lm.Phase.load("x")
+
+
+def test_phase_refuses_an_hkl_list_recorded_for_another_crystal(lm, tmp_path, monkeypatch):
+    # data-artifact provenance (0.8.0): the analysis reads the reflection list
+    # the params file names; a list recorded for another lattice would make
+    # every projected spot wrong, so Phase refuses it.
+    from laue_index import artifacts as A
+    p = _params(tmp_path, "hx", 194, HEX)
+    hkl = tmp_path / "hkls_hx.txt"
+    A.write_record(hkl, "hkl_list", config={"SpaceGroup": 194, "LatticeParameter": [0.2921, 0.2921, 0.4665, 90, 90, 120]})
+    monkeypatch.setenv("LAUE_PARAMS", str(p))
+    with pytest.raises(A.ArtifactMismatch, match="LatticeParameter"):
+        lm.Phase.load("hx")
+    A.write_record(hkl, "hkl_list", config={"SpaceGroup": 194, "LatticeParameter": list(HEX)})
+    assert lm.Phase.load("hx").sgnum == 194

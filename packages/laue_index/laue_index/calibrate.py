@@ -125,24 +125,15 @@ def matrix_to_rodrigues(M: np.ndarray) -> np.ndarray:
     return axis * theta
 
 
-def reciprocal_matrix(lattice: Sequence[float]) -> np.ndarray:
+def reciprocal_matrix(lattice: Sequence[float], space_group=None) -> np.ndarray:
     """B matrix (columns a*, b*, c*, the 2*pi convention) from a, b, c, al, be, ga.
 
-    Lengths in nm, angles in degrees -- MIDAS units.
+    Lengths in nm, angles in degrees -- MIDAS units. The indexer's own
+    construction (``laue_index.lattice``); ``space_group`` selects the
+    rhombohedral embedding for an R group given on rhombohedral axes.
     """
-    a, b, c, al, be, ga = (float(x) for x in lattice)
-    al, be, ga = math.radians(al), math.radians(be), math.radians(ga)
-    ca, cb, cg = math.cos(al), math.cos(be), math.cos(ga)
-    sg = math.sin(ga)
-    vol = a * b * c * math.sqrt(
-        max(1.0 - ca * ca - cb * cb - cg * cg + 2.0 * ca * cb * cg, 1e-30))
-    A = np.array([
-        [a, b * cg, c * cb],
-        [0.0, b * sg, c * (ca - cb * cg) / sg],
-        [0.0, 0.0, vol / (a * b * sg)],
-    ])
-    # reciprocal (2*pi convention), columns a*, b*, c*
-    return 2.0 * math.pi * np.linalg.inv(A).T
+    from . import lattice as _lattice
+    return _lattice.reciprocal_matrix(lattice, space_group)
 
 
 # --------------------------------------------------------------------------
@@ -464,7 +455,8 @@ def calibrate(anchors: Iterable[Anchor],
               tolerance_px: float = 3.0,
               null_trials: int = 2000,
               n_restarts: int = 24,
-              seed: int = 0) -> CalibrationResult:
+              seed: int = 0,
+              space_group: int | None = None) -> CalibrationResult:
     """Fit the detector pose from labelled spots and a SUPPLIED orientation.
 
     ``frame_provenance`` is required and must be non-empty: the rotation about
@@ -497,7 +489,7 @@ def calibrate(anchors: Iterable[Anchor],
 
     hkl = np.array([a.hkl for a in anchors], dtype=float)
     obs = np.array([a.pixel for a in anchors], dtype=float)
-    B = reciprocal_matrix(lattice)
+    B = reciprocal_matrix(lattice, space_group)
     rng = np.random.default_rng(seed)
 
     cands = orientation_candidates(recip)

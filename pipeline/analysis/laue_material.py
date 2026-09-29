@@ -79,82 +79,35 @@ def phase_name() -> str:
 
 
 # --------------------------------------------------------------------------
-# symmetry
+# symmetry and lattice: one copy, in laue_index.lattice
 # --------------------------------------------------------------------------
-def _rmat(axis, deg) -> np.ndarray:
-    u = np.asarray(axis, float)
-    u = u / np.linalg.norm(u)
-    t = radians(deg)
-    K = np.array([[0, -u[2], u[1]], [u[2], 0, -u[0]], [-u[1], u[0], 0]])
-    return np.eye(3) + sin(t) * K + (1 - cos(t)) * (K @ K)
+# The indexer puts a along x (calcRecipArray); midas_stress puts a* along x.
+# For trigonal cells the frames differ by 30 deg about c, so operators taken
+# from midas_stress as they are were wrong here for every trigonal group
+# (2026-09-28 code read). laue_index.lattice owns the frame change, the
+# rhombohedral setting and the fallback tables, and is shared with the
+# indexer's Python tools, so this module cannot drift from the indexer again.
+try:
+    from laue_index import lattice as _lattice
+    from laue_index import artifacts as _artifacts
+except ImportError as exc:                          # pragma: no cover
+    raise SystemExit(f"laue_index is not importable ({exc}); laue_material takes its "
+                     f"lattice basis and symmetry operators from laue_index.lattice")
 
-
-def _hex12() -> np.ndarray:
-    """Proper rotations of Laue class 6/mmm (12 operators)."""
-    return np.array(
-        [_rmat([0, 0, 1], 60 * k) for k in range(6)]
-        + [_rmat([cos(radians(a)), sin(radians(a)), 0], 180)
-           for a in (0, 30, 60, 90, 120, 150)]
-    )
-
-
-def _cub24() -> np.ndarray:
-    """Proper rotations of Laue class m-3m (24 operators)."""
-    return np.array(
-        [np.eye(3)]
-        + [_rmat(a, d) for a, d in [
-            ([1, 0, 0], 90), ([1, 0, 0], 180), ([1, 0, 0], 270),
-            ([0, 1, 0], 90), ([0, 1, 0], 180), ([0, 1, 0], 270),
-            ([0, 0, 1], 90), ([0, 0, 1], 180), ([0, 0, 1], 270),
-            ([1, 1, 0], 180), ([1, -1, 0], 180), ([1, 0, 1], 180),
-            ([-1, 0, 1], 180), ([0, 1, 1], 180), ([0, 1, -1], 180),
-            ([1, 1, 1], 120), ([1, 1, 1], 240), ([1, -1, 1], 120),
-            ([1, -1, 1], 240), ([-1, 1, 1], 120), ([-1, 1, 1], 240),
-            ([1, 1, -1], 120), ([1, 1, -1], 240)]]
-    )
-
-
-def _tet8() -> np.ndarray:
-    return np.array(
-        [_rmat([0, 0, 1], 90 * k) for k in range(4)]
-        + [_rmat([1, 0, 0], 180), _rmat([0, 1, 0], 180),
-           _rmat([1, 1, 0], 180), _rmat([1, -1, 0], 180)]
-    )
-
-
-def _trig6() -> np.ndarray:
-    return np.array(
-        [_rmat([0, 0, 1], 120 * k) for k in range(3)]
-        + [_rmat([cos(radians(a)), sin(radians(a)), 0], 180)
-           for a in (0, 60, 120)]
-    )
-
-
-def _trig3() -> np.ndarray:
-    return np.array([_rmat([0, 0, 1], 120 * k) for k in range(3)])
-
-
-def _orth4() -> np.ndarray:
-    return np.array([np.eye(3), _rmat([1, 0, 0], 180),
-                     _rmat([0, 1, 0], 180), _rmat([0, 0, 1], 180)])
-
-
-def _mono2() -> np.ndarray:
-    return np.array([np.eye(3), _rmat([0, 1, 0], 180)])
-
-
-def _tri1() -> np.ndarray:
-    return np.array([np.eye(3)])
+# A lattice per crystal system for callers that give only a space group. The
+# operators depend on the lattice only through its setting (rhombohedral axes)
+# and its frame, which is fixed by the angles, not the lengths.
+_SYSTEM_LATTICE = ((2, (1, 1.1, 1.2, 80, 95, 105)), (15, (1, 1.1, 1.2, 90, 104, 90)),
+                   (74, (1, 1.1, 1.2, 90, 90, 90)), (142, (1, 1, 1.2, 90, 90, 90)),
+                   (194, (1, 1, 1.6, 90, 90, 120)), (230, (1, 1, 1, 90, 90, 90)))
 
 
 def _midas_stress():
     """midas_stress.orientation, or None with the reason recorded.
 
     midas_stress is the canonical source for every orientation/misorientation
-    primitive in MIDAS (a byte-for-byte port of the C GetMisorientation.h), so
-    it is what this module uses when it is importable. It hard-imports torch at
-    package level, which is not present in every beamline environment, hence the
-    guarded import and the local fallback below.
+    primitive in MIDAS. It is not importable in every beamline environment,
+    hence the guarded import and the fallback tables in laue_index.lattice.
     """
     global _MS, _MS_ERR
     try:
@@ -170,49 +123,24 @@ def _midas_stress():
 
 
 def _quat_to_om(q) -> np.ndarray:
-    w, x, y, z = [float(v) for v in q]
-    return np.array([[1-2*(y*y+z*z), 2*(x*y-w*z), 2*(x*z+w*y)],
-                     [2*(x*y+w*z), 1-2*(x*x+z*z), 2*(y*z-w*x)],
-                     [2*(x*z-w*y), 2*(y*z+w*x), 1-2*(x*x+y*y)]])
+    return _lattice.quat_to_matrix(q)
 
 
-def sym_ops_for_spacegroup(sgnum: int) -> np.ndarray:
+def sym_ops_for_spacegroup(sgnum: int, latt=None) -> np.ndarray:
     """
-    Proper-rotation operators of the Laue class containing this space group.
+    Proper-rotation operators of the Laue class containing this space group,
+    in the INDEXER's crystal frame (a along x).
 
-    Taken from ``midas_stress.orientation.make_symmetries`` (which returns
-    symmetry quaternions) when available, so the operator set is not a second,
-    independently maintained copy of the same crystallography. The explicit
-    tables below are the fallback for environments without midas_stress; they
-    are checked against make_symmetries by ``selftest()``.
-
-    Note also what this replaces: the old code chose between hex-12 and
-    cubic-24 on the *phase name* ("alpha"/"beta"), which is only correct for a
-    material whose two phases happen to be one hexagonal and one cubic.
+    ``latt`` decides the setting of an R group (hexagonal or rhombohedral
+    axes); without it hexagonal axes are assumed. Symmetry follows the space
+    group, never the phase name.
     """
     n = int(sgnum)
-    ms = _midas_stress()
-    if ms is not None:
-        n_sym, sym = ms.make_symmetries(n)
-        return np.array([_quat_to_om(q) for q in sym[:n_sym]])
-
-    if 195 <= n <= 230:
-        return _cub24()
-    if 168 <= n <= 194:
-        return _hex12()
-    if 149 <= n <= 167:
-        return _trig6()
-    if 143 <= n <= 148:
-        return _trig3()
-    if 75 <= n <= 142:
-        return _tet8()
-    if 16 <= n <= 74:
-        return _orth4()
-    if 3 <= n <= 15:
-        return _mono2()
-    if 1 <= n <= 2:
-        return _tri1()
-    raise ValueError(f"space group number out of range: {sgnum}")
+    if not 1 <= n <= 230:
+        raise ValueError(f"space group number out of range: {sgnum}")
+    if latt is None:
+        latt = next(l for hi, l in _SYSTEM_LATTICE if n <= hi)
+    return _lattice.laue_class_operators(n, latt)
 
 
 # --------------------------------------------------------------------------
@@ -231,41 +159,26 @@ def read_params(path: str) -> Dict[str, list]:
     return out
 
 
-def _direct_A(latt) -> np.ndarray:
+def _direct_A(latt, sgnum=None) -> np.ndarray:
     """
     Direct-lattice matrix, columns = a, b, c, in nm, in the SAME Cartesian frame
     as :func:`_reciprocal_B` (a along x, b in the xy plane), so ``A.T @ B == 2*pi*I``.
 
     Use this for crystal DIRECTIONS [uvw] (``A @ uvw``); ``B @ hkl`` is a plane
     NORMAL. The two coincide only for cubic cells and for hex [0001] || (0001).
+    ``sgnum`` selects the rhombohedral embedding for an R group on rhombohedral axes.
     """
-    a, b, c, alpha, beta, gamma = [float(v) for v in latt]
-    ca, cb, cg = cos(radians(alpha)), cos(radians(beta)), cos(radians(gamma))
-    sg = sin(radians(gamma))
-    phi = sqrt(1.0 - ca * ca - cb * cb - cg * cg + 2 * ca * cb * cg)
-    av = np.array([a, 0.0, 0.0])
-    bv = np.array([b * cg, b * sg, 0.0])
-    cv = np.array([c * cb, c * (ca - cb * cg) / sg, c * phi / sg])
-    cv[np.abs(cv) < 1e-11] = 0.0
-    return np.column_stack([av, bv, cv])
+    return _lattice.direct_basis(latt, sgnum)
 
 
-def _reciprocal_B(latt) -> np.ndarray:
+def _reciprocal_B(latt, sgnum=None) -> np.ndarray:
     """
     Reciprocal-lattice matrix, columns = a*, b*, c*, in 1/nm (with the 2*pi).
 
-    Same construction as GenerateHKLs.calcRecipArray, so the analysis chain and
-    the reflection-list generator cannot drift apart.
+    The indexer's own construction (laue_index.lattice mirrors calcRecipArray),
+    so the analysis chain and the indexer cannot drift apart.
     """
-    a, b, c, alpha, beta, gamma = [float(v) for v in latt]
-    ca, cb, cg = cos(radians(alpha)), cos(radians(beta)), cos(radians(gamma))
-    phi = sqrt(1.0 - ca * ca - cb * cb - cg * cg + 2 * ca * cb * cg)
-    Vc = a * b * c * phi
-    pv = 2 * pi / Vc
-
-    av, bv, cv = _direct_A(latt).T
-
-    return np.column_stack([np.cross(bv, cv), np.cross(cv, av), np.cross(av, bv)]) * pv
+    return _lattice.reciprocal_matrix(latt, sgnum)
 
 
 class Phase:
@@ -280,9 +193,14 @@ class Phase:
         self.sgnum = int(p["SpaceGroup"][0])
         self.symmetry = p.get("Symmetry", ["P"])[0]
         self.lattice = [float(v) for v in p["LatticeParameter"]]
-        self.B = _reciprocal_B(self.lattice)
-        self.A = _direct_A(self.lattice)        # direct lattice, for [uvw] directions
-        self.sym_ops = sym_ops_for_spacegroup(self.sgnum)
+        _lattice.validate_setting(self.sgnum, self.lattice)
+        self.B = _reciprocal_B(self.lattice, self.sgnum)
+        self.A = _direct_A(self.lattice, self.sgnum)  # direct lattice, for [uvw] directions
+        self.sym_ops = sym_ops_for_spacegroup(self.sgnum, self.lattice)
+        # midas_stress works in its own frame (a* along x): orientations go to it
+        # as OM @ M. None on rhombohedral axes, which midas_stress does not model.
+        self._to_midas = (None if _lattice.uses_rhombohedral_axes(self.sgnum, self.lattice)
+                          else _lattice.midas_frame_rotation(self.lattice, self.sgnum))
 
         self.P = np.array([float(v) for v in p["P_Array"]])
         self.Rrod = np.array([float(v) for v in p["R_Array"]])
@@ -295,6 +213,11 @@ class Phase:
 
         hklf = p["HKLFile"][0]
         self.hkl_path = hklf
+        # The list's provenance record must describe THIS crystal (refuse
+        # another lattice or space group; warn if the list has no record).
+        _artifacts.require(hklf, "hkl_list", expect={
+            "SpaceGroup": self.sgnum, "Symmetry": self.symmetry,
+            "LatticeParameter": self.lattice})
         self.hkls = np.loadtxt(hklf)[:, :3]
 
         angr = np.linalg.norm(self.Rrod)
@@ -392,23 +315,23 @@ class Phase:
         """Symmetry-reduced misorientation, in DEGREES, of ``A`` against each ``Bs``.
 
         Delegates to ``midas_stress.orientation.misorientation_om_batch``, the
-        canonical MIDAS implementation. Note midas_stress returns RADIANS; the
-        conversion happens here so callers keep the degree-valued thresholds the
-        analysis chain is written around.
+        canonical MIDAS implementation, after moving both orientations into its
+        crystal frame (``OM @ M``; the identity except for monoclinic, trigonal
+        and hexagonal cells). midas_stress returns RADIANS; the conversion
+        happens here so callers keep degree-valued thresholds.
 
-        The local fallback is the pipeline's original einsum. Cross-checked on
-        30,000 real Zn pairs: the two agree to 0.032 deg worst case, and no pair
-        changes side of the 1.0 deg clustering cut -- so results are unaffected by
-        which path runs, but the midas_stress path is the one to trust.
+        The fallback (no midas_stress, or rhombohedral axes) is the crystal-side
+        einsum over ``self.sym_ops``, which are already in this frame.
         """
         Bs = np.asarray(Bs, float)
         if Bs.ndim == 2:
             Bs = Bs[None]
         ms = _midas_stress()
-        if ms is not None:
-            A9 = np.asarray(A, float).reshape(9)
+        if ms is not None and self._to_midas is not None:
+            M = self._to_midas
+            A9 = (np.asarray(A, float) @ M).reshape(9)
             oms1 = np.repeat(A9[None, :], len(Bs), axis=0)
-            oms2 = Bs.reshape(len(Bs), 9)
+            oms2 = (Bs @ M).reshape(len(Bs), 9)
             return np.degrees(np.asarray(ms.misorientation_om_batch(oms1, oms2, self.sgnum)))
 
         best = np.full(len(Bs), 999.0)
@@ -454,49 +377,27 @@ def selftest() -> None:
     assert len(sym_ops_for_spacegroup(229)) == 24     # BCC  (Ti beta)
     assert len(sym_ops_for_spacegroup(225)) == 24     # FCC
 
-    # When midas_stress is present the operators come from make_symmetries, so
-    # pin that they are the SAME SET as the fallback tables -- otherwise grain
-    # counts would change silently depending on whether midas_stress imported.
-    #
-    # Tolerance is 1e-4, not machine epsilon, and deliberately so: midas_stress
-    # >= 0.8.1 returns exact operators, but older installs stored their symmetry
-    # quaternions rounded to 5 decimals (0.86603 for sqrt(3)/2, 0.70711 for
-    # sqrt(2)/2), so their operators were orthogonal only to ~3e-5 (~0.002 deg,
-    # 500x smaller than the 1.0 deg clustering cut it feeds). Keep the loose
-    # tolerance so this passes against either -- comparing at 1e-9 would report a
-    # false mismatch on an older midas_stress.
-    if _midas_stress() is not None:
-        for sg, local in ((194, _hex12()), (229, _cub24()), (225, _cub24())):
-            ms = sym_ops_for_spacegroup(sg)
-            assert len(ms) == len(local), f"SG{sg}: {len(ms)} vs {len(local)} operators"
-            worst = max(np.abs(local - A).reshape(len(local), -1).max(axis=1).min()
-                        for A in ms)
-            assert worst < 1e-4, f"SG{sg}: operator sets differ by {worst:.2e}"
-        print("  midas_stress operator sets match the fallback tables "
-              f"(worst {worst:.1e}; midas_stress constants are 5-decimal rounded)")
-
-    for nm, ops in (("hex12", _hex12()), ("cub24", _cub24()), ("tet8", _tet8()),
-                    ("trig6", _trig6()), ("trig3", _trig3()), ("orth4", _orth4()),
-                    ("mono2", _mono2()), ("tri1", _tri1())):
+    # Every operator of every Laue class maps the lattice onto itself (A^-1 S A
+    # is an integer matrix) and each set is a closed group without duplicates.
+    # Covers the frame (trigonal) and the finer Laue classes (4/m, -3, 6/m, m-3).
+    for sg in (2, 12, 62, 88, 139, 148, 150, 162, 167, 176, 194, 206, 225):
+        latt = next(l for hi, l in _SYSTEM_LATTICE if sg <= hi)
+        ops, A = sym_ops_for_spacegroup(sg, latt), _direct_A(latt, sg)
         for S in ops:
-            assert np.allclose(S @ S.T, np.eye(3), atol=1e-9), nm
-            assert abs(np.linalg.det(S) - 1) < 1e-9, nm    # proper rotations only
-        # no duplicates: a repeated operator inflates nothing but wastes work and
-        # would hide a missing one behind the expected count
+            assert np.allclose(S @ S.T, np.eye(3), atol=1e-9) and abs(np.linalg.det(S) - 1) < 1e-9
+            Mi = np.linalg.inv(A) @ S @ A
+            assert np.allclose(Mi, np.rint(Mi), atol=1e-4), f"SG{sg}: operator is not a lattice symmetry"
         for i in range(len(ops)):
             for j in range(i + 1, len(ops)):
-                assert np.abs(ops[i] - ops[j]).max() > 1e-6, f"{nm}: duplicate operator"
-        # closure under composition (a group, not merely a set of rotations).
-        # Compare numerically -- a rounded-bytes comparison reports false
-        # failures because -0.0 and 0.0 have different byte patterns.
+                assert np.abs(ops[i] - ops[j]).max() > 1e-6, f"SG{sg}: duplicate operator"
         for S in ops:
             for T in ops:
                 d = np.abs(ops - (S @ T)).reshape(len(ops), -1).max(axis=1).min()
-                assert d < 1e-9, f"{nm}: not closed under composition (gap {d:.2e})"
+                assert d < 1e-6, f"SG{sg}: not closed under composition (gap {d:.2e})"
 
     print("laue_material selftest OK "
           "(generic B reproduces hexB() and the cubic branch exactly; "
-          "operator sets are closed proper-rotation groups)")
+          "operators are closed groups of lattice symmetries in the indexer frame)")
 
 
 if __name__ == "__main__":

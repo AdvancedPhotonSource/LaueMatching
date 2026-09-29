@@ -5,6 +5,9 @@ from math import cos, sin, sqrt
 import argparse
 import warnings
 
+from laue_index import lattice as _lattice
+from laue_index import artifacts as _artifacts
+
 class MyParser(argparse.ArgumentParser):
     def error(self, message):
         sys.stderr.write('error: %s\n' % message)
@@ -27,6 +30,7 @@ class LaueMatching:
         self.dx = args.dx
         self.dy = args.dy
         self.Ehi = getattr(args, 'Ehi', 30)
+        self.Elo = getattr(args, 'Elo', None)
 
         # Constants
         self.hc_keVnm = 1.2398419739
@@ -41,6 +45,11 @@ class LaueMatching:
         self.Hexagonal = 1 if (self.sgNum >= 168 and self.sgNum < 195) else 0
         
         # Validation
+        try:
+            _lattice.validate_setting(self.sgNum, self.latticeParameter)
+        except ValueError as exc:
+            print(f'Invalid LatticeParameter: {exc}')
+            sys.exit(1)
         if self.sym not in 'FICARPB' or len(self.sym) != 1:
             print('Invalid value for sym, must be one character from F,I,C,A,R,P,B')
             sys.exit(1)
@@ -53,51 +62,13 @@ class LaueMatching:
             return val
 
     def calcRecipArray(self):
-        """Calculate the reciprocal lattice array from lattice parameters."""
-        recip = np.zeros((3, 3))
-        Lat = self.latticeParameter
-        a = Lat[0]; b = Lat[1]; c = Lat[2]
-        alpha = Lat[3]; beta = Lat[4]; gamma = Lat[5]
-        
-        rhomb = 0
-        if (self.sgNum in [146, 148, 155, 160, 161, 166, 167]):
-            rhomb = 1
-            
-        ca = cos(alpha * self.deg2rad)
-        cb = cos(beta * self.deg2rad)
-        cg = cos(gamma * self.deg2rad)
-        sg = sin(gamma * self.deg2rad)
-        phi = sqrt(1.0 - ca*ca - cb*cb - cg*cg + 2*ca*cb*cg)
-        Vc = a*b*c * phi
-        pv = (2*np.pi) / (Vc)
-        
-        if rhomb == 0:
-            a0 = a             ; a1 = 0.0               ; a2 = 0.0
-            b0 = b*cg          ; b1 = b*sg              ; b2 = 0
-            c0 = c*cb          ; c1 = c*(ca-cb*cg)/sg   ; c2 = c*phi/sg
-            a0 = self.zeroOut(a0); a1 = self.zeroOut(a1); a2 = self.zeroOut(a2)
-            b1 = self.zeroOut(b1); b2 = self.zeroOut(b2)
-            c2 = self.zeroOut(c2)
-        else:
-            p = sqrt(1.0 + 2*ca)
-            q = sqrt(1.0 - ca)
-            pmq = (a/3.0)*(p-q)
-            p2q = (a/3.0)*(p+2*q)
-            a0 = p2q; a1 = pmq; a2 = pmq
-            b0 = pmq; b1 = p2q; b2 = pmq
-            c0 = pmq; c1 = pmq; c2 = p2q
-            
-        recip[0][0] = self.zeroOut((b1*c2-b2*c1)*pv)
-        recip[1][0] = self.zeroOut((b2*c0-b0*c2)*pv)
-        recip[2][0] = self.zeroOut((b0*c1-b1*c0)*pv)
-        recip[0][1] = self.zeroOut((c1*a2-c2*a1)*pv)
-        recip[1][1] = self.zeroOut((c2*a0-c0*a2)*pv)
-        recip[2][1] = self.zeroOut((c0*a1-c1*a0)*pv)
-        recip[0][2] = self.zeroOut((a1*b2-a2*b1)*pv)
-        recip[1][2] = self.zeroOut((a2*b0-a0*b2)*pv)
-        recip[2][2] = self.zeroOut((a0*b1-a1*b0)*pv)
-        
-        return recip
+        """Reciprocal lattice B (columns a*, b*, c*, with the 2*pi).
+
+        The indexer's own construction, from laue_index.lattice: an R group
+        uses the rhombohedral embedding only when the lattice is GIVEN on
+        rhombohedral axes (before 0.8.0 hexagonal axes became a cube of edge a).
+        """
+        return _lattice.reciprocal_matrix(self.latticeParameter, self.sgNum)
 
     def _ALLOW_FC(self, h, k, l):
         """Face-centered, hkl must be all even or all odd."""
@@ -253,31 +224,28 @@ class LaueMatching:
             hklarr2 = hklarr[hklarr[:, 3].argsort()]
             np.savetxt(self.resultFileName, hklarr2, fmt="%d %d %d %d")
 
-            # Stamp provenance as a sidecar JSON alongside the CSV. We do NOT
-            # embed it as ``#``-prefixed header lines because the C indexer's
-            # ``sscanf("%d %d %d")`` would count comment lines as zero-HKLs,
-            # silently corrupting the run. Sidecar keeps the data file shape
-            # unchanged.
+            # Provenance: an artifact record beside the list
+            # (<file>.meta.json, laue_index.artifacts) with the FULL generating
+            # configuration under the params-file key names, so a run can
+            # compare it with the params file it uses. Not embedded as '#'
+            # header lines: the C reads the list with sscanf("%d %d %d") and
+            # would count comment lines as (0, 0, 0) reflections.
             try:
-                import laue_provenance as _lp
-                prov = _lp.collect(
-                    config={
-                        "space_group": self.sgNum,
-                        "symmetry": self.sym,
-                        "lattice_parameter": list(self.latticeParameter),
-                        "r_array": list(self.R.tolist()),
-                        "p_array": list(self.P.tolist()),
-                        "nr_px_x": self.Nx,
-                        "nr_px_y": self.Ny,
-                        "px_x_m": self.dx,
-                        "px_y_m": self.dy,
-                        "ehi": self.Ehi,
-                    },
-                    extra={"n_valid_hkls": int(hklarr2.shape[0])},
-                )
-                _lp.write_sidecar_json(self.resultFileName + ".provenance.json", prov)
+                _artifacts.write_record(self.resultFileName, "hkl_list", config={
+                    "SpaceGroup": int(self.sgNum),
+                    "Symmetry": self.sym,
+                    "LatticeParameter": [float(v) for v in self.latticeParameter],
+                    "R_Array": [float(v) for v in self.R.tolist()],
+                    "P_Array": [float(v) for v in self.P.tolist()],
+                    "NrPxX": int(self.Nx), "NrPxY": int(self.Ny),
+                    "PxX": float(self.dx), "PxY": float(self.dy),
+                    "Ehi": float(self.Ehi),
+                    "Elo": None if self.Elo is None else float(self.Elo),
+                }, layout={"columns": ["h", "k", "l", "sort_key"], "format": "%d %d %d %d",
+                           "rows": int(hklarr2.shape[0])},
+                   extra={"generator": "GenerateHKLs", "argv": list(sys.argv)})
             except Exception as prov_exc:  # never fail the run over provenance
-                print(f'Warning: could not write provenance sidecar: {prov_exc}')
+                print(f'Warning: could not write the provenance record: {prov_exc}')
 
             print(f'Results saved to: {self.resultFileName}')
 
@@ -434,7 +402,12 @@ def main():
     parser.add_argument('-Ehi', type=float, required=False, default=30,
                       help='Maximum beam energy [keV]. Controls how many HKLs fall inside the Ewald cutoff.')
 
-    args, unparsed = parser.parse_known_args()
+    parser.add_argument('-Elo', type=float, required=False, default=None,
+                      help='Minimum beam energy [keV]. Accepted for symmetry with Ehi and '
+                           'ignored: the indexer filters by Elo when it predicts spots.')
+    # parse_args, not parse_known_args: an unknown or mistyped flag is an error,
+    # never silently dropped.
+    args = parser.parse_args()
     
     # Create and run the LaueMatching instance
     laue = LaueMatching(args)
