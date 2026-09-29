@@ -11,7 +11,216 @@ value of `laue_index/pipeline/_version.py`, which older provenance records wrote
 0.7.2) records the package version and source/binary hashes instead.
 
 
-## laue-index 0.7.3 (unreleased)
+## laue-index 0.8.0 (2026-09-29)
+
+A correctness release from a full code read (2026-09-28). **Several items change
+indexing results; every existing forward cache is rebuilt once.**
+
+What that does, measured on 101 real frames of one hexagonal (hcp) sample with the CPU
+binary, on the same preprocessed input, 0.7.3 against this release (all provisional; one
+material, one station):
+
+- **NMatches >= 11 (well-supported crystals):** 0.7.3 returned duplicate rows of one grain
+  (30 duplicate rows in 267; none in 0.8.0, whose merge is now order-independent), so the
+  distinct crystals go 237 -> 245; 8 crystals of 0.7.3 have no counterpart within 1 deg and
+  11 are new.
+- **NMatches 8-10 (the MinNrSpots gate):** about 100 of roughly 220 marginal crystals change
+  under ANY change to the objective (pixel rounding, the new refit, or reverting either),
+  while a repeat run of one build is identical. No single change accounts for it. This band
+  carries no signal above the search null on this data: scrambled frames yield MORE solutions
+  than real ones (4.8-5.1 against 2.0-2.3 per frame, both builds), and the scrambled rate is
+  unchanged (0.8.0 / 0.7.3 = 0.93, 95 % CI 0.86-1.01). Treat solutions at the gate as noise
+  level in either version.
+- **Orientation error against independent synthetic truth** (two crystals per scene, spots
+  from the Python geometry, 200 scenes, zero strain): with spots where the C's own geometry
+  formula places them (the centre of pixel k), median error 0.0037 deg (0.8.0) against
+  0.0120 deg (0.7.3), recall 0.998 against 0.995. That is the convention of a LaueGo
+  geometry (LaueGo's pixel2XYZ / XYZ2pixel use the same `0.5*(N-1)` formula on zero-based
+  pixels, i.e. pixel k centred at k), so 0.7.3's truncation was inconsistent with the
+  geometry it was given. **The pixel change is convention dependent:** a geometry calibrated
+  with pixel k spanning [k, k+1) sees the sign flip (0.7.3 0.0015 deg, 0.8.0 0.0118 deg);
+  find out which convention a calibration used before trusting a change of this size (an
+  XMAS-derived geometry is assumed centre-at-k in `laue_index.xmas`, unverified). Not
+  measured: strained crystals (c/a), other materials, other stations.
+
+The earlier statement that the refinement floor improved from 0.012 to 0.002 deg came from a
+synthetic image that shared its pixel convention with the fit, and is withdrawn.
+
+Data-artifact provenance (all four kinds of data file):
+
+- **The orientation database, HKL lists, forward caches and backgrounds each
+  carry `<file>.meta.json`** (`laue_index.artifacts`, schema
+  `laue-artifact/1`): the FULL configuration that generated the file (e.g. the
+  orientation spacing; the HKL generator's lattice and detector; the forward
+  cache's key inputs and the params file's full text; a background's filter
+  and source frame), its inputs by hash, the producer, and the file's size and
+  hash. `docs/provenance.md`, invariant 51.
+- **Policy: a missing record warns, a record that disagrees refuses.** Runs
+  (RunImage, the streaming orchestrator, `laue_material`) check before the C
+  starts: an HKL list recorded for another space group / symmetry / lattice
+  refuses; one made for another detector or energy window warns. The C
+  refuses a forward cache recorded for another configuration ("refusing to
+  overwrite"; `DoFwd 1` rebuilds it deliberately) instead of rebuilding over
+  it, and writes the record when it publishes a cache. The plain-text
+  `<ForwardFile>.meta` introduced earlier in 0.8.0 is replaced (caches with
+  none are rebuilt once). Runs record every artifact they used under
+  `artifacts` in their provenance (lineage).
+- **`fetch-db` verifies the full SHA-256** of a release-sized download
+  (`351dc8e0...fd20`, identical on two independent copies) and refuses a
+  corrupt one; `GenerateOrientations` records its configuration.
+- **`laue-index provenance show|verify|stamp`**; **`laue-index doctor
+  --params FILE`** reports every data artifact a params file names.
+- GenerateHKLs writes `<hkl>.meta.json` (the `.provenance.json` it wrote
+  before is still read, but cannot vouch for the bytes and so warns).
+- GenerateSimulation: `R_Array 0 0 0` built a NaN detector rotation; it is
+  the identity, as in the C.
+
+C indexer (all three binaries):
+
+- **Pixel centres are rounded, not truncated.** Pixel k is centred at k (as in
+  GenerateSimulation, laue_torch and calibrate); every lookup used to read pixel
+  k for a spot at k + 0.7, a mean 0.5 px bias toward -x, -y, and the mains took
+  -1 < px < 0 as pixel 0. One helper, `pixelIndex`, everywhere. spots.txt X/Y
+  are now rounded. This matches a geometry calibrated with pixel k centred at k
+  (LaueGo, laue_torch, the C's own formula); a geometry calibrated with pixel k
+  spanning [k, k+1) sees the opposite sign (see the measured results above). No
+  switch back; use 0.7.3 if your calibration is in that convention.
+- **The forward cache carries a record, `<ForwardFile>.meta.json`** (format 2 + a
+  key over lattice, space group, P/R, pixel size, panel, Elo/Ehi, MaxNrLaueSpots,
+  orientation count and HKL list; schema in the provenance bullets below). A cache
+  with no record is rebuilt with a warning; a record for another configuration
+  REFUSES the run instead of being overwritten (`DoFwd 1` rebuilds on purpose), so
+  a right-sized cache from another geometry is no longer reused (RUNBOOK open
+  item 10, closed).
+- **Symmetry tables corrected.** OrtSym[1] was {1,1,0,0} (a 90 deg turn about x;
+  SG 16-74); MonoSym's 2-fold was about x, not b (y; SG 3-15); TrigSym put the
+  basal 2-folds perpendicular to a for every trigonal group, right only for
+  -31m. Tables are now in the indexer's frame (a along x) and chosen per group.
+  Changes duplicate merging and reported misorientation for those groups only.
+- **Rhombohedral setting follows the lattice given.** SG 146/148/155/160/161/166/
+  167 on hexagonal axes used to build a cube of edge a (c ignored); the
+  rhombohedral embedding is now used only for rhombohedral axes, and anything
+  else is FATAL (`validateTrigonalSetting`).
+- **Duplicate merge is deterministic.** Candidates are sorted by (score desc,
+  row asc) on every path before the greedy merge; GPU arrival order and CPU row
+  order no longer change the clusters, and each cluster is seeded by its
+  strongest candidate. The GPU coarse score and MinIntensity gate are computed
+  in double, as on the CPU.
+- **Refinement parametrisation.** FitOrientation refines a rotation vector about
+  the seed (|d_i| <= 3 deg) instead of the ZXZ Euler angles, whose box could not
+  reach corrections near Phi = 0 or 180 deg. Every fit path changes slightly.
+  The ENVELOPE orientation floor (0.0041 deg) was measured before this.
+- **spots.txt lists only grains in solutions.txt** (spot lines were written
+  before the MinNrSpots gate).
+- **The streaming daemon gates fits on MinNrSpots**, as CPU and GPU do (it used
+  MinGoodSpots, now a post-processing key only), honours OrientationSpacing and
+  CoarseFitSigma (it hard-coded a 0.4 deg grid), always writes the ImageNr
+  column (image 0 lost it), and flushes its per-image reports.
+- **Required keys:** LatticeParameter, P_Array, R_Array, PxX, PxY, NrPxX, NrPxY,
+  MaxNrLaueSpots, MinIntensity are FATAL when absent, named in one message
+  (their defaults differed between the C and the Python pipeline). Parameter
+  keys match on the whole first token (a prefix match before). The coarse-score
+  column is named `CoarseIntensity*sqrt(NMatches)`, which is what it holds.
+
+Python pipeline:
+
+- **`laue_index.lattice`** is the one Python copy of `calcRecipArray` /
+  `MakeSymmetries`; GenerateHKLs, GenerateSimulation, calibrate (new
+  `space_group=`) and `pipeline/analysis/laue_material` delegate to it.
+  laue_material's operators and misorientation are conjugated into the
+  indexer's frame: for trigonal groups a symmetry-equivalent pair used to read
+  as misoriented.
+- **Required config keys (D5).** 13 keys whose defaults disagreed between
+  RunImage, streaming and the C are refused when absent
+  (`config_schema.REQUIRED_KEYS`); all other defaults come from the schema.
+  To reproduce a 0.7.3 run, write the old path's default into the file (see
+  `config_schema.py` for the list). RunImage's simulation and visualization now
+  default OFF (`EnableSimulation 1`, `EnableVisualization 1` for the old).
+- **Templates set `RobustFilter 1`**: streaming runs from them keep Sigma-3
+  twins (`RobustFilter 0` for the legacy filter).
+- **Streaming post-processing:** `/entry/data` is written again (a keyword typo
+  dropped it), re-preprocessed with the image server's own background and
+  exclusion; every mapped frame gets an output.h5 (stubs carry `skip_reason`);
+  the orchestrator waits for the daemon to report every sent frame before
+  stopping it (`--drain-stall`, default 600 s); ResultDir is resolved as the
+  daemon resolves it (a params file without the line waited an hour and
+  exited 1); relative ForwardFile/BackgroundFile are checked where the daemon
+  looks. mkrun refuses a shard over 65,535 frames; preflight refuses a relative
+  BackgroundFile.
+- **RunImage** applies ExcludeSpotsFile/Dir, exits non-zero when any image
+  fails, embeds the indexer logs, and accepts both threshold flags.
+- **Preprocessing keeps float32** (a uint16 cast wrapped counts above 65535 and
+  zeroed fractions); `GaussianFactor` is honoured.
+- **Worker memory model re-measured on a real pool worker** (Linux; raw frame,
+  pickled background and result included; steady state, no leak over 400
+  tasks): the guard is now 64 B/px + 53 MB per worker, above every measured
+  point (296-313 MB at 2048^2; slopes ~55-68 B/px across runs). The old
+  44.19 B/px + 21.8 MB said 207 MB. Hosts start fewer preprocessing workers;
+  `LAUE_PREPROCESS_WORKERS` still overrides.
+- **GenerateSimulation** reads `SimulationSmoothingWidth 2.0` (the templates'
+  value made every simulation step exit 1), allocates (NrPxY, NrPxX), and
+  checks the Symmetry letter; GenerateHKLs refuses unknown flags and accepts
+  `-Elo`.
+
+Analysis chain (`pipeline/analysis`):
+
+- **Gates default to a search-matched null** (invariant 29):
+  `scramble_frames.py` + `search_null.py` run the same indexer and validator
+  on spot-scrambled frames. `LAUE_NULL_KIND=draw` restores the per-draw null.
+  The search null needs the indexer, orientation DB and forward cache on the
+  analysis host.
+- **Spatial statistics use a toroidal-shift null** (invariant 10) in
+  substrate_deposit, optical_overlay, reg_refine, big_grain_split_test and
+  separate_layers; variant_coherence permutes variants across alpha clusters;
+  the exclusion census combines under the matched exclusion null
+  (`LAUE_CENSUS_P=analytic` for the old Fisher counts); backfills report a
+  measured false count. Each null has a calibration test on a known null.
+- **One clustering tolerance** (`LAUE_CLUSTER_TOL`, default 1.0; 0.7 or 1.5
+  reproduces the old per-script cuts); "positions" now count distinct
+  positions, not instances; non-square panels handled; anchor_null reads this
+  scan's anchors; the chain no longer crashes when no parent is found or when
+  `LAUE_SKIP_CLUSTER=1` left labels unset.
+- **column_content** (`pipeline/analysis/column_content`): the energy band
+  follows the params Elo/Ehi (it was fixed at 5-30 keV; `Geom(e_range=(5, 30))`
+  for the old); axis-aligned arcs of 81 px or more that are not near
+  saturation get fit windows, count in the unexplained total and appear in
+  `extract_arcs` (they were removed as blooming); residual frames show the
+  background on saturated pixels, so discovery no longer re-finds a known
+  crystal there; `report()` uses the fit's `sat_level`; misorientation
+  functions passed to `run`/`evaluate` must return degrees (checked); the
+  evaluation records the discovery gate again (a key typo dropped it).
+
+## laue-torch 0.1.5 (2026-09-29)
+
+- `reciprocal_matrix(..., sg_num=)` and the refiners handle the rhombohedral
+  setting as the C does; symmetry helpers (`misorientation_deg`,
+  `symmetry_operators`, `nearest_variant`) work in laue_torch's frame (a along
+  x) and take `lattice=`; trigonal pairs used to read 60 deg apart.
+- VoxelODFRefiner fits a*render + b (closed form) with harmonics de-duplicated;
+  its sigma_U no longer depends on the data's scale.
+- VoxelODFRefiner: a warning (and `VoxelODFResult.orient_cov`) for the spread
+  about a reflection's own normal, which the image does not constrain; the fit
+  then follows its start (0.3 deg truth read 1.07 deg from a 0.6 deg start on a
+  one-reflection frame). The old advice to start "a few times larger than the
+  truth" produced exactly that bias and is withdrawn.
+- Depth posterior sigmas were sqrt(N/2) too large and ridge-limited in z.
+- Energy band: a defaulted band raises in every refiner and validator, and
+  `write_lauematching_config` refuses one.
+- Nye: `lattice_curvature` (the old quantity), `nye_alpha`, min-norm
+  `slip_system_gnd`; `plot_gnd_map` units fixed (values were ~1e6 too small).
+- Coded aperture: rays with t <= 0 are not attenuated; smooth rotvec gradient
+  at 0; a refiner no longer mutates a shared mask. The strain fixture's mask
+  now sits between sample and panel (it sat downstream along the beam, where
+  rays to the panel never crossed it).
+- Pseudo-Voigt window 6 sigma with a tail taper (centroid bias 0.07 -> < 1e-3 px).
+- CLI `-axisOrder {XY,YX}`; geoN unit and frame-shape checks.
+
+## laue-jax 0.1.2 (2026-09-29)
+
+- `rodrigues_to_matrix` gradient at 0 was NaN; `reciprocal_matrix(sg_num=)`
+  matches laue_torch; tests collect from `packages/`.
+
+## laue-index 0.7.3 (2026-09-22)
 
 - **Run-level provenance records the filter a streaming run actually applies.** The
   orchestrator stamps `provenance.json` from `ConfigurationManager`, which fills an absent
