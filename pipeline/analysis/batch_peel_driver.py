@@ -44,9 +44,8 @@ ST = open(f"{WORK}/batch_peel_status.txt", "w", buffering=1)
 def log(m): ST.write(m + "\n"); print(m, flush=True)
 
 from laue_material import Phase
-from frame_peaks import image_number, orientation_block
+from frame_peaks import image_number, mask_disks, orientation_block
 _ph = Phase.load(PHASE, BASE_PARAMS)
-nPx = _ph.npx_x
 log(f"[peel] {_ph}")
 
 def project(OM):
@@ -140,19 +139,14 @@ for p_i in range(1, MAX_PASS+1):
     t1 = time.time()
     nxt = f"{WORK}/peel_map/pass{p_i+1}"
     shutil.rmtree(nxt, ignore_errors=True); os.makedirs(nxt)
-    yy, xx = np.mgrid[-MASK_R:MASK_R+1, -MASK_R:MASK_R+1]
-    disk = (xx*xx + yy*yy) <= MASK_R*MASK_R
     for fn in frames:
         src = f"{DATA}/{fn}"
         with h5py.File(src, "r") as f:
             img = f[H5LOC][()]
         med = np.median(img)
         if accepted[fn]:
-            for x, y in np.vstack([project(OM) for OM in accepted[fn]]):
-                xi, yi = int(round(x)), int(round(y))
-                x0, x1 = max(0, xi-MASK_R), min(nPx, xi+MASK_R+1)
-                y0, y1 = max(0, yi-MASK_R), min(nPx, yi+MASK_R+1)
-                img[y0:y1, x0:x1][disk[(y0-yi+MASK_R):(y1-yi+MASK_R), (x0-xi+MASK_R):(x1-xi+MASK_R)]] = med
+            # both detector dimensions (this clipped y with the x size)
+            mask_disks(img, np.vstack([project(OM) for OM in accepted[fn]]), MASK_R, med)
         with h5py.File(f"{nxt}/{fn}", "w") as f:
             f.create_dataset(H5LOC, data=img)
     log(f"pass {p_i}: residuals written in {time.time()-t1:.0f}s")

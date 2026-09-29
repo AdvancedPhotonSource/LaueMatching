@@ -24,7 +24,8 @@ WORK = os.environ.get("LAUE_WORK") or sys.exit("LAUE_WORK is not set (peel_map/ 
 DATA = os.environ.get("LAUE_SCAN_DATA") or sys.exit("LAUE_SCAN_DATA is not set (folder of the raw frames)")
 H5LOC="/entry1/data/data"; TOL=8.0; PGATE=1e-5
 from laue_material import Phase, phase_name
-from frame_peaks import detect_peaks, count_matched_peaks, analytic_gate_note
+from frame_peaks import (detect_peaks, count_matched_peaks, analytic_gate_note, poisson_lambda,
+                         control_orientations, presence_p)
 # The master list is verified_clusters.npz from map_validate_cluster.py, whose
 # phase is LAUE_PHASE; project with the same phase.
 _PH = Phase.load(phase_name())
@@ -41,6 +42,8 @@ reps=np.array([oms[np.where(labels==k)[0][0]] for k in range(ngr)])
 # precompute each grain's predicted pattern ONCE
 PRED=[project(R) for R in reps]
 npred=np.array([len(p) for p in PRED])
+# one randomly rotated CONTROL per master grain -> MEASURED false-backfill count
+CTRL=[project(R) for R in control_orientations(reps, seed=12345)] if ngr else []
 print(f"master grains: {ngr}; mean predicted spots {npred.mean():.0f}",flush=True)
 
 uniq_fr=sorted(set(frames))
@@ -58,28 +61,25 @@ def scan_frame(fn):
     # shared detector (frame_peaks). BEHAVIOUR CHANGE: replaces the full-frame
     # median_filter(25) background with the detector the validators and null use.
     xs,ys,_=detect_peaks(raw)
-    present=np.zeros(ngr,bool)
+    present=np.zeros(ngr,bool); ctrl=np.zeros(ngr,bool)
     if len(xs)>=5:
         tree=cKDTree(np.c_[xs,ys]); npeaks=len(xs)
         for g in range(ngr):
-            pr=PRED[g]
-            if not len(pr): continue
             # presence gate on nhit (predicted reflections on a peak) -- the
             # statistic the analytic Poisson lambda describes
-            _,h=count_matched_peaks(tree,pr,TOL)
-            lam=len(pr)*npeaks*pi*TOL*TOL/(NPX*NPX)
-            if poisson.sf(h-1,lam)<PGATE: present[g]=True
-    return fn,X,Z,present
+            present[g]=presence_p(tree,npeaks,PRED[g],TOL,_PH.npx_x,_PH.npx_y)<PGATE
+            ctrl[g]=presence_p(tree,npeaks,CTRL[g],TOL,_PH.npx_x,_PH.npx_y)<PGATE
+    return fn,X,Z,present,ctrl
 
 # Everything below drives the process pool. Guarded so the script also runs under
 # the "spawn" start method (macOS default), where each worker re-imports this
 # module: the workers need only the definitions above.
 if __name__ == "__main__":
     analytic_gate_note("grain_extent_backfill")
-    fr_pos={}; PRESENT={}
+    fr_pos={}; PRESENT={}; n_ctrl=0
     with ProcessPoolExecutor(max_workers=32) as ex:
-        for fn,X,Z,present in ex.map(scan_frame, uniq_fr):
-            fr_pos[fn]=(X,Z); PRESENT[fn]=present
+        for fn,X,Z,present,ctrl in ex.map(scan_frame, uniq_fr):
+            fr_pos[fn]=(X,Z); PRESENT[fn]=present; n_ctrl+=int(ctrl.sum())
     print("scan complete",flush=True)
 
     # extent per grain = UNION of original confirmed detections (p<1e-4) and
@@ -102,7 +102,9 @@ if __name__ == "__main__":
     print(f"grains now spanning >=2 positions: {(extn>=2).sum()} (was {(orign>=2).sum()}); "
           f">=5: {(extn>=5).sum()}; >=10: {(extn>=10).sum()}; max extent {extn.max()}",flush=True)
     exp_fp=ngr*len(uniq_fr)*PGATE
-    print(f"multiple-testing control: {ngr}x{len(uniq_fr)} tests at p<{PGATE:g} -> ~{exp_fp:.0f} expected false backfills",flush=True)
+    print(f"multiple-testing control: {ngr}x{len(uniq_fr)} tests at p<{PGATE:g}: MEASURED false "
+          f"backfills (randomly rotated control per grain) {n_ctrl}; the analytic ~{exp_fp:.1f} "
+          f"assumes unclustered peaks and is a lower bound",flush=True)
 
     # ---- grain-extent (shape) map: a readable, spatially-diverse selection ------
     fig,ax=plt.subplots(figsize=(12,9.5))
@@ -136,5 +138,6 @@ if __name__ == "__main__":
     np.savez(f"{WORK}/peel_map/grain_extent.npz",
              extn=extn, orign=orign, added=added, reps=reps,
              ext=np.array(ext,dtype=object), fr_pos=np.array([fr_pos[f] for f in uniq_fr]),
-             frames=np.array(uniq_fr))
+             frames=np.array(uniq_fr), n_control_present=n_ctrl,
+             n_tests=ngr*len(uniq_fr), pgate=PGATE)
     print("saved grain_extent.npz",flush=True)

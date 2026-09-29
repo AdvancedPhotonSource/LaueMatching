@@ -71,7 +71,8 @@ if not DATA or not os.path.isdir(DATA):
 if not RESDIR or not os.path.isdir(RESDIR):
     sys.exit(f"indexing-run folder {RESDIR!r} does not exist -- set LAUE_SCAN_{PHASE.upper()}")
 # Lattice / reflection list / geometry from the params file the indexer used.
-from frame_peaks import detect_peaks, count_matched_peaks, analytic_gate_note, image_number, orientation_block
+from frame_peaks import (detect_peaks, count_matched_peaks, analytic_gate_note, image_number,
+                         orientation_block, poisson_lambda, cluster_tol)
 from laue_material import Phase
 _ph=Phase.load(PHASE); B=_ph.B; HKL=_ph.hkls; NPX=_ph.npx_x
 print(f"[{PHASE}] scan={SCAN} resdir={RESDIR}",flush=True)
@@ -120,7 +121,7 @@ def validate(h5):
             #          are carried so a gate on either has a null measured the
             #          same way. See frame_peaks.count_matched_peaks.
             h_dist, h = count_matched_peaks(tree, pr, TOL)
-            lam=len(pr)*npeaks*pi*TOL*TOL/(NPX*NPX)
+            lam=poisson_lambda(len(pr),npeaks,TOL,_ph.npx_x,_ph.npx_y)
             if poisson.sf(h-1,lam)<1e-4:
                 out.append((OM,fn,X,Z,h,h_dist))
     return out, None, True
@@ -168,8 +169,9 @@ if __name__ == "__main__":
     # pre-cluster file and cluster separately with cluster_orientations.py, which is
     # KD-tree based; the label column is then filled in there.
     if os.environ.get("LAUE_SKIP_CLUSTER") == "1":
-        print(f"[{PHASE}] LAUE_SKIP_CLUSTER=1 -> leaving labels unset; "
-              f"run cluster_orientations.py on {RES}_validated.npz",flush=True)
+        print(f"[{PHASE}] LAUE_SKIP_CLUSTER=1 -> leaving labels unset (-1); cluster and write "
+              f"back in place: cluster_orientations.py {RES}_validated.npz {RES}_validated.npz "
+              f"<tol_deg> {PHASE}. Every downstream step refuses -1 labels.",flush=True)
         sys.exit(0)
     if len(oms_v) > 50000:
         print(f"[{PHASE}] WARNING: {len(oms_v)} instances is beyond what this greedy "
@@ -178,13 +180,15 @@ if __name__ == "__main__":
     OPS=_ph.sym_ops
     def miso_min(A,Bs):
         return _ph.misorientation(A,Bs)
+    TOLC=cluster_tol()      # LAUE_CLUSTER_TOL, default 1.0 deg; recorded in the npz
     labels=np.full(len(oms_v),-1); cid=0
     for i in range(len(oms_v)):
         if labels[i]>=0: continue
-        un=np.where(labels<0)[0]; d=miso_min(oms_v[i],oms_v[un]); labels[un[d<1.0]]=cid; cid+=1
+        un=np.where(labels<0)[0]; d=miso_min(oms_v[i],oms_v[un]); labels[un[d<TOLC]]=cid; cid+=1
     counts=np.bincount(labels) if len(oms_v) else np.array([])
-    print(f"[{PHASE}] clusters (<1.0 deg): {cid}; top sizes {sorted(counts,reverse=True)[:12]}",flush=True)
+    print(f"[{PHASE}] clusters (<{TOLC:g} deg): {cid}; top sizes {sorted(counts,reverse=True)[:12]}",flush=True)
     np.savez(f"{WORK}/peel_map/{RES}_validated.npz",
              oms=oms_v, frames=np.array(fr_v), X=np.array(X_v), Z=np.array(Z_v),
-             nhit=np.array(nh_v), nhit_distinct=np.array(nd_v), labels=labels)
+             nhit=np.array(nh_v), nhit_distinct=np.array(nd_v), labels=labels,
+             cluster_tol=np.float64(TOLC))
     print(f"[{PHASE}] saved {RES}_validated.npz",flush=True)

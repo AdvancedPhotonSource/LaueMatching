@@ -18,7 +18,7 @@ import sys
 import numpy as np
 from scipy import ndimage as ndi
 
-from frame_peaks import GATE_STATS, gate_statistic, null_json_path
+from frame_peaks import GATE_STATS, gate_statistic, null_json_path, select_null
 from raster import connectivity, structure
 
 W = os.environ.get("LAUE_WORK") or sys.exit("LAUE_WORK is not set (scans are read from $LAUE_WORK/analysis/*/)")
@@ -43,10 +43,12 @@ def scan_null(d, pref, txt, ph):
     jp = null_json_path(d, pref)
     if os.path.isfile(jp):
         with open(jp) as fh:
-            rec = (json.load(fh).get("phases", {}).get(ph) or {}).get(STAT)
+            ent = json.load(fh).get("phases", {}).get(ph) or {}
+        # the search null when measured, else the per-draw one (LAUE_NULL_KIND forces)
+        rec, _, kind = select_null(ent, STAT, jp, ph)
         if rec:
             return {"mean": rec.get("mean"), "p999": rec.get("p999"), "max": rec.get("max"),
-                    "statistic": STAT, "source": "null.json"}
+                    "statistic": STAT, "kind": kind, "source": "null.json"}
     if STAT != "nhit":
         return {"mean": None, "p999": None, "max": None, "statistic": STAT,
                 "source": "none (no null.json; the log's null line is nhit)"}

@@ -323,3 +323,144 @@ def winner_per_position(row, col, primary, secondary=None, tiebreak=None) -> dic
     r, c = row[order], col[order]
     first = np.r_[True, (r[1:] != r[:-1]) | (c[1:] != c[:-1])]
     return {(int(a), int(b)): int(i) for a, b, i in zip(r[first], c[first], order[first])}
+
+
+# ---------------------------------------------------------------------------
+# instances are not positions
+# ---------------------------------------------------------------------------
+def positions_per_label(labels, a, b):
+    """Distinct beam POSITIONS each cluster label occupies, ``(labels.max()+1,)``.
+
+    ``a, b`` are the two position coordinates of every instance -- integer
+    ``(row, col)`` or stage ``(X, Z)`` (rounded to 1e-4 um). ``np.bincount(labels)``
+    counts INSTANCES: two orientations of one grain indexed at the same position
+    are two instances and ONE position. Five scripts printed the instance count
+    as "positions" (empirical_gate's ">=5 positions" tier, the recurrence spectra
+    of validated_figures and catalog_figures, substrate_deposit's footprints).
+    Labels < 0 are ignored.
+    """
+    labels = np.asarray(labels, int)
+    ok = labels >= 0
+    n = int(labels[ok].max()) + 1 if ok.any() else 0
+    if not n:
+        return np.zeros(0, int)
+    key = np.stack([labels[ok], np.round(np.asarray(a, float)[ok], 4) * 1e4,
+                    np.round(np.asarray(b, float)[ok], 4) * 1e4], axis=1)
+    uniq = np.unique(key, axis=0)
+    return np.bincount(uniq[:, 0].astype(int), minlength=n)
+
+
+# ---------------------------------------------------------------------------
+# spatial null for map statistics (invariant 10)
+# ---------------------------------------------------------------------------
+def nan_corr(a, b):
+    """Pearson r over the entries where BOTH ``a`` and ``b`` are finite (nan if < 3)."""
+    a = np.asarray(a, float).ravel(); b = np.asarray(b, float).ravel()
+    ok = np.isfinite(a) & np.isfinite(b)
+    if ok.sum() < 3:
+        return np.nan
+    x = a[ok] - a[ok].mean(); y = b[ok] - b[ok].mean()
+    d = np.sqrt((x @ x) * (y @ y))
+    return float(x @ y / d) if d > 0 else np.nan
+
+
+def toroidal_shift_null(stat, field, n=500, rng=None, min_shift=0, alternative="two-sided"):
+    """Spatial null for a statistic of one map against fixed others (invariant 10).
+
+    ``stat(f)`` returns a float computed from a 2-D map ``f`` (with whatever fixed
+    maps it closes over); it must be NaN-aware, because the shift moves NaNs
+    (missing positions) with the data. The observed value is ``stat(field)``; the
+    null is ``stat(np.roll(field, (dy, dx)))`` for ``n`` random toroidal shifts,
+    which keeps the field's own autocorrelation and missing-data pattern while
+    breaking its registration to the other maps. A plain permutation destroys the
+    autocorrelation and under-states the spread by orders of magnitude on these
+    maps (Zn/Zn: effective n ~70, not 40,357).
+
+    ``min_shift`` excludes shifts with BOTH |dy| and |dx| below it (0 excludes only
+    the identity). Null values that are NaN (too little overlap) are dropped.
+
+    Returns ``{"obs", "null" (array), "p", "n"}``; ``p`` is
+    ``(1 + #{null as or more extreme}) / (1 + n)``, two-sided on |value| by
+    default, or ``"greater"`` / ``"less"``.
+    """
+    field = np.asarray(field, float)
+    H, W = field.shape
+    rng = np.random.default_rng(rng)
+    obs = float(stat(field))
+    vals = []
+    tries = 0
+    while len(vals) < n and tries < 20 * n:
+        tries += 1
+        dy, dx = int(rng.integers(H)), int(rng.integers(W))
+        sy, sx = min(dy, H - dy), min(dx, W - dx)
+        if (sy == 0 and sx == 0) or (sy < min_shift and sx < min_shift):
+            continue
+        v = float(stat(np.roll(field, (dy, dx), axis=(0, 1))))
+        if np.isfinite(v):
+            vals.append(v)
+    null = np.asarray(vals)
+    if not len(null) or not np.isfinite(obs):
+        return {"obs": obs, "null": null, "p": np.nan, "n": int(len(null))}
+    if alternative == "greater":
+        k = (null >= obs).sum()
+    elif alternative == "less":
+        k = (null <= obs).sum()
+    else:
+        k = (np.abs(null) >= abs(obs)).sum()
+    return {"obs": obs, "null": null, "p": float((k + 1) / (len(null) + 1)), "n": int(len(null))}
+
+
+# ---------------------------------------------------------------------------
+# label maps: majority per position, neighbour agreement, cluster-level null
+# ---------------------------------------------------------------------------
+def neighbour_offsets():
+    """Pair offsets for :func:`connectivity`: 2 edge offsets, plus 2 diagonals for 8."""
+    return ((0, 1), (1, 0)) + (((1, 1), (1, -1)) if connectivity() == 8 else ())
+
+
+def majority_map(values, gi, gj, shape, nclass):
+    """Per-position majority of the non-negative integer ``values`` (-1 where none)."""
+    values = np.asarray(values, int)
+    ok = values >= 0
+    votes = np.zeros(tuple(shape) + (nclass,), int)
+    np.add.at(votes, (np.asarray(gi)[ok], np.asarray(gj)[ok], values[ok]), 1)
+    tot = votes.sum(axis=2)
+    return np.where(tot > 0, votes.argmax(axis=2), -1)
+
+
+def neighbour_agreement(maj, offsets):
+    """``(fraction, n_pairs)``: neighbouring labelled positions sharing a label."""
+    nz, nx = maj.shape
+    same = n = 0
+    for di, dj in offsets:
+        j0, j1 = (0, nx - dj) if dj >= 0 else (-dj, nx)
+        a, b = maj[:nz - di, j0:j1], maj[di:, j0 + dj:j1 + dj]
+        v = (a >= 0) & (b >= 0)
+        same += int(((a == b) & v).sum()); n += int(v.sum())
+    return same / max(n, 1), n
+
+
+def permute_cluster_labels(values, clusters, rng):
+    """Permute the label carried by each CLUSTER across clusters.
+
+    Every instance of a cluster carries its cluster's label (e.g. the Burgers
+    variant assigned to an alpha orientation cluster), so a cluster's footprint
+    is contiguous whatever label it has. The null that keeps that -- footprints
+    fixed, labels reassigned among clusters -- is the one a spatial-coherence
+    statistic must beat. Shuffling labels across POSITIONS instead breaks every
+    footprint and makes any contiguous clustering look "coherent" (invariant 10).
+    Instances with ``values < 0`` or ``clusters < 0`` keep their value.
+    """
+    values = np.asarray(values, int); clusters = np.asarray(clusters, int)
+    out = values.copy()
+    m = (values >= 0) & (clusters >= 0)
+    if not m.any():
+        return out
+    cl = np.unique(clusters[m])
+    lab_of = np.full(clusters.max() + 1, -1)
+    for c in cl:                                   # the (common) label of each cluster
+        lab_of[c] = np.bincount(values[m & (clusters == c)]).argmax()
+    perm = lab_of.copy()
+    perm[cl] = rng.permutation(lab_of[cl])
+    out[m] = perm[clusters[m]]
+    return out

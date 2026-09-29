@@ -10,6 +10,16 @@ step, um) and the measured registration LAUE_OPTICAL_CX/_CY/_PX_PER_UM/_FLIP_Y
 the measured registration: centre +-10 px in 4 px steps, scale +-2 steps of 1/15 of
 the measured value, rotation +-12 deg (for 0.6 px/um this is the original grid). The grain footprint takes one orientation
 per position, top-ranked by distinct peaks matched (raster.winner_per_position).
+The clustered npz is peel_map/<LAUE_OUT_PREFIX>_*_clustered.npz (or LAUE_CLUSTERED_NPZ);
+it used to be one campaign's hard-coded file name.
+
+THE BEST OF 1,260 REGISTRATIONS NEEDS A NULL. The best correlation over the grid is a
+maximum over many tries on autocorrelated maps; before 2026-09 it was reported bare.
+Its null (invariant 10): toroidally shift the footprint map and redo the WHOLE grid
+search, LAUE_NULL_REPS times (default 200); p(best) is the fraction of shifted maps
+whose best-of-grid is at least as negative. The measured registration's single
+correlation gets the same shift null. On a known-null synthetic a naive Pearson test
+of the best-of-grid value flagged 76% at p < 0.05; this null 5%.
 """
 import os
 import sys
@@ -18,8 +28,10 @@ import numpy as np
 from PIL import Image
 from scipy import ndimage as ndi
 
-from raster import (optical_registration, raster_positions, raster_shape, ranking_counts,
-                    step_um, winner_per_position)
+from raster import (optical_registration, positions_per_label, raster_positions,
+                    raster_shape, ranking_counts, step_um, toroidal_shift_null,
+                    winner_per_position)
+from frame_peaks import clustered_npz
 
 W = os.environ.get("LAUE_WORK")
 if not W:
@@ -42,10 +54,11 @@ thr = ctr[band][np.argmin(ndi.gaussian_filter1d(h.astype(float), 3)[band])]
 black = (lum_s < thr).astype(float)
 
 # grain footprint map
-z = np.load(f"{W}/peel_map/full_zn_clustered.npz", allow_pickle=True)
+z = np.load(clustered_npz(W), allow_pickle=True)
 lab, fr = z["labels"], z["frames"]
 gr, gc = raster_positions(fr, Z=z["Z"] if "Z" in z.files else None, shape=(NROWS, NR))
-cnt = np.bincount(lab); foot = np.full((NROWS, NR), np.nan)
+cnt = positions_per_label(lab, gr, gc)       # footprint in POSITIONS, not instances
+foot = np.full((NROWS, NR), np.nan)
 prim, sec, _ = ranking_counts(z)
 best = winner_per_position(gr, gc, prim, sec, tiebreak=z["oms"].reshape(len(lab), -1))
 for (rr, cc2), i in best.items():
@@ -57,7 +70,8 @@ rr, cc = np.meshgrid(np.arange(NROWS), np.arange(NR), indexing="ij")   # rr=45de
 Xum = (cc - (NR - 1) / 2) * STEP; Yum = (rr - (NROWS - 1) / 2) * STEP
 
 
-def corr_at(cx, cy, ppu, rot_deg, flipy=FLIP_Y):
+def black_at(cx, cy, ppu, rot_deg, flipy=FLIP_Y):
+    """The registered optical deposit mask on the scan grid, for one registration."""
     th = np.radians(rot_deg)
     xr = Xum * np.cos(th) - Yum * np.sin(th)
     yr = Xum * np.sin(th) + Yum * np.cos(th)
@@ -65,26 +79,51 @@ def corr_at(cx, cy, ppu, rot_deg, flipy=FLIP_Y):
     py = cy + flipy * yr * ppu
     pxi = np.clip(np.round(px).astype(int), 0, im.shape[1] - 1)
     pyi = np.clip(np.round(py).astype(int), 0, im.shape[0] - 1)
-    bl = black[pyi, pxi]
-    a, b = lf[okmap], bl[okmap]
-    a = a - a.mean(); b = b - b.mean()
-    d = np.sqrt((a @ a) * (b @ b))
-    return float(a @ b / d) if d > 0 else 0.0
+    return black[pyi, pxi]
 
 
-base = corr_at(CX0, CY0, PPU0, 0)
+GRID = [(CX0, CY0, PPU0, 0)] + [
+    (cx, cy, ppu, rot)
+    for cx in CX0 + np.arange(-10, 11, 4)
+    for cy in CY0 + np.arange(-10, 11, 4)
+    for ppu in PPU0 * (1 + np.arange(-2, 3) / 15)
+    for rot in (-12, -8, -4, 0, 4, 8, 12)]
+# every registration's mask, once (bool, (n_grid, NROWS*NR))
+BL = np.stack([black_at(*g).ravel() > 0.5 for g in GRID])
+
+
+def grid_corrs(f):
+    """corr(f, mask_k) for every registration k, over the finite entries of f."""
+    v = np.asarray(f, float).ravel()
+    ok = np.isfinite(v)
+    if ok.sum() < 3:
+        return np.full(len(GRID), np.nan)
+    a = v[ok] - v[ok].mean()
+    B = BL[:, ok].astype(float)
+    B -= B.mean(axis=1, keepdims=True)
+    d = np.sqrt((a @ a) * (B * B).sum(axis=1))
+    with np.errstate(invalid="ignore", divide="ignore"):
+        return np.where(d > 0, (B @ a) / d, 0.0)
+
+
+rs = grid_corrs(lf)
+base = float(rs[0])
+k = int(np.nanargmin(rs))                    # most negative = best agreement
+best_r = (float(rs[k]),) + tuple(float(x) for x in GRID[k])
 print(f"measured registration: corr(log footprint, black) = {base:+.3f}")
-best_r = (base, CX0, CY0, PPU0, 0)
-for cx in CX0 + np.arange(-10, 11, 4):
-    for cy in CY0 + np.arange(-10, 11, 4):
-        for ppu in PPU0 * (1 + np.arange(-2, 3) / 15):
-            for rot in (-12, -8, -4, 0, 4, 8, 12):
-                r = corr_at(cx, cy, ppu, rot)
-                if r < best_r[0]:                    # most negative = best agreement
-                    best_r = (r, cx, cy, ppu, rot)
-print(f"best in scan: corr = {best_r[0]:+.3f} at cx={best_r[1]} cy={best_r[2]} "
-      f"px/um={best_r[3]} rot={best_r[4]} deg")
+print(f"best in scan ({len(GRID)} registrations): corr = {best_r[0]:+.3f} at cx={best_r[1]} "
+      f"cy={best_r[2]} px/um={best_r[3]} rot={best_r[4]} deg")
+NREPS = int(os.environ.get("LAUE_NULL_REPS", "200"))
+t_base = toroidal_shift_null(lambda f: float(grid_corrs(f)[0]), lf, n=NREPS, rng=0,
+                             alternative="less")
+t_best = toroidal_shift_null(lambda f: float(np.nanmin(grid_corrs(f))), lf, n=NREPS, rng=1,
+                             alternative="less")
+print(f"  spatial null (footprint map toroidally shifted, {t_best['n']} shifts, whole grid "
+      f"re-searched each time): p(measured) = {t_base['p']:.4g}, p(best of grid) = "
+      f"{t_best['p']:.4g}")
 print(f"  (measured {base:+.3f} vs best {best_r[0]:+.3f}: "
-      f"{'measured already near-optimal' if abs(best_r[0]-base)<0.06 else 'refinement helps'})")
-np.savez(f"{W}/analysis_out/reg_refine.npz", base=base, best=np.array(best_r))
+      f"{'measured already near-optimal' if abs(best_r[0]-base)<0.06 else 'refinement helps'}"
+      f"; the best-of-grid value is only evidence if p(best of grid) is small)")
+np.savez(f"{W}/analysis_out/reg_refine.npz", base=base, best=np.array(best_r),
+         p_base_toroidal=t_base["p"], p_best_toroidal=t_best["p"])
 print("REFINE_DONE")

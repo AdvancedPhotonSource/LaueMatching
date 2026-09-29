@@ -503,7 +503,7 @@ def _chain_scripts(tmp_path, overrides):
     d = tmp_path / "scripts"
     d.mkdir()
     shutil.copy(PIPE / "analysis" / "frame_peaks.py", d / "frame_peaks.py")
-    names = ["parentbeta_validate", "null_model", "empirical_gate",
+    names = ["parentbeta_validate", "null_model", "search_null", "empirical_gate",
              "beta_alpha_exclusion_census", "exclusion_null", "parentbeta_reconstruct",
              "anchor_null", "variant_coherence", "validated_figures"]
     for n in names:
@@ -688,3 +688,57 @@ def test_chain_refuses_when_null_not_measured(tmp_path):
     assert r.returncode != 0
     assert "no measured null for phase beta" in r.stdout
     assert "GATE RAN" not in r.stdout
+
+
+def _search_writer(phases):
+    """A search_null.py stub adding a search_null block to the null json."""
+    return textwrap.dedent(f"""\
+        import json, os, sys
+        w, p = os.environ["LAUE_WORK"], os.environ["LAUE_OUT_PREFIX"]
+        path = os.path.join(w, "peel_map", p + "_null.json")
+        js = json.load(open(path))
+        ph = sys.argv[1]
+        a, b = {phases!r}[ph]
+        js["phases"][ph]["search_null"] = {{"keep_positions": False,
+            "nhit": {{"statistic": "nhit", "max": a, "kind": "search"}},
+            "nhit_distinct": {{"statistic": "nhit_distinct", "max": b, "kind": "search"}}}}
+        json.dump(js, open(path, "w"))
+        print("RAN search_null", ph)
+        """)
+
+
+@pytest.mark.parametrize("stat, expect", [("nhit", "7 6"), ("nhit_distinct", "5 4")])
+def test_chain_gates_on_the_search_null_by_default(tmp_path, stat, expect):
+    """search_null.py runs per phase after null_model.py, and the exported maximum is
+    the SEARCH null's (invariant 29), not the per-draw one."""
+    _needs_chain_imports()
+    s = _chain_scripts(tmp_path, {"null_model": _NULL_BOTH,
+                                  "search_null": _search_writer({"alpha": (7, 5), "beta": (6, 4)}),
+                                  "empirical_gate": _GATE_PRINTS_ENV})
+    r = _chain(_chain_env(tmp_path, s, LAUE_GATE_STAT=stat))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "RAN search_null alpha" in r.stdout and "RAN search_null beta" in r.stdout
+    assert f"GATE SAW {expect}" in r.stdout
+
+
+def test_chain_null_kind_draw_skips_the_search_null(tmp_path):
+    _needs_chain_imports()
+    s = _chain_scripts(tmp_path, {"null_model": _NULL_BOTH,
+                                  "search_null": "print('RAN search_null')\n",
+                                  "empirical_gate": _GATE_PRINTS_ENV})
+    r = _chain(_chain_env(tmp_path, s, LAUE_NULL_KIND="draw"))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "RAN search_null" not in r.stdout
+    assert "search null NOT measured" in r.stdout
+    assert "GATE SAW 13 11" in r.stdout
+
+
+def test_chain_without_a_search_block_falls_back_loudly(tmp_path):
+    """A search_null.py that wrote nothing: the gate falls back to the per-draw null
+    and the chain's log carries the warning."""
+    _needs_chain_imports()
+    s = _chain_scripts(tmp_path, {"null_model": _NULL_BOTH, "empirical_gate": _GATE_PRINTS_ENV})
+    r = _chain(_chain_env(tmp_path, s))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "GATE SAW 13 11" in r.stdout
+    assert "no SEARCH null" in r.stderr

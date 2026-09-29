@@ -60,6 +60,7 @@ before comparing numbers.
 import json
 import os
 import re
+import sys
 
 import numpy as np
 from scipy import ndimage as ndi
@@ -329,6 +330,68 @@ def count_matched_peaks(tree, predicted, tol, exclude=None):
     return int(np.unique(idx[m]).size), int(m.sum())
 
 
+def poisson_lambda(n_predicted, n_peaks, tol, npx_x, npx_y):
+    """Analytic chance expectation of ``nhit``: predicted reflections landing
+    within ``tol`` px of one of ``n_peaks`` peaks scattered uniformly over an
+    ``npx_x`` x ``npx_y`` detector.
+
+    The scripts wrote ``n_pred * n_peaks * pi * tol**2 / (NPX * NPX)`` with NPX
+    the x size, which is wrong for any non-square detector (a 1024 x 2048 panel
+    had its area halved, doubling lambda). Both dimensions, always.
+    """
+    return float(n_predicted) * float(n_peaks) * np.pi * tol * tol / (float(npx_x) * float(npx_y))
+
+
+def presence_p(tree, npeaks, pr, tol, npx_x, npx_y):
+    """Analytic Poisson p that pattern ``pr`` is present (nhit, both dimensions)."""
+    from scipy.stats import poisson
+    if pr is None or not len(pr) or npeaks < 1:
+        return 1.0
+    _, h = count_matched_peaks(tree, pr, tol)
+    return float(poisson.sf(h - 1, poisson_lambda(len(pr), npeaks, tol, npx_x, npx_y)))
+
+
+def control_orientations(oms, seed=0):
+    """One RANDOMLY ROTATED control per grain: ``R_k @ OM_k`` with R_k uniform.
+
+    The backfills test every master grain in every frame at an analytic Poisson
+    gate and used to quote ``n_grains * n_frames * PGATE`` as the expected false
+    count. That assumes uniformly scattered peaks; real peak fields cluster, so it
+    is optimistic. A control grain has the same phase and reflection structure as
+    a real one but an orientation no frame supports, so the number of control
+    "presences" at the same gate is a MEASURED false count.
+    """
+    rng = np.random.default_rng(seed)
+    oms = np.asarray(oms, float).reshape(-1, 3, 3)
+    q = rng.normal(size=(len(oms), 4)); q /= np.linalg.norm(q, axis=1, keepdims=True)
+    w, x, y, z = q.T
+    R = np.stack([np.stack([1-2*(y*y+z*z), 2*(x*y-w*z), 2*(x*z+w*y)], -1),
+                  np.stack([2*(x*y+w*z), 1-2*(x*x+z*z), 2*(y*z-w*x)], -1),
+                  np.stack([2*(x*z-w*y), 2*(y*z+w*x), 1-2*(x*x+y*y)], -1)], -2)
+    return R @ oms
+
+
+def mask_disks(img, xy, radius, value):
+    """Set a disk of ``radius`` px around each (x, y) in ``xy`` to ``value``, in place.
+
+    Clips x against ``img.shape[1]`` and y against ``img.shape[0]``. The peel
+    driver clipped y with the x size, which on a non-square frame either walked
+    off the array or left the bottom rows unmasked.
+    """
+    H, W = img.shape
+    yy, xx = np.mgrid[-radius:radius + 1, -radius:radius + 1]
+    disk = (xx * xx + yy * yy) <= radius * radius
+    for x, y in np.asarray(xy, float).reshape(-1, 2):
+        xi, yi = int(round(x)), int(round(y))
+        x0, x1 = max(0, xi - radius), min(W, xi + radius + 1)
+        y0, y1 = max(0, yi - radius), min(H, yi + radius + 1)
+        if x0 >= x1 or y0 >= y1:
+            continue
+        img[y0:y1, x0:x1][disk[(y0 - yi + radius):(y1 - yi + radius),
+                               (x0 - xi + radius):(x1 - xi + radius)]] = value
+    return img
+
+
 # --- which hit statistic a gate uses, and the null measured for it -----------
 # A gate and its null must be the SAME statistic: an nhit_distinct count compared
 # with an nhit null maximum is optimistic by the ~1.4x stacking factor above, and
@@ -415,6 +478,71 @@ def out_prefix():
     return p
 
 
+DEFAULT_CLUSTER_TOL = 1.0
+
+
+def cluster_tol():
+    """``LAUE_CLUSTER_TOL`` (degrees, default 1.0): THE orientation-clustering cut.
+
+    Before 2026-09 four scripts clustered at their own literals -- 1.0
+    (parentbeta_validate, parentbeta_backfill), 0.7 (beta_map_validate,
+    map_validate_cluster) and 1.5 (scan_map) -- so their grain counts described
+    different grain definitions. ``LAUE_CLUSTER_TOL=0.7`` / ``1.5`` reproduces
+    those scripts' old counts. (batch_peel_driver's 0.7 deg is a per-frame DEDUP
+    of re-found orientations between peel passes, not a grain definition, and stays.)
+    """
+    raw = os.environ.get("LAUE_CLUSTER_TOL", "").strip()
+    if not raw:
+        return DEFAULT_CLUSTER_TOL
+    try:
+        v = float(raw)
+    except ValueError:
+        raise SystemExit(f"LAUE_CLUSTER_TOL must be a positive number of degrees, got {raw!r}")
+    if not np.isfinite(v) or v <= 0:
+        raise SystemExit(f"LAUE_CLUSTER_TOL must be a positive number of degrees, got {raw!r}")
+    return v
+
+
+def require_labels(labels, where):
+    """Exit if any instance is unclustered (label -1), naming the fix.
+
+    ``LAUE_SKIP_CLUSTER=1`` stops parentbeta_validate.py with every label -1. The
+    consumers used to crash after a full frame pass (census), crash (anchor_null,
+    regrain), report nothing without saying why (empirical_gate) or silently
+    re-cluster O(n^2) (parentbeta_reconstruct).
+    """
+    labels = np.asarray(labels)
+    if len(labels) and (labels < 0).any():
+        raise SystemExit(
+            f"{where}: {int((labels < 0).sum())} of {len(labels)} instances are unclustered "
+            f"(label -1, e.g. after LAUE_SKIP_CLUSTER=1). Cluster first and write the "
+            f"labels back to the same file: cluster_orientations.py {where} {where} "
+            f"<tol_deg> <phase>")
+    return labels
+
+
+def clustered_npz(work):
+    """The clustered-instance npz the map scripts read.
+
+    ``$LAUE_CLUSTERED_NPZ`` if set; else the one ``peel_map/<prefix>_*_clustered.npz``
+    for ``LAUE_OUT_PREFIX``. The scripts hard-coded ``full_zn_clustered.npz``, i.e.
+    one campaign's prefix and phase. Several matches or none exit.
+    """
+    import glob
+    env = os.environ.get("LAUE_CLUSTERED_NPZ", "").strip()
+    if env:
+        if not os.path.isfile(env):
+            raise SystemExit(f"LAUE_CLUSTERED_NPZ={env} does not exist")
+        return env
+    pat = os.path.join(work, "peel_map", f"{out_prefix()}_*_clustered.npz")
+    hits = sorted(glob.glob(pat))
+    if len(hits) != 1:
+        raise SystemExit(f"{len(hits)} files match {pat}"
+                         + (f" ({', '.join(os.path.basename(h) for h in hits)})" if hits else "")
+                         + ": set LAUE_CLUSTERED_NPZ to the clustered npz to use")
+    return hits[0]
+
+
 def analytic_gate_note(script):
     """Say, at run time, that a per-frame ANALYTIC Poisson gate ignores LAUE_GATE_STAT.
 
@@ -444,12 +572,67 @@ def gate_statistic():
 
 
 def null_json_path(work, prefix):
-    """Where null_model.py writes the measured null for a scan."""
+    """Where null_model.py (per-draw) and search_null.py (search) write a scan's null."""
     return os.path.join(work, "peel_map", f"{prefix}_null.json")
 
 
+# --- which null: the SEARCH or one DRAW ----------------------------------------
+# Invariant 29: a gate safe against one random orientation is not safe against the
+# best of the indexer's whole search. null_model.py measures the per-DRAW null
+# (random orientations, one at a time); search_null.py measures the SEARCH null
+# (the same indexer and validator run on spot-scrambled frames) and writes it as a
+# "search_null" block beside the per-draw entries of the same json. The gates use
+# the search null when it is present (default since 2026-09) and fall back to the
+# per-draw null with a loud warning; LAUE_NULL_KIND=search|draw forces one.
+NULL_KINDS = ("search", "draw")
+SEARCH_KEY = "search_null"
+
+
+def null_kind():
+    """``LAUE_NULL_KIND``: ``search``, ``draw``, or None (unset: search if measured,
+    else draw with a warning). Anything else exits."""
+    raw = os.environ.get("LAUE_NULL_KIND", "").strip()
+    if not raw:
+        return None
+    if raw not in NULL_KINDS:
+        raise SystemExit(f"LAUE_NULL_KIND must be one of {NULL_KINDS}, got {raw!r}")
+    return raw
+
+
+def select_null(ent, stat, path, phase):
+    """``(rec, rec_other, kind)`` from one phase's entry of the null json.
+
+    ``ent`` is ``json["phases"][phase]`` (may be empty). Follows :func:`null_kind`.
+    A search block written as a NEGATIVE CONTROL (``keep_positions``: the scramble
+    kept every spot where it was) is never a null and is refused.
+    """
+    other = [s for s in GATE_STATS if s != stat][0]
+    want = null_kind()
+    search = ent.get(SEARCH_KEY) or {}
+    if search.get("keep_positions"):
+        raise SystemExit(f"{path}: the {phase} {SEARCH_KEY} block was written with "
+                         f"--keep-positions (a negative control, spots NOT scrambled); "
+                         f"it can never gate. Re-run search_null.py without it.")
+    if want in (None, "search") and search.get(stat) is not None:
+        return search[stat], search.get(other), "search"
+    if want == "search":
+        raise SystemExit(
+            f"LAUE_NULL_KIND=search but {path} has no {phase} {SEARCH_KEY}/{stat}: run "
+            f"search_null.py on this scan, or set LAUE_NULL_KIND=draw to gate on the "
+            f"per-draw null (invariant 29: it is not safe against the search).")
+    rec = ent.get(stat)
+    if rec is not None and want is None:
+        msg = (f"WARNING: no SEARCH null for {phase}/{stat} in {path}; falling back to "
+               f"the PER-DRAW null (null_model.py). Invariant 29: a gate safe against "
+               f"one random orientation is not safe against the indexer's search. Run "
+               f"search_null.py, or set LAUE_NULL_KIND=draw to make this choice explicit.")
+        print(msg, file=sys.stderr, flush=True)
+        print(msg, flush=True)
+    return rec, ent.get(other), "draw"
+
+
 def load_null(phase, work, prefix, stat=None):
-    """The measured random-orientation null for ``phase``, for statistic ``stat``.
+    """The measured null for ``phase``, for statistic ``stat``.
 
     Sources, in order:
 
@@ -457,25 +640,32 @@ def load_null(phase, work, prefix, stat=None):
       statistic in force; if the null json is present and the value equals the
       OTHER statistic's maximum instead, this exits rather than gate one
       statistic against the other's null.
-    * ``<work>/peel_map/<prefix>_null.json`` written by null_model.py -- supplies
-      mean / median / p99 / p999 / max / n_draws for both statistics.
+    * ``<work>/peel_map/<prefix>_null.json``: its ``search_null`` block (written
+      by search_null.py -- the SEARCH null, invariant 29) when present, else the
+      per-draw entries written by null_model.py, with a warning. ``LAUE_NULL_KIND``
+      (``search`` | ``draw``) forces one; see :func:`select_null`.
 
     Neither present -> exit. There is deliberately no built-in fallback: a null
     maximum is a property of one scan's peak field and reflection list.
 
-    Returns a dict with at least ``statistic``, ``max`` and ``source``.
+    Returns a dict with at least ``statistic``, ``max``, ``kind`` and ``source``,
+    and prints one line saying which null it is.
     """
     stat = stat or gate_statistic()
     other = [s for s in GATE_STATS if s != stat][0]
     path = null_json_path(work, prefix)
     rec = rec_other = None
+    kind = None
     if os.path.isfile(path):
         with open(path) as fh:
             ent = json.load(fh).get("phases", {}).get(phase) or {}
-        rec, rec_other = ent.get(stat), ent.get(other)
+        rec, rec_other, kind = select_null(ent, stat, path, phase)
         if rec is not None and rec.get("statistic", stat) != stat:
             raise SystemExit(f"{path}: entry {phase}/{stat} says statistic "
                              f"{rec.get('statistic')!r} -- the file is inconsistent")
+    elif null_kind() == "search":
+        raise SystemExit(f"LAUE_NULL_KIND=search but {path} does not exist: run "
+                         f"search_null.py on this scan")
     var = f"LAUE_NULLMAX_{phase.upper()}"
     env = os.environ.get(var)
     if env is not None:
@@ -492,16 +682,27 @@ def load_null(phase, work, prefix, stat=None):
             print(f"WARNING: {var}={mx} overrides the measured {stat} null max "
                   f"{rec['max']} in {path}", flush=True)
         out = dict(rec) if rec is not None else {}
-        out.update(statistic=stat, max=mx, source=f"${var}")
+        out.update(statistic=stat, max=mx, source=f"${var}", kind=kind or "override")
+        _say_null(phase, out)
         return out
     if rec is None:
         raise SystemExit(
             f"no measured {stat} null for phase {phase!r}: set {var} or run "
-            f"null_model.py on THIS scan (it writes {path}). Do not inherit a null "
-            f"from another scan.")
+            f"search_null.py (the search null) and/or null_model.py (the per-draw null) "
+            f"on THIS scan (they write {path}). Do not inherit a null from another scan.")
     out = dict(rec)
-    out.update(statistic=stat, source=path)
+    out.update(statistic=stat, source=path, kind=kind)
+    _say_null(phase, out)
     return out
+
+
+def _say_null(phase, rec):
+    """Every gate prints which null it gates on: kind, statistic, max, source."""
+    what = {"search": "SEARCH null (indexer on spot-scrambled frames, search_null.py)",
+            "draw": "PER-DRAW null (random orientations, null_model.py)"}.get(
+                rec.get("kind"), f"{rec.get('kind')} null")
+    print(f"[null] {phase}: {what}; {rec['statistic']} max {rec['max']} "
+          f"[{rec['source']}]", flush=True)
 
 
 def gate_counts(z, stat, where="npz"):

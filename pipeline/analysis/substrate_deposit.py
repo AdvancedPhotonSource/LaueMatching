@@ -17,9 +17,13 @@ they are only worth reporting where they agree:
 
   C. SPECTRAL HARDENING (see hardening.py) -- the subtlest of the three.
 
-Every claim is checked against a null built by permuting the quantity being
-tested, because with thousands of candidate clusters something always looks
-structured.
+Every claim is checked against a null, because with thousands of candidate
+clusters something always looks structured. B and C are map statistics, so their
+null is SPATIAL (invariant 10): the pedestal map is toroidally shifted against the
+fixed cluster maps (raster.toroidal_shift_null). Before 2026-09 they permuted
+values/labels, which ignores autocorrelation; on a known-null synthetic that
+permutation flagged 79% of independent smooth maps at p < 0.05 for B (the
+toroidal null: 4.5%). LAUE_NULL_REPS sets the number of shifts (default 1000).
 
 usage: substrate_deposit.py <clustered.npz> <pedestal.npz> <outdir>
 
@@ -33,7 +37,8 @@ import sys
 import numpy as np
 from scipy import ndimage as ndi
 
-from raster import raster_positions, raster_shape, structure
+from raster import (nan_corr, positions_per_label, raster_positions, raster_shape, structure,
+                    toroidal_shift_null)
 
 
 def load(clustered, pedestal):
@@ -42,6 +47,9 @@ def load(clustered, pedestal):
                               z["Z"].astype(float), z["nhit"].astype(int), z["frames"])
     p = np.load(pedestal)
     return oms, lab, X, Z, nh, fr, p
+
+
+NREPS = int(os.environ.get("LAUE_NULL_REPS", "1000"))
 
 
 def main():
@@ -55,14 +63,18 @@ def main():
           f"{len(set(zip(row.tolist(), col.tolist())))} distinct positions\n", flush=True)
 
     # ---- A. cluster footprints -------------------------------------------
-    labs, counts = np.unique(lab, return_counts=True)
-    order = np.argsort(-counts)
+    labs, counts = np.unique(lab, return_counts=True)     # INSTANCES per cluster
+    # distinct POSITIONS per cluster: the footprint. `counts` (instances) was
+    # printed as positions; two orientations at one position are one position.
+    npos_all = positions_per_label(lab, row, col)
+    npos = npos_all[labs] if len(npos_all) else np.zeros(0, int)
+    order = np.argsort(-npos)
     print("=== A. ORIENTATION PERSISTENCE ===")
     print(f"  clusters: {len(labs)}")
-    print(f"  singletons (one position only): {(counts==1).sum()} "
-          f"({(counts==1).mean()*100:.1f}%)")
+    print(f"  singletons (one position only): {(npos==1).sum()} "
+          f"({(npos==1).mean()*100:.1f}%)")
     for k in (2, 5, 10, 25, 50, 100, 500):
-        print(f"  clusters spanning >= {k:4d} positions: {(counts>=k).sum()}")
+        print(f"  clusters spanning >= {k:4d} positions: {(npos>=k).sum()}")
 
     rows_out = []
     for li in labs[order][:40]:
@@ -82,9 +94,9 @@ def main():
 
     # two-population test on the footprint distribution
     pos_per_cluster = np.array([r[2] for r in rows_out] +
-                               [int(c) for c in counts[order][40:]])
-    big = counts[order][0]
-    print(f"\n  largest cluster covers {big} instances "
+                               [int(c) for c in npos[order][40:]])
+    big = npos[order][0]
+    print(f"\n  largest cluster covers {big} positions "
           f"({big/max(len(set(zip(row.tolist(),col.tolist()))),1)*100:.2f}% of positions)")
 
     # ---- B. presence/absence of the dominant cluster vs pedestal ----------
@@ -111,46 +123,42 @@ def main():
             print(f"  pedestal where it is ABSENT                 : {mu_a:7.2f} ADU (n={(~pr).sum()})")
             print(f"  difference                                  : {mu_a-mu_p:+7.2f} ADU")
             print("  PREDICTED if the pedestal is deposit thickness: ABSENT should be HIGHER")
-            rng = np.random.default_rng(0)
             d0 = mu_a - mu_p
-            null = np.empty(5000)
-            for i in range(5000):
-                s = rng.permutation(pr)
-                null[i] = pv[~s].mean() - pv[s].mean()
-            p = float((np.abs(null) >= abs(d0)).mean())
-            print(f"  permutation p (label-shuffled null, 5000 draws): {p:.4g}")
+
+            def diff_b(f):
+                okf = indexed & np.isfinite(f)
+                prf = present[okf]
+                if prf.sum() < 3 or (~prf).sum() < 3:
+                    return np.nan
+                return f[okf][~prf].mean() - f[okf][prf].mean()
+            res = toroidal_shift_null(diff_b, flat, n=NREPS, rng=0)
+            null = res["null"]
+            print(f"  toroidal-shift p (spatial null, {res['n']} shifts of the pedestal map): "
+                  f"{res['p']:.4g}")
             print(f"  null spread: sd {null.std():.2f} ADU -> effect is {abs(d0)/null.std():.1f} sigma")
 
     # ---- C. footprint vs pedestal, over all sizeable clusters -------------
     print("\n=== C. DO LARGE-FOOTPRINT CLUSTERS SIT AT LOW PEDESTAL? ===")
-    sizeable = labs[counts >= 5]
+    sizeable = labs[npos >= 5]
     if len(sizeable) >= 10:
-        fp, pedmean = [], []
-        for li in sizeable:
-            m = lab == li
-            fp.append(m.sum())
-            v = flat[row[m], col[m]]
-            v = v[np.isfinite(v)]
-            if len(v):
-                pedmean.append(v.mean())
-            else:
-                fp.pop()
-        fp = np.array(fp, float); pedmean = np.array(pedmean)
-        a = fp - fp.mean(); b = pedmean - pedmean.mean()
-        r = float(a @ b / np.sqrt((a @ a) * (b @ b)))
-        rng = np.random.default_rng(1)
-        null = np.array([float(a @ rng.permutation(b) / np.sqrt((a @ a) * (b @ b)))
-                         for _ in range(5000)])
-        print(f"  clusters with >=5 instances: {len(fp)}")
-        print(f"  corr(footprint, mean pedestal) = {r:+.3f}   "
-              f"perm p = {(np.abs(null)>=abs(r)).mean():.4g}")
+        fp = np.array([npos_all[li] for li in sizeable], float)
+        members = [(row[lab == li], col[lab == li]) for li in sizeable]
+
+        def corr_c(f):
+            pm = np.array([np.nanmean(f[rr, cc]) if np.isfinite(f[rr, cc]).any() else np.nan
+                           for rr, cc in members])
+            return nan_corr(fp, pm)
+        res = toroidal_shift_null(corr_c, flat, n=NREPS, rng=1)
+        print(f"  clusters spanning >=5 positions: {len(fp)}")
+        print(f"  corr(footprint, mean pedestal) = {res['obs']:+.3f}   "
+              f"toroidal-shift p = {res['p']:.4g} ({res['n']} shifts)")
         print("  PREDICTED if big clusters are exposed substrate: NEGATIVE correlation")
     else:
         print(f"  only {len(sizeable)} clusters with >=5 instances; skipping")
 
     np.savez(f"{outdir}/substrate_deposit.npz",
              labels=lab, row=row, col=col, nhit=nh,
-             cluster_sizes=counts, cluster_ids=labs)
+             cluster_sizes=counts, cluster_positions=npos, cluster_ids=labs)
     print(f"\nwrote {outdir}/substrate_deposit.npz")
     print("SUBSTRATE_DEPOSIT_DONE", flush=True)
 

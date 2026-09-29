@@ -53,7 +53,7 @@ NW  = int(sys.argv[3]) if len(sys.argv) > 3 else 4
 # parameter file the indexer itself used -- see laue_material. Set LAUE_PHASES to
 # the phases present (single-phase materials: LAUE_PHASES=zn) and
 # LAUE_PARAMS_<PHASE> to each params_*.txt.
-from frame_peaks import detect_peaks, count_matched_peaks, null_json_path
+from frame_peaks import detect_peaks, count_matched_peaks, null_json_path, poisson_lambda
 from laue_material import Phase
 PHASES = [p.strip() for p in os.environ.get("LAUE_PHASES", "alpha,beta").split(",") if p.strip()]
 BS = {ph: Phase.load(ph) for ph in PHASES}
@@ -114,7 +114,7 @@ if __name__ == "__main__":
             for ph, (h, mp, npeaks, hd) in r.items():
                 acc[ph].append(h)
                 accd[ph].append(hd)
-                lam[ph].append(mp*npeaks*pi*TOL*TOL/(NPX*NPX))
+                lam[ph].append(poisson_lambda(mp, npeaks, TOL, BS[ph].npx_x, BS[ph].npx_y))
             npk.append(list(r.values())[0][2])
 
     if not npk:

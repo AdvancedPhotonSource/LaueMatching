@@ -28,7 +28,7 @@ HC = 1.2398419739; TOL = 8.0
 # Lattice, reflection list and detector geometry come from the parameter file
 # the indexer used (see laue_material) -- not a second copy of the constants.
 from laue_material import Phase
-from frame_peaks import detect_peaks, count_matched_peaks, analytic_gate_note
+from frame_peaks import detect_peaks, count_matched_peaks, analytic_gate_note, poisson_lambda, cluster_tol
 _ph = Phase.load(PHASE)
 B = _ph.B; HKLS = _ph.hkls; NPX = _ph.npx_x
 
@@ -53,7 +53,7 @@ def validate_frame(item):
         # h = predicted reflections on a peak (the Poisson gate's statistic);
         # h_dist = distinct peaks explained (harmonics not stacked)
         h_dist, h = count_matched_peaks(tree, pr, TOL)
-        lam = len(pr) * npeaks * pi * TOL * TOL / (NPX*NPX)
+        lam = poisson_lambda(len(pr), npeaks, TOL, _ph.npx_x, _ph.npx_y)
         ok[i] = poisson.sf(h - 1, lam) < 1e-4
         hits[i] = h; hits_d[i] = h_dist
     return fn, ok, hits, hits_d, npeaks
@@ -82,18 +82,20 @@ if __name__ == "__main__":
               f"nhit_distinct median {int(np.median(nd_v))}", flush=True)
     oms_v = np.array(oms_v)
     print(f"clustering {len(oms_v)} verified instances...", flush=True)
+    TOLC = cluster_tol()   # LAUE_CLUSTER_TOL (default 1.0); this script used 0.7
     labels = np.full(len(oms_v), -1); cid = 0
     for i in range(len(oms_v)):
         if labels[i] >= 0: continue
         un = np.where(labels < 0)[0]
-        d = _ph.misorientation(oms_v[i], oms_v[un]); labels[un[d < 0.7]] = cid; cid += 1
+        d = _ph.misorientation(oms_v[i], oms_v[un]); labels[un[d < TOLC]] = cid; cid += 1
     counts = np.bincount(labels)
-    print(f"verified grains (clusters): {cid}")
+    print(f"verified grains (clusters < {TOLC:g} deg): {cid}")
     for k in (1, 2, 3, 5, 10):
         print(f"  in >= {k} frames: {(counts >= k).sum()}")
     per_frame = ver / max(1, len(results))
     print(f"mean VERIFIED grains per frame: {per_frame:.1f}")
     np.savez(f"{WORK}/peel_map/verified_clusters.npz",
              oms=oms_v, labels=labels, frames=np.array(fns_v),
-             nhit=np.array(nh_v, int), nhit_distinct=np.array(nd_v, int))
+             nhit=np.array(nh_v, int), nhit_distinct=np.array(nd_v, int),
+             cluster_tol=np.float64(TOLC))
     print("saved verified_clusters.npz")

@@ -55,22 +55,46 @@ def partial(a, b, *ctrl):
     return pearson(resid(a), resid(b))
 
 
-def blocked_perm_p(a, b, rows, n=5000, seed=0):
+def row_block_pairs(rows, cols, mapping):
+    """Partner index for each position under a row permutation, or -1.
+
+    Position i at (rows[i], cols[i]) pairs with the position at
+    (mapping[rows[i]], cols[i]) -- same column, permuted row -- or with nothing
+    if that position has no entry. The old code sorted instances by permuted row
+    id (``b[argsort(mapping[rows])]``), which only pairs positions when every row
+    has the same columns in the same order; with rows of unequal length it slid
+    values across row boundaries and paired unrelated columns.
+    """
+    rows = np.asarray(rows, int); cols = np.asarray(cols, int)
+    grid = np.full((rows.max() + 1, cols.max() + 1), -1, int)
+    grid[rows, cols] = np.arange(len(rows))
+    lut = np.arange(rows.max() + 1)
+    for k, v in mapping.items():
+        lut[int(k)] = int(v)
+    return grid[lut[rows], cols]
+
+
+def blocked_perm_p(a, b, rows, cols=None, n=5000, seed=0):
     """Permute whole rows, preserving within-row spatial structure.
 
     A naive element-wise permutation destroys the autocorrelation in both fields
     and therefore understates the null spread -- it will call almost any smooth
-    map 'significant'.
+    map 'significant'. Pairing is by POSITION (``row_block_pairs``): ``a`` at
+    (r, c) meets ``b`` at (perm(r), c); pairs whose partner position is absent
+    are dropped for that permutation.
     """
+    if cols is None:
+        raise ValueError("blocked_perm_p needs the column of every entry: rows are "
+                         "permuted as blocks of POSITIONS")
+    a = np.asarray(a, float); b = np.asarray(b, float)
     r0 = abs(pearson(a, b))
     rng = np.random.default_rng(seed)
     uniq = np.unique(rows)
     cnt = 0
     for _ in range(n):
-        perm = rng.permutation(uniq)
-        mapping = dict(zip(uniq, perm))
-        order = np.argsort([mapping[r] for r in rows], kind="stable")
-        if abs(pearson(a, b[order])) >= r0:
+        j = row_block_pairs(rows, cols, dict(zip(uniq, rng.permutation(uniq))))
+        ok = j >= 0
+        if ok.sum() > 2 and abs(pearson(a[ok], b[j[ok]])) >= r0:
             cnt += 1
     return (cnt + 1) / (n + 1)
 
@@ -117,7 +141,7 @@ def main():
         r = pearson(pedv, y)
         rp = partial(pedv, y, nsp)
         rpt = partial(pedv, y, nsp, fno)
-        p = blocked_perm_p(pedv, y, rows)
+        p = blocked_perm_p(pedv, y, rows, cols)
         print(f"  corr(pedestal, {nm:26s}) = {r:+.4f}")
         print(f"      partialling out spots/position          : {rp:+.4f}")
         print(f"      partialling out spots/position AND time : {rpt:+.4f}")

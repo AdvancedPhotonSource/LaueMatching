@@ -22,6 +22,7 @@ W = os.environ.get("LAUE_WORK") or sys.exit("LAUE_WORK is not set (peel_map/ and
 from raster import mount_deg
 ZSCALE = 1.0 / np.cos(np.radians(mount_deg()))
 from frame_peaks import out_prefix
+from raster import positions_per_label
 PREFIX = out_prefix()
 COL = {"alpha": "#4269d0", "beta": "#e8843c"}   # CVD-validated pair (dE 28.1 protan)
 GK = {"alpha": r"\alpha", "beta": r"\beta"}
@@ -33,7 +34,7 @@ def centers_to_edges(c):
 def load(phase):
     raw = np.load(f"{W}/peel_map/{PREFIX}_{phase}_raw.npz")
     clu = np.load(f"{W}/peel_map/{PREFIX}_{phase}.npz")
-    return raw["pos"], raw["poscount"], clu["labels"]
+    return raw["pos"], raw["poscount"], clu["labels"], clu["X"], clu["Z"]
 
 data = {ph: load(ph) for ph in ("alpha", "beta")}
 
@@ -41,7 +42,7 @@ fig = plt.figure(figsize=(17, 5.8), constrained_layout=True)
 gs = fig.add_gridspec(1, 3, width_ratios=[1, 1, 1.3])
 
 for k, ph in enumerate(("alpha", "beta")):
-    pos, pc, labels = data[ph]
+    pos, pc, labels = data[ph][:3]
     Xu = np.unique(np.round(pos[:, 0], 4)); Zu = np.unique(np.round(pos[:, 1], 4))
     xi = {v: i for i, v in enumerate(Xu)}; zi = {v: i for i, v in enumerate(Zu)}
     grid = np.full((len(Zu), len(Xu)), np.nan)
@@ -72,7 +73,8 @@ for k, ph in enumerate(("alpha", "beta")):
 ax = fig.add_subplot(gs[0, 2])
 for j, ph in enumerate(("alpha", "beta")):
     labels = data[ph][2]
-    counts = np.bincount(labels); counts = counts[counts > 0]
+    # distinct POSITIONS per orientation cluster (np.bincount counted instances)
+    counts = positions_per_label(labels, data[ph][3], data[ph][4]); counts = counts[counts > 0]
     bins = np.unique(np.round(np.logspace(0, np.log10(counts.max() + 1), 40)).astype(int))
     h, e = np.histogram(counts, bins=np.append(bins, bins[-1] + 1))
     ctr = 0.5 * (e[:-1] + e[1:]); keep = h > 0

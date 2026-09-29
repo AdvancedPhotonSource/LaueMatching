@@ -15,7 +15,13 @@ Scan positions are LAUE_STEP_UM apart, centred on the markers.
 
 Environment: LAUE_WORK (work directory), LAUE_NR (columns), LAUE_NROWS (rows) and
 LAUE_STEP_UM (raster step, um), all required. The grain footprint takes one orientation per position, top-ranked by
-distinct peaks matched (raster.winner_per_position).
+distinct peaks matched (raster.winner_per_position). The clustered npz is
+peel_map/<LAUE_OUT_PREFIX>_*_clustered.npz (or LAUE_CLUSTERED_NPZ); it was hard-coded
+one campaign's hard-coded file name.
+
+Every correlation carries a SPATIAL p (invariant 10): the scan map is toroidally
+shifted against the registered optical mask (raster.toroidal_shift_null,
+LAUE_NULL_REPS shifts, default 1000). Before 2026-09 they were printed with no null.
 """
 import os
 import sys
@@ -23,8 +29,10 @@ import sys
 import numpy as np
 from PIL import Image
 
-from raster import (centred_extent, optical_registration, raster_positions, raster_shape,
-                    ranking_counts, step_um, winner_per_position)
+from raster import (centred_extent, nan_corr, optical_registration, positions_per_label,
+                    raster_positions, raster_shape, ranking_counts, step_um,
+                    toroidal_shift_null, winner_per_position)
+from frame_peaks import clustered_npz
 
 W = os.environ.get("LAUE_WORK")
 if not W:
@@ -75,10 +83,10 @@ print(f"black fraction WITHIN the scan box: {is_black.mean()*100:.1f}%")
 
 # --- the maps ---------------------------------------------------------------
 flat = np.load(f"{W}/analysis_out/full_pedestal.npz")["flat"]        # (row=45deg, col=X)
-z = np.load(f"{W}/peel_map/full_zn_clustered.npz", allow_pickle=True)
+z = np.load(clustered_npz(W), allow_pickle=True)
 lab, fr = z["labels"], z["frames"]
 gr, gc = raster_positions(fr, Z=z["Z"] if "Z" in z.files else None, shape=(NROWS, NR))
-cnt = np.bincount(lab)
+cnt = positions_per_label(lab, gr, gc)       # footprint in POSITIONS, not instances
 foot = np.full((NROWS, NR), np.nan)
 prim, sec, _ = ranking_counts(z)
 best = winner_per_position(gr, gc, prim, sec, tiebreak=z["oms"].reshape(len(lab), -1))
@@ -92,8 +100,11 @@ def pear(a, b):
     a = a - a.mean(); b = b - b.mean()
     return float(a @ b / np.sqrt((a @ a) * (b @ b)))
 r_pb = pear(pv, bv)
+NREPS = int(os.environ.get("LAUE_NULL_REPS", "1000"))
+t_pb = toroidal_shift_null(lambda f: nan_corr(f, is_black), flat, n=NREPS, rng=0)
 print("\n=== PEDESTAL vs OPTICAL DEPOSIT (black) ===")
-print(f"  corr(pedestal, is_black) = {r_pb:+.3f}")
+print(f"  corr(pedestal, is_black) = {r_pb:+.3f}   toroidal-shift p = {t_pb['p']:.4g} "
+      f"({t_pb['n']} shifts)")
 print(f"  pedestal on BLACK positions : {pv[bv > 0.5].mean():.1f} ADU (n={int((bv>0.5).sum())})")
 print(f"  pedestal on GOLD positions  : {pv[bv < 0.5].mean():.1f} ADU (n={int((bv<0.5).sum())})")
 print(f"  difference: {pv[bv>0.5].mean() - pv[bv<0.5].mean():+.1f} ADU")
@@ -105,7 +116,9 @@ print(f"  AUC (pedestal ranks black>gold): {auc:.3f}  (0.5 = chance)")
 
 fo = foot[m]; ok = np.isfinite(fo)
 print(f"\n=== GRAIN SIZE vs OPTICAL DEPOSIT ===")
-print(f"  corr(log footprint, is_black) = {pear(np.log10(fo[ok]), bv[ok]):+.3f}")
+t_fb = toroidal_shift_null(lambda f: nan_corr(np.log10(f), is_black), foot, n=NREPS, rng=1)
+print(f"  corr(log footprint, is_black) = {pear(np.log10(fo[ok]), bv[ok]):+.3f}   "
+      f"toroidal-shift p = {t_fb['p']:.4g} ({t_fb['n']} shifts)")
 print(f"  median grain footprint on BLACK: {np.median(fo[ok & (bv>0.5)]):.0f}  "
       f"on GOLD: {np.median(fo[ok & (bv<0.5)]):.0f}")
 
@@ -136,6 +149,7 @@ fig.suptitle(f"Optical registration: corr(pedestal, black) = {r_pb:+.2f}, AUC = 
 fig.tight_layout(); fig.savefig(f"{W}/analysis_out/optical_overlay.png", dpi=120,
                                 bbox_inches="tight", pad_inches=0.3)
 np.savez(f"{W}/analysis_out/optical_registration.npz",
-         is_black=is_black, px_per_um=PX_PER_UM, cx=CX, cy=CY, flip_y=FLIP_Y, step_um=STEP, thr=thr, auc=auc, r_pb=r_pb)
+         is_black=is_black, px_per_um=PX_PER_UM, cx=CX, cy=CY, flip_y=FLIP_Y, step_um=STEP, thr=thr, auc=auc, r_pb=r_pb,
+         p_pb_toroidal=t_pb["p"], r_foot_black=t_fb["obs"], p_foot_black_toroidal=t_fb["p"])
 print("\nwrote optical_overlay.png")
 print("OPTICAL_DONE")

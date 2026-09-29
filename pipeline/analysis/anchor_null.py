@@ -31,19 +31,37 @@ def rand_om(rng):
                      [2*(x*y+w*z), 1-2*(x*x+z*z), 2*(y*z-w*x)],
                      [2*(x*z-w*y), 2*(y*z+w*x), 1-2*(x*x+y*y)]])
 
-z = np.load(f"{W}/peel_map/{PREFIX}_beta_validated.npz", allow_pickle=True)
-oms, lab = z["oms"], z["labels"]
+from frame_peaks import require_labels
+_src = f"{W}/peel_map/{PREFIX}_beta_validated.npz"
+z = np.load(_src, allow_pickle=True)
+oms, lab = z["oms"], require_labels(z["labels"], _src)
+
+# THIS scan's anchors, from parentbeta_reconstruct.py. The four values that were
+# printed here (1.41, 1.74, 3.27, 4.40 deg) were one old scan's parents, shown for
+# every scan.
+_rec = f"{W}/peel_map/{PREFIX}_reconstruction.npz"
+if not os.path.isfile(_rec):
+    sys.exit(f"{_rec} not found: run parentbeta_reconstruct.py first (it holds this "
+             f"scan's retained-beta anchors)")
+ANCHORS = np.asarray(np.load(_rec)["parents_anchor"], float)
+if not len(ANCHORS):
+    print(f"{PREFIX}: the reconstruction has no parent, so no anchor to test")
+    sys.exit(0)
 counts = np.bincount(lab[lab >= 0])
 reps = []
 for c in np.where(counts >= 2)[0]:
     reps.append(oms[np.where(lab == c)[0][0]])
 reps = np.array(reps)
 print(f"beta clusters with size>=2 available as anchors: {len(reps):,}")
+if not len(reps):
+    print("no beta cluster of size >= 2: every anchor is 'no match' by construction")
+    sys.exit(0)
 
 rng = np.random.default_rng(7)
 d = np.array([cubmiso(rand_om(rng), reps).min() for _ in range(NDRAW)])
 print(f"\nNULL: nearest beta cluster for a RANDOM orientation ({NDRAW:,} draws)")
 print(f"  mean {d.mean():.2f} deg   median {np.median(d):.2f}   "
       f"5th pct {np.percentile(d,5):.2f}   1st pct {np.percentile(d,1):.2f}   min {d.min():.2f}")
-for anchor in (1.41, 1.74, 3.27, 4.40):
-    print(f"  P(random orientation lands within {anchor:.2f} deg) = {100*(d <= anchor).mean():.1f}%")
+for k, anchor in enumerate(ANCHORS, start=1):
+    print(f"  parent #{k}: anchor {anchor:.2f} deg -> P(random orientation lands within "
+          f"{anchor:.2f} deg) = {100*(d <= anchor).mean():.1f}%")

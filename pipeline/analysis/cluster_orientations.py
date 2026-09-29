@@ -35,6 +35,7 @@ from scipy.sparse import coo_matrix
 from scipy.sparse.csgraph import connected_components
 
 from laue_material import Phase, phase_name
+from frame_peaks import cluster_tol
 
 
 def om_to_quat(oms: np.ndarray) -> np.ndarray:
@@ -310,7 +311,8 @@ if __name__ == "__main__":
         sys.exit(__doc__ + "\n       cluster_orientations.py --selftest [phase]\n"
                  "       add --diameter for complete-linkage (diameter) clusters")
     src, dst = argv[0], argv[1]
-    tol = float(argv[2]) if len(argv) > 2 else 1.0
+    # default: the chain's one clustering cut, LAUE_CLUSTER_TOL (1.0 deg)
+    tol = float(argv[2]) if len(argv) > 2 else cluster_tol()
     phase = argv[3] if len(argv) > 3 else phase_name()
     ph = Phase.load(phase)
 
@@ -325,6 +327,7 @@ if __name__ == "__main__":
 
     out = {k: z[k] for k in z.files if k != "labels"}
     out["labels"] = labels
+    out["cluster_tol"] = np.float64(tol)
     np.savez(dst, **out)
     cnt = np.bincount(labels)
     print(f"clusters: {len(cnt)}; sizes: max {cnt.max()}, "

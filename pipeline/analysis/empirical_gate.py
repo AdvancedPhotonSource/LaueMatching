@@ -12,9 +12,11 @@ This reports, per phase:
   - the same, restricted to grains that also RECUR at >=5 positions, which is the
     tier the report stands behind (independent evidence, not a harsher single-frame cut)
 
-The null is the one MEASURED ON THIS SCAN by null_model.py (read through
-frame_peaks.load_null: $LAUE_WORK/peel_map/${LAUE_OUT_PREFIX}_null.json, with
-LAUE_NULLMAX_<PHASE> overriding the max). There is no built-in fallback: this
+The null is the one MEASURED ON THIS SCAN, read through frame_peaks.load_null
+($LAUE_WORK/peel_map/${LAUE_OUT_PREFIX}_null.json, LAUE_NULLMAX_<PHASE> overriding
+the max): the SEARCH null from search_null.py when present (invariant 29, default
+since 2026-09), else null_model.py's per-draw null with a warning;
+LAUE_NULL_KIND=search|draw forces one. There is no built-in fallback: this
 script used to carry one scan's Ti null and apply it to every scan.
 
 The statistic is LAUE_GATE_STAT = nhit (default) | nhit_distinct; the counts and
@@ -27,7 +29,8 @@ import sys
 
 import numpy as np
 
-from frame_peaks import gate_counts, gate_statistic, load_null, out_prefix
+from frame_peaks import gate_counts, gate_statistic, load_null, out_prefix, require_labels
+from raster import positions_per_label
 
 W = os.environ.get("LAUE_WORK") or sys.exit("LAUE_WORK is not set (peel_map/ is read under it)")
 PREFIX = out_prefix()
@@ -39,15 +42,17 @@ for ph in PHASES:
     null = load_null(ph, W, PREFIX, STAT)
     src = f"{W}/peel_map/{PREFIX}_{ph}_validated.npz"
     z = np.load(src, allow_pickle=True)
-    nhit = gate_counts(z, STAT, src); lab = z["labels"]
+    nhit = gate_counts(z, STAT, src); lab = require_labels(z["labels"], src)
     n = len(nhit)
     mx, p999 = int(null["max"]), null.get("p999")
-    counts = np.bincount(lab[lab >= 0])
+    # distinct POSITIONS per grain; this used np.bincount (INSTANCES), so two
+    # orientations at one position counted as two "positions"
+    counts = positions_per_label(lab, z["X"], z["Z"])
     size_of = np.zeros(len(lab), int)
     size_of[lab >= 0] = counts[lab[lab >= 0]]
     rec5 = size_of >= 5
 
-    print(f"\n=== {ph} ===   null: {STAT} max {mx}"
+    print(f"\n=== {ph} ===   null: {null['kind']} {STAT} max {mx}"
           + (f", p99.9 {p999:g}" if p999 is not None else "")
           + f"  [{null['source']}]")
     print(f"validated instances               {n:>8,}")

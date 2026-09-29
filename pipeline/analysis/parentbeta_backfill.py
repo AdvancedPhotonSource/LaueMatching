@@ -29,7 +29,8 @@ PHASE=sys.argv[1] if len(sys.argv)>1 else phase_name()   # argv, else LAUE_PHASE
 RUN=os.environ.get(f"LAUE_SCAN_{PHASE.upper()}", f"{WORK}/results/parentbeta_{PHASE}")
 # Lattice, reflections, geometry AND symmetry from the parameter file the indexer used.
 from laue_material import Phase
-from frame_peaks import detect_peaks, count_matched_peaks, analytic_gate_note
+from frame_peaks import (detect_peaks, count_matched_peaks, analytic_gate_note, poisson_lambda,
+                         cluster_tol, control_orientations, presence_p)
 _PH=Phase.load(PHASE); NPX=_PH.npx_x
 
 def project(OM):
@@ -46,7 +47,7 @@ if labels.max()<0 or not (labels>=0).all():
     labels=np.full(len(oms),-1); cid=0
     for i in range(len(oms)):
         if labels[i]>=0: continue
-        un=np.where(labels<0)[0]; labels[un[_PH.misorientation(oms[i],oms[un])<1.0]]=cid; cid+=1
+        un=np.where(labels<0)[0]; labels[un[_PH.misorientation(oms[i],oms[un])<cluster_tol()]]=cid; cid+=1
 # master = only REAL recurring grains (clusters seen at >= MINSZ frames), not
 # the thousands of spurious singletons -> keeps the backfill fast + meaningful.
 MINSZ=int(sys.argv[2]) if len(sys.argv)>2 else 5
@@ -55,6 +56,9 @@ reps=np.array([oms[np.where(labels==k)[0][0]] for k in keep])
 orig=[set(vfr[labels==k]) for k in keep]
 ngr=len(reps)
 PRED=[project(R) for R in reps]
+# one randomly rotated CONTROL per master grain: its presences are the MEASURED
+# false-backfill count (the analytic ngr*nframes*PGATE assumes unclustered peaks)
+CTRL=[project(R) for R in control_orientations(reps, seed=12345)] if ngr else []
 print(f"[{PHASE}] {len(sizes)} clusters total; {ngr} master grains at >= {MINSZ} frames; "
       f"mean predicted spots {np.mean([len(p) for p in PRED]):.0f}",flush=True)
 
@@ -71,29 +75,26 @@ def scan(fn):
     # shared detector (frame_peaks): the same downsampled-median background, 9 px
     # maximum filter and SNR 8 used here before, plus plateau/halo/bloom handling
     xs,ys,_=detect_peaks(raw)
-    present=np.zeros(ngr,bool)
+    present=np.zeros(ngr,bool); ctrl=np.zeros(ngr,bool)
     if len(xs)>=5:
         tree=cKDTree(np.c_[xs,ys]); npeaks=len(xs)
         for g in range(ngr):
-            pr=PRED[g]
-            if not len(pr): continue
             # presence gate on nhit, the statistic the Poisson lambda describes
-            _,h=count_matched_peaks(tree,pr,TOL)
-            lam=len(pr)*npeaks*pi*TOL*TOL/(NPX*NPX)
-            if poisson.sf(h-1,lam)<PGATE: present[g]=True
-    return fn,X,Z,present
+            present[g]=presence_p(tree,npeaks,PRED[g],TOL,_PH.npx_x,_PH.npx_y)<PGATE
+            ctrl[g]=presence_p(tree,npeaks,CTRL[g],TOL,_PH.npx_x,_PH.npx_y)<PGATE
+    return fn,X,Z,present,ctrl
 
 # Everything below drives the process pool. Guarded so the script also runs under
 # the "spawn" start method (macOS default), where each worker re-imports this
 # module: the workers need only the definitions above.
 if __name__ == "__main__":
     analytic_gate_note("parentbeta_backfill")
-    PRESENT={}; FRPOS={}; done=0
+    PRESENT={}; FRPOS={}; done=0; n_ctrl=0
     with ProcessPoolExecutor(max_workers=36) as ex:
         for r in ex.map(scan, frames, chunksize=8):
             done+=1
             if r:
-                fn,X,Z,present=r; PRESENT[fn]=present; FRPOS[fn]=(X,Z)
+                fn,X,Z,present,ctrl=r; PRESENT[fn]=present; FRPOS[fn]=(X,Z); n_ctrl+=int(ctrl.sum())
             if done%2000==0: print(f"[{PHASE}] {done}/{len(frames)} frames scanned",flush=True)
     # extent = UNION of original confirmed frames and backfilled present frames
     ext=[[] for _ in range(ngr)]; extfr=[set() for _ in range(ngr)]
@@ -109,7 +110,11 @@ if __name__ == "__main__":
           f"(+{100*added/max(orig_tot,1):.0f}%)",flush=True)
     print(f"[{PHASE}] grains extent>=1 {(extn>=1).sum()}; >=5 {(extn>=5).sum()}; "
           f">=20 {(extn>=20).sum()}; max extent {extn.max()}",flush=True)
-    print(f"[{PHASE}] multiple-testing: {ngr}x{len(frames)} tests at p<{PGATE:g} -> ~{ngr*len(frames)*PGATE:.0f} expected false",flush=True)
+    ntest=ngr*len(PRESENT)
+    print(f"[{PHASE}] multiple-testing: {ngr}x{len(PRESENT)} tests at p<{PGATE:g}: "
+          f"MEASURED false backfills (randomly rotated control per grain) {n_ctrl} "
+          f"(rate {n_ctrl/max(ntest,1):.2e}); the analytic ~{ntest*PGATE:.1f} assumes "
+          f"unclustered peaks and is a lower bound",flush=True)
 
     # grain-extent (shape) map
     fig,ax=plt.subplots(figsize=(11,10))
@@ -135,5 +140,6 @@ if __name__ == "__main__":
     fig.tight_layout(); fig.savefig(f"{WORK}/figures/parentbeta_{PHASE}_extent.png",dpi=125)
     print(f"[{PHASE}] saved parentbeta_{PHASE}_extent.png",flush=True)
     np.savez(f"{WORK}/peel_map/parentbeta_{PHASE}_extent.npz",
-             extn=extn, reps=reps, ext=np.array(ext,dtype=object))
+             extn=extn, reps=reps, ext=np.array(ext,dtype=object),
+             n_control_present=n_ctrl, n_tests=ngr*len(PRESENT), pgate=PGATE)
     print(f"[{PHASE}] saved parentbeta_{PHASE}_extent.npz",flush=True)

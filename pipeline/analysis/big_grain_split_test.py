@@ -5,9 +5,14 @@ into two large disconnected lobes and (b) bimodal in internal misorientation. If
 two facts coincide -- one lobe per mode -- the cluster is two distinct crystallites that
 the 1.0 deg clustering tolerance merged, not one 1529-position grain.
 
-Null: if the cluster were a single grain whose spread is unrelated to position, the
-misorientation distributions of the two lobes would be interchangeable. We test with a
-label-shuffle on the lobe assignment (difference of medians).
+Null: if the cluster were a single grain whose spread is unrelated to which lobe a
+position sits in, the lobes' median misorientations would differ only as much as a
+spatially autocorrelated field differs between two fixed regions at random. The
+misorientation map is toroidally shifted against the fixed lobe masks
+(raster.toroidal_shift_null, invariant 10). The label shuffle this used before
+ignores autocorrelation: on a known-null synthetic (one smooth grain, two lobes)
+it flagged 74% at p < 0.05, the toroidal null 3%. The shuffle is still printed
+for comparison, labelled as not a valid test.
 """
 import os
 import sys
@@ -18,7 +23,7 @@ from matplotlib.colors import ListedColormap
 from scipy import ndimage as ndi
 
 from laue_material import Phase
-from raster import structure, connectivity
+from raster import structure, connectivity, toroidal_shift_null
 
 W = os.environ.get("LAUE_WORK") or sys.exit("LAUE_WORK is not set (peel_map/ and figures/ live under it)")
 from frame_peaks import out_prefix
@@ -50,6 +55,8 @@ NSHUF = 2000
 
 z = np.load(f"{W}/peel_map/{PREFIX}_alpha_validated.npz", allow_pickle=True)
 oms, X, Z, lab = z["oms"], z["X"].astype(float), z["Z"].astype(float), z["labels"]
+from frame_peaks import require_labels
+require_labels(lab, f"{W}/peel_map/{PREFIX}_alpha_validated.npz")
 counts = np.bincount(lab[lab >= 0]); cid = int(np.argmax(counts))
 sel = np.where(lab == cid)[0]
 
@@ -60,6 +67,9 @@ for i in sel:
     grid[zi[round(Z[i], 4)], xi[round(X[i], 4)]] = True
 cc, n = ndi.label(grid, structure=STRUCT)
 sizes = np.bincount(cc.ravel())[1:]
+if n < 2:
+    print(f"cluster #{cid}: {len(sel)} instances in ONE connected component -- no lobes to test")
+    sys.exit(0)
 top2 = np.argsort(sizes)[::-1][:2] + 1
 print(f"cluster #{cid}: {len(sel)} instances, {n} components; "
       f"two largest = {sizes[top2[0]-1]} and {sizes[top2[1]-1]} positions")
@@ -86,10 +96,28 @@ null = np.empty(NSHUF)
 for s in range(NSHUF):
     p = rng.permutation(both)
     null[s] = abs(np.median(p[n1:]) - np.median(p[:n1]))
-print(f"  NULL (lobe labels shuffled, {NSHUF} draws): {null.mean():.3f} +/- {null.std():.3f}, "
-      f"max {null.max():.3f}")
-print(f"  -> observed is {(obs-null.mean())/null.std():.0f} sigma beyond the shuffle null")
-print(f"\nVERDICT: {'TWO DISTINCT CRYSTALLITES merged by the 1.0 deg tolerance' if obs > null.max() else 'lobes are orientationally interchangeable — consistent with one grain'}")
+print(f"  [not a valid test: ignores autocorrelation] lobe-label shuffle ({NSHUF} draws): "
+      f"{null.mean():.3f} +/- {null.std():.3f}, max {null.max():.3f}")
+
+# spatial null: the misorientation MAP (NaN off the cluster) shifted against the
+# fixed lobe masks
+mis_map = np.full(grid.shape, np.nan)
+for j, i in enumerate(sel):
+    mis_map[zi[round(Z[i], 4)], xi[round(X[i], 4)]] = d[j]
+L1, L2 = cc == top2[0], cc == top2[1]
+def _dmed(f):
+    a, b = f[L1], f[L2]
+    a, b = a[np.isfinite(a)], b[np.isfinite(b)]
+    if len(a) < 3 or len(b) < 3:
+        return np.nan
+    return abs(np.median(b) - np.median(a))
+tor = toroidal_shift_null(_dmed, mis_map, n=NSHUF, rng=2, alternative="greater")
+tnull = tor["null"]
+print(f"  SPATIAL NULL (misorientation map toroidally shifted vs the lobes, {tor['n']} shifts): "
+      f"{tnull.mean() if len(tnull) else float('nan'):.3f} +/- "
+      f"{tnull.std() if len(tnull) else float('nan'):.3f}; p = {tor['p']:.4g}")
+split = np.isfinite(tor["p"]) and tor["p"] < 0.05
+print(f"\nVERDICT: {'TWO DISTINCT CRYSTALLITES merged by the clustering tolerance (spatial null p < 0.05)' if split else 'lobes are not distinguishable from one autocorrelated grain (spatial null p >= 0.05)'}")
 
 fig, ax = plt.subplots(1, 2, figsize=(13, 5.2), constrained_layout=True)
 xs = (Xu - Xu.min()); zs = (Zu - Zu.min())*ZSCALE
@@ -110,10 +138,12 @@ ax[1].axvline(1.0, color="#555", ls="--", lw=1.3)
 ax[1].set_xlabel("misorientation from lobe-1 reference (deg)"); ax[1].set_ylabel("instances")
 ax[1].set_title(f"B · each lobe has its own orientation\n"
                 f"medians {np.median(d1):.2f}$^\\circ$ vs {np.median(d2):.2f}$^\\circ$; "
-                f"shuffle null {null.mean():.3f}$\\pm${null.std():.3f}", fontsize=10)
+                f"spatial-null p = {tor['p']:.3g}", fontsize=10)
 ax[1].legend(fontsize=9); ax[1].grid(alpha=.25, lw=.5)
-fig.suptitle(f"{PREFIX}: the largest 'grain' is two crystallites {obs:.2f}$^\\circ$ apart, "
-             f"merged by a 1.0$^\\circ$ clustering tolerance", fontsize=12)
+fig.suptitle(f"{PREFIX}: largest cluster's lobes differ by {obs:.2f}$^\\circ$ (median); "
+             + ("two crystallites merged by the clustering tolerance" if split
+                else "not distinguishable from one autocorrelated grain")
+             + f" (spatial null p = {tor['p']:.3g})", fontsize=12)
 os.makedirs(f"{W}/figures", exist_ok=True)
 fig.savefig(f"{W}/figures/{PREFIX}_biggrain_split.png", dpi=150)
 print(f"saved {PREFIX}_biggrain_split.png")

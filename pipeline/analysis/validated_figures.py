@@ -5,8 +5,9 @@ compare the raw catalog against what survives a random-orientation null.
 Panels
   A, B  validated alpha / beta grains per beam position (sample-surface frame)
   C     recurrence spectrum of the VALIDATED clusters, both phases, log-log
-  D     observed spot-hit counts vs the random-orientation null measured on this
-        scan by null_model.py (same statistic, LAUE_GATE_STAT) -- the evidence
+  D     observed spot-hit counts vs the null measured on this scan (same
+        statistic, LAUE_GATE_STAT): the search null (search_null.py) by default,
+        the per-draw null (null_model.py) as a warned fallback, LAUE_NULL_KIND -- the evidence
         that the surviving instances are not chance fits
 
 usage: validated_figures.py
@@ -18,6 +19,7 @@ import matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from frame_peaks import gate_counts, gate_statistic, load_null, out_prefix
+from raster import positions_per_label
 
 W = os.environ.get("LAUE_WORK") or sys.exit("LAUE_WORK is not set (peel_map/ and figures/ live under it)")
 # Slow-axis stage coordinates are de-projected to the sample surface by the MOUNT
@@ -56,7 +58,7 @@ if not phases:
     raise SystemExit("no validated npz yet")
 NULL = {ph: load_null(ph, W, PREFIX, STAT) for ph in phases}
 for ph in phases:
-    print(f"[{ph}] null: {STAT} max {NULL[ph]['max']}  [{NULL[ph]['source']}]")
+    print(f"[{ph}] null: {NULL[ph]['kind']} {STAT} max {NULL[ph]['max']}  [{NULL[ph]['source']}]")
 
 fig = plt.figure(figsize=(17, 9.6), constrained_layout=True)
 gs = fig.add_gridspec(2, 2)
@@ -89,7 +91,8 @@ for j, ph in enumerate(phases):
     labels = data[ph][2]
     if labels.max() < 0:
         continue
-    counts = np.bincount(labels); counts = counts[counts > 0]
+    # distinct POSITIONS per grain (np.bincount counted instances)
+    counts = positions_per_label(labels, data[ph][0], data[ph][1]); counts = counts[counts > 0]
     bins = np.unique(np.round(np.logspace(0, np.log10(counts.max() + 1), 40)).astype(int))
     h, e = np.histogram(counts, bins=np.append(bins, bins[-1] + 1))
     ctr = 0.5 * (e[:-1] + e[1:]); keep = h > 0
@@ -122,9 +125,11 @@ for j, ph in enumerate(phases):
             transform=ax.transAxes, ha="right", va="top",
             fontsize=9.5, color=COL[ph], fontweight="bold")
 ndraws = [NULL[ph].get("n_draws") for ph in phases]
+_unit = ("scrambled-frame searches" if all(NULL[ph].get("kind") == "search" for ph in phases)
+         else "random draws")
 ax.text(nullmax + 0.8, ax.get_ylim()[1]*0.92,
         "shaded: entire measured null,\n"
-        + (f"{min(ndraws):,} random draws/phase (max {nullmax})" if all(ndraws)
+        + (f"{min(ndraws):,} {_unit}/phase (max {nullmax})" if all(ndraws)
            else f"max {nullmax}"),
         fontsize=8.5, color="#555", va="top")
 ax.set_xlabel(f"{XLABEL[STAT]} ({STAT})", fontsize=9)

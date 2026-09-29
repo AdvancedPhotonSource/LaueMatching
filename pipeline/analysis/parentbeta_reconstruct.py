@@ -79,26 +79,24 @@ assert variants_matched(OMb,asyn)>=11 and max(null)<11
 print("GATE 1 PASSED\n")
 
 # ================= load validated =================
+from frame_peaks import require_labels
 def load(phase):
-    z=np.load(f"{WORK}/peel_map/{PREFIX}_{phase}_validated.npz",allow_pickle=True)
-    return z["oms"],z["X"].astype(float),z["Z"].astype(float),z["labels"]
+    src=f"{WORK}/peel_map/{PREFIX}_{phase}_validated.npz"
+    z=np.load(src,allow_pickle=True)
+    # unclustered (-1) labels are refused: this used to re-cluster them here with an
+    # O(n^2) greedy loop that does not finish on a full raster
+    return z["oms"],z["X"].astype(float),z["Z"].astype(float),require_labels(z["labels"],src)
 aom,aX,aZ,alab=load("alpha"); bom,bX,bZ,blab=load("beta")
 print(f"validated alpha instances {len(aom)}, beta instances {len(bom)}")
 
-# cluster reps (use saved labels if valid, else recluster with the phase's misorientation)
-def reps_from(oms, labels, miso, tol=1.0):
-    if labels.max()>=0 and (labels>=0).all():
-        L=labels
-    else:
-        L=np.full(len(oms),-1); cid=0
-        for i in range(len(oms)):
-            if L[i]>=0: continue
-            un=np.where(L<0)[0]; d=miso(oms[i],oms[un]); L[un[d<tol]]=cid; cid+=1
+# cluster reps from the saved labels (require_labels: every instance is clustered)
+def reps_from(oms, labels, miso):
+    L=labels
     reps=[]; idxs=[]
-    for c in range(L.max()+1):
+    for c in range((L.max()+1) if len(L) else 0):
         ii=np.where(L==c)[0]
         if len(ii): reps.append(oms[ii[0]]); idxs.append(ii)
-    return np.array(reps), idxs, L
+    return np.array(reps).reshape(-1,3,3), idxs, L
 a_reps_all,a_idx_all,alab=reps_from(aom,alab,hexmiso)
 b_reps_all,b_idx_all,blab=reps_from(bom,blab,cubmiso)
 a_sz_all=np.array([len(x) for x in a_idx_all]); b_sz_all=np.array([len(x) for x in b_idx_all])
@@ -162,10 +160,10 @@ for pidx in range(MAXP):
     parents.append(dict(B=B,nv=int(nv),r99=float(r99),decoy_max=int(np.max(dn)),anchor=anc,
                         nclus=int(newly.sum()),ninst=ninst))
     assigned|=newly
-B_inf=parents[0]["B"] if parents else infer_parent(a_reps)
 tot_assigned=int(sum(a_sz[assigned])); tot_sig=int(a_sz.sum())
 print(f"\n=> {len(parents)} significant prior-beta grain(s); "
-      f"{tot_assigned}/{tot_sig} significant-alpha instances ({100*tot_assigned/tot_sig:.0f}%) explained")
+      f"{tot_assigned}/{tot_sig} significant-alpha instances "
+      f"({100*tot_assigned/max(tot_sig,1):.0f}%) explained")
 
 # No parent cleared the random + decoy nulls at this min-cluster-size. Everything below
 # (GATE 5/6, the figure, the summary) assumes at least one parent, so write a well-formed
@@ -182,12 +180,13 @@ if not parents:
              inst_var=inst_var, inst_par=inst_par, aX=aX, aZ=aZ, bX=bX, bZ=bZ)
     print(f"saved {PREFIX}_reconstruction.npz (0 parents)")
     sys.exit(0)
+B_inf=parents[0]["B"]
 
 # ================= GATE 5: spatial coherence + GATE 6 table =================
 print("\n"+"="*66); print("GATE 5  SPATIAL / GATE 6  VARIANT TABLE (parent #1)"); print("="*66)
 ncol=int((inst_var>=0).sum())
-print(f"alpha instances on parent #1 variants: {ncol}/{len(aom)} ({100*ncol/len(aom):.0f}%); "
-      f"all parents: {int((inst_par>=0).sum())} ({100*(inst_par>=0).sum()/len(aom):.0f}%)")
+print(f"alpha instances on parent #1 variants: {ncol}/{len(aom)} ({100*ncol/max(len(aom),1):.0f}%); "
+      f"all parents: {int((inst_par>=0).sum())} ({100*(inst_par>=0).sum()/max(len(aom),1):.0f}%)")
 p1=parents[0]; pa=pred_alpha(B_inf); vc=np.array([(inst_var==v).sum() for v in range(12)])
 print(f"{'variant':>7} {'matched?':>9} {'#alpha_inst':>12} {'min_miso_deg':>13}")
 for v in range(12):
@@ -226,4 +225,4 @@ for i,p in enumerate(parents):
     print(f"  parent #{i+1}: {p['nv']}/12 variants, {p['ninst']} α instances, "
           f"retained-β anchor {p['anchor']:.2f}° {'CONSISTENT' if p['anchor']<TOL else '(no clean anchor)'} "
           f"(random null 99pct {p['r99']:.0f}, decoy max {p['decoy_max']})")
-print(f"  => {len(parents)} prior-β grain(s); {100*tot_assigned/tot_sig:.0f}% of significant α explained")
+print(f"  => {len(parents)} prior-β grain(s); {100*tot_assigned/max(tot_sig,1):.0f}% of significant α explained")

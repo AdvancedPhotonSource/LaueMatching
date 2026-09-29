@@ -16,7 +16,8 @@ DATA = os.environ.get("LAUE_SCAN_DATA") or sys.exit("LAUE_SCAN_DATA is not set (
 RUN = os.environ.get("LAUE_SCAN_BETA") or sys.exit("LAUE_SCAN_BETA is not set (beta indexing-run directory)")
 H5LOC="/entry1/data/data"; TOL=8.0
 from laue_material import Phase
-from frame_peaks import detect_peaks, count_matched_peaks, analytic_gate_note, image_number, orientation_block
+from frame_peaks import (detect_peaks, count_matched_peaks, analytic_gate_note, image_number,
+                         orientation_block, poisson_lambda, cluster_tol)
 _PH_B = Phase.load("beta")
 NPX = _PH_B.npx_x
 def project(OM):
@@ -36,7 +37,7 @@ def validate_beta_frame(item):
             pr=project(OM)
             if not len(pr): continue
             h_dist,h=count_matched_peaks(tree,pr,TOL)
-            lam=len(pr)*npeaks*pi*TOL*TOL/(NPX*NPX)
+            lam=poisson_lambda(len(pr),npeaks,TOL,_PH_B.npx_x,_PH_B.npx_y)
             keep[i]=poisson.sf(h-1,lam)<1e-4
             nh[i]=h; nd[i]=h_dist
     return fn, oms, keep, nh, nd
@@ -69,12 +70,13 @@ if __name__ == "__main__":
     # cluster; operators follow the beta phase's space group
     oms_v=np.array(oms_v)
     if len(oms_v):
+        TOLC=cluster_tol()   # LAUE_CLUSTER_TOL (default 1.0); this script used 0.7
         labels=np.full(len(oms_v),-1); cid=0
         for i in range(len(oms_v)):
             if labels[i]>=0: continue
             un=np.where(labels<0)[0]
-            d=_PH_B.misorientation(oms_v[i],oms_v[un]); labels[un[d<0.7]]=cid; cid+=1
+            d=_PH_B.misorientation(oms_v[i],oms_v[un]); labels[un[d<TOLC]]=cid; cid+=1
         counts=np.bincount(labels)
-        print(f"verified BETA grains: {cid}; at >=2 frames: {(counts>=2).sum()}; >=5: {(counts>=5).sum()}")
+        print(f"verified BETA grains (<{TOLC:g} deg): {cid}; at >=2 frames: {(counts>=2).sum()}; >=5: {(counts>=5).sum()}")
         np.savez(f"{WORK}/peel_map/beta_verified.npz", oms=oms_v, labels=labels, frames=np.array(fr_v),
-                 nhit=np.array(nh_v), nhit_distinct=np.array(nd_v))
+                 nhit=np.array(nh_v), nhit_distinct=np.array(nd_v), cluster_tol=np.float64(TOLC))

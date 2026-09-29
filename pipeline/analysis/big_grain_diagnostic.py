@@ -65,6 +65,8 @@ NSHUF = int(sys.argv[2]) if len(sys.argv) > 2 else 400
 
 z = np.load(f"{W}/peel_map/{PREFIX}_alpha_validated.npz", allow_pickle=True)
 oms, X, Z, lab = z["oms"], z["X"].astype(float), z["Z"].astype(float), z["labels"]
+from frame_peaks import require_labels
+require_labels(lab, f"{W}/peel_map/{PREFIX}_alpha_validated.npz")
 counts = np.bincount(lab[lab >= 0])
 order = np.argsort(counts)[::-1]
 cid = int(order[RANK])

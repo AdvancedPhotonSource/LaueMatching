@@ -16,6 +16,12 @@
 #   PY                   python with numpy, scipy, h5py, matplotlib (default: python)
 #   SCRIPTDIR            the analysis scripts (default: the directory holding this file)
 #   NW                   worker processes (default 16)
+#   LAUE_NULL_KIND       search (default) | draw. search: after null_model.py, run
+#                        search_null.py per phase (the SEARCH null, invariant 29:
+#                        the scan's own indexer on spot-scrambled frames) and gate
+#                        on it. draw: skip it and gate on the per-draw null.
+#   LAUE_SEARCH_NULL_FRAMES     frames per phase for the search null (default 20)
+#   LAUE_SEARCH_NULL_SCRAMBLES  scrambles per frame (default 1)
 #
 # Steps, in order. Per phase: validate each phase, MEASURE the null on this scan
 # (never inherit another scan's), gate against it. Only when BOTH alpha and beta
@@ -122,28 +128,41 @@ done
 # would win over this scan's measurement. Exporting the measured value closes
 # that door. A missing file or phase stops the chain.
 run "$PY" "$S/null_model.py" 120 150 "$NW"
+# The SEARCH null (invariant 29): the same indexer + validator on spot-scrambled
+# frames; search_null.py adds a search_null block to the same json. The gates use
+# it by default. LAUE_NULL_KIND=draw skips it (gates then use the per-draw null).
+case "${LAUE_NULL_KIND:-search}" in
+  search)
+    for ph in "${PHASES[@]}"; do
+      run "$PY" "$S/search_null.py" "$ph" "${LAUE_SEARCH_NULL_FRAMES:-20}" \
+          "${LAUE_SEARCH_NULL_SCRAMBLES:-1}" "$NW"
+    done ;;
+  draw) log "LAUE_NULL_KIND=draw: search null NOT measured; gating on the per-draw null (invariant 29 warns this is not safe against the search)" ;;
+  *) log "ERROR: LAUE_NULL_KIND=$LAUE_NULL_KIND (must be search or draw)"; exit 1 ;;
+esac
 for ph in "${PHASES[@]}"; do
   var="LAUE_NULLMAX_$(upper "$ph")"
-  val=$("$PY" - "$S" "$LAUE_WORK" "$LAUE_OUT_PREFIX" "$ph" <<'PYEOF'
-import json, os, sys
+  # Read the max with the gates' own selection (frame_peaks.load_null: search null
+  # unless LAUE_NULL_KIND=draw), with any inherited LAUE_NULLMAX_<PHASE> removed so
+  # it cannot win over this scan's measurement.
+  val=$(env -u "$var" "$PY" - "$S" "$LAUE_WORK" "$LAUE_OUT_PREFIX" "$ph" <<'PYEOF'
+import contextlib, os, sys
 sys.path.insert(0, sys.argv[1])
-from frame_peaks import gate_statistic, null_json_path
+from frame_peaks import gate_statistic, load_null, null_json_path
 work, prefix, phase = sys.argv[2:5]
 path = null_json_path(work, prefix)
 if not os.path.isfile(path):
     sys.exit(f"null_model.py wrote no {path}")
-stat = gate_statistic()
-try:
-    print(int(json.load(open(path))["phases"][phase][stat]["max"]))
-except (KeyError, TypeError, ValueError) as e:
-    sys.exit(f"{path} has no {phase}/{stat}/max ({e!r})")
+with contextlib.redirect_stdout(sys.stderr):
+    rec = load_null(phase, work, prefix, gate_statistic())
+print(int(rec["max"]))
 PYEOF
 ) || { log "STEP FAILED: no measured null for phase $ph"; exit 1; }
   if [ -n "${!var:-}" ] && [ "${!var}" != "$val" ]; then
     log "  $var was $(printf %s "${!var}") in the environment; replaced by the value measured on this scan"
   fi
   export "$var=$val"
-  log "  $var=$val (measured on this scan, statistic ${LAUE_GATE_STAT:-nhit})"
+  log "  $var=$val (measured on this scan, statistic ${LAUE_GATE_STAT:-nhit}, null kind ${LAUE_NULL_KIND:-search if measured})"
 done
 
 run "$PY" "$S/empirical_gate.py"

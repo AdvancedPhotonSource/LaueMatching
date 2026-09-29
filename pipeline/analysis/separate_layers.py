@@ -36,7 +36,8 @@ from concurrent.futures import ProcessPoolExecutor
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from laue_material import Phase, phase_name
-from raster import raster_positions, raster_shape
+from raster import (nan_corr, positions_per_label, raster_positions, raster_shape,
+                    toroidal_shift_null)
 
 W = os.environ.get("LAUE_WORK")
 if not W:
@@ -53,7 +54,7 @@ B, ROTI, P, KI, dx, dy, NPX = PH.B, PH.roti, PH.P, PH.ki, PH.dx, PH.dy, PH.npx_x
 Elo, Ehi = PH.Elo, PH.Ehi
 # Column maps by the table's own column count (laue_index.records via frame_peaks):
 # these were the stream positions hard-coded (OM 23, grain 1, spot grain/h/k/l 1,3,4,5).
-from frame_peaks import solution_format, spot_columns
+from frame_peaks import clustered_npz, image_number, solution_format, spot_columns
 
 # ---- global frame -> (output.h5) map across all shards -----------------------
 def build_frame_map():
@@ -66,9 +67,17 @@ def build_frame_map():
         if PROV_MATCH and PROV_MATCH not in prov:
             continue
         mp = json.load(open(f"{d}/frame_mapping.json"))
+        # the output files by their FULL image number (a 5-digit name pattern
+        # missed image 100000 and above)
+        outs = {}
+        for h5 in glob.glob(f"{d}/results/image_*.output.h5"):
+            try:
+                outs[image_number(h5)] = h5
+            except ValueError:
+                pass
         for k, v in mp.items():
-            if isinstance(v, dict) and "file" in v:
-                fmap[v["file"]] = f"{d}/results/image_{int(k):05d}.output.h5"
+            if isinstance(v, dict) and "file" in v and int(k) in outs:
+                fmap[v["file"]] = outs[int(k)]
     return fmap
 
 
@@ -125,10 +134,14 @@ def process_frame(args):
 
 
 def main():
-    z = np.load(f"{W}/peel_map/full_zn_clustered.npz", allow_pickle=True)
+    src = clustered_npz(W)            # peel_map/<prefix>_*_clustered.npz or LAUE_CLUSTERED_NPZ
+    print(f"clustered instances from {src}", flush=True)
+    z = np.load(src, allow_pickle=True)
     oms, lab, fr, nh = z["oms"], z["labels"], z["frames"], z["nhit"].astype(int)
     row, col = raster_positions(fr, Z=z["Z"] if "Z" in z.files else None, shape=SHAPE)
-    foot = np.bincount(lab)[lab]                       # footprint per instance
+    # footprint = distinct POSITIONS of the instance's cluster (np.bincount counted
+    # instances: two orientations at one position are one position)
+    foot = positions_per_label(lab, row, col)[lab]
     print(f"{len(oms)} instances, {len(np.unique(lab))} clusters", flush=True)
 
     fmap = build_frame_map()
@@ -166,7 +179,24 @@ def main():
     null = np.array([float(np.corrcoef(fo, rng.permutation(me))[0, 1]) for _ in range(2000)])
     p = float((np.abs(null) >= abs(r)).mean())
     print("\n=== persistence vs spectral hardness (per orientation) ===")
-    print(f"  corr(log footprint, median energy) = {r:+.3f}   perm p = {p:.4g}")
+    print(f"  corr(log footprint, median energy) = {r:+.3f}   perm p = {p:.4g}  "
+          f"[per instance; NOT a valid p: instances of one grain and neighbouring "
+          f"positions are not independent]")
+    # The spatial test (invariant 10): per-POSITION maps of mean log footprint and
+    # mean energy, correlated, with the energy map toroidally shifted against the
+    # footprint map. This is the p the verdict below uses.
+    F = np.full(SHAPE, np.nan); E = np.full(SHAPE, np.nan)
+    cnt = np.zeros(SHAPE)
+    sF = np.zeros(SHAPE); sE = np.zeros(SHAPE)
+    np.add.at(sF, (row[ok], col[ok]), fo); np.add.at(sE, (row[ok], col[ok]), me)
+    np.add.at(cnt, (row[ok], col[ok]), 1)
+    has = cnt > 0
+    F[has] = sF[has] / cnt[has]; E[has] = sE[has] / cnt[has]
+    res = toroidal_shift_null(lambda f: nan_corr(F, f), E,
+                              n=int(os.environ.get("LAUE_NULL_REPS", "1000")), rng=0)
+    r_map, p_map = res["obs"], res["p"]
+    print(f"  per-position map: corr(mean log footprint, mean energy) = {r_map:+.3f}   "
+          f"toroidal-shift p = {p_map:.4g} ({res['n']} shifts)")
     print("  PREDICTED if big grains = substrate seen through deposit: POSITIVE")
 
     for lo, hi, name in [(1, 1, "singletons (deposit?)"), (2, 9, "small 2-9"),
@@ -218,16 +248,19 @@ def main():
     warn = ("substrate/deposit are a DEFINITIONAL PARTITION (footprint/energy "
             "threshold), NOT a validated separation -- contrasts on these flags "
             "are CIRCULAR. The honest layer-agreement test is "
-            f"corr_footprint_energy = {r:+.3f} (perm p={p:.3g}): wrong sign, "
-            "~1% variance -> layers are NOT separable per position.")
+            f"corr_footprint_energy = {r:+.3f} per instance; per-position map "
+            f"r = {r_map:+.3f}, toroidal-shift p = {p_map:.3g} (the per-instance "
+            f"permutation p={p:.3g} ignores autocorrelation and is not a valid test).")
     np.savez(f"{W}/analysis_out/layer_separation.npz",
              oms=oms, labels=lab, row=row, col=col, footprint=foot,
              medE=medE, nassigned=nasg, nhit=nh,
              substrate=substrate, deposit=deposit,
              corr_footprint_energy=np.float64(r), perm_p=np.float64(p),
+             corr_map=np.float64(r_map), toroidal_p=np.float64(p_map),
              warning=warn)
     print(f"\nwrote layer_separation.npz")
-    print(f"  [guard] corr_footprint_energy={r:+.3f} p={p:.3g} stored with warning")
+    print(f"  [guard] corr_footprint_energy={r:+.3f}, map r={r_map:+.3f} toroidal p={p_map:.3g} "
+          f"stored with warning")
     print("SEPARATION_DONE", flush=True)
 
 

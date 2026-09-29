@@ -27,7 +27,7 @@ DATA=os.environ.get("LAUE_SCAN_DATA") or sys.exit(
     "LAUE_SCAN_DATA is not set (folder of the raw frames).\n" + __doc__)
 RUNDIR=os.environ.get(f"LAUE_SCAN_{PHASE.upper()}") or sys.exit(
     f"LAUE_SCAN_{PHASE.upper()} is not set (indexing-run directory for phase {PHASE!r}).\n" + __doc__)
-from frame_peaks import out_prefix, image_number, orientation_block
+from frame_peaks import out_prefix, image_number, orientation_block, cluster_tol
 PREFIX=out_prefix()
 OUT=f"{W}/peel_map"; FIG=f"{W}/figures"
 os.makedirs(OUT, exist_ok=True); os.makedirs(FIG, exist_ok=True)
@@ -82,13 +82,16 @@ if __name__ == "__main__":
     print(f"[{PHASE}] {len(_ph.sym_ops)} proper-rotation operators from space group {_ph.sgnum}",flush=True)
     def miso(A,Bs):
         return _ph.misorientation(A,Bs)          # degrees
+    TOLC=cluster_tol()   # LAUE_CLUSTER_TOL (default 1.0); this script used 1.5
     labels=np.full(len(oms_all),-1); cid=0
     for i in range(len(oms_all)):
         if labels[i]>=0: continue
-        un=np.where(labels<0)[0]; labels[un[miso(oms_all[i],oms_all[un])<1.5]]=cid; cid+=1
-    counts=np.bincount(labels)
-    print(f"[{PHASE}] grains (clusters<1.5deg): {cid}; recurring>=2: {(counts>=2).sum()}; >=5: {(counts>=5).sum()}; >=10: {(counts>=10).sum()}; max {counts.max()}",flush=True)
-    np.savez(f"{OUT}/{PREFIX}_{PHASE}.npz", oms=oms_all, X=X_all, Z=Z_all, labels=labels)
+        un=np.where(labels<0)[0]; labels[un[miso(oms_all[i],oms_all[un])<TOLC]]=cid; cid+=1
+    from raster import positions_per_label
+    counts=positions_per_label(labels,X_all,Z_all)   # distinct POSITIONS (bincount counted instances)
+    print(f"[{PHASE}] grains (clusters<{TOLC:g}deg): {cid}; recurring at >=2 positions: {(counts>=2).sum()}; >=5: {(counts>=5).sum()}; >=10: {(counts>=10).sum()}; max {counts.max()} positions",flush=True)
+    np.savez(f"{OUT}/{PREFIX}_{PHASE}.npz", oms=oms_all, X=X_all, Z=Z_all, labels=labels,
+             cluster_tol=np.float64(TOLC))
 
     # --- figure: grains-per-position heatmap + recurrence spectrum ---
     pos=np.array(list(per_pos.keys())); pc=np.array(list(per_pos.values()))

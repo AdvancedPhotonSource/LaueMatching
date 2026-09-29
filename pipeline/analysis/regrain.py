@@ -42,15 +42,17 @@ usage: regrain.py [phase] [gap]
        unless LAUE_CONNECTIVITY=4 -- 8 is what every reported grain count used.
 env: LAUE_WORK, LAUE_OUT_PREFIX, LAUE_PARAMS_<PHASE>; LAUE_GATE_STAT
      (nhit | nhit_distinct, default nhit) picks the hit statistic the gold tier
-     gates on; the null for THAT statistic comes from null_model.py's
-     peel_map/<prefix>_null.json, or LAUE_NULLMAX_<PHASE> (which overrides it).
+     gates on; the null for THAT statistic comes from peel_map/<prefix>_null.json
+     (search_null.py's search null by default, null_model.py's per-draw null as a
+     warned fallback; LAUE_NULL_KIND=search|draw forces one), or
+     LAUE_NULLMAX_<PHASE> (which overrides it).
 """
 import os
 import sys
 import numpy as np
 from scipy import ndimage as ndi
 
-from frame_peaks import gate_counts, gate_statistic, load_null, out_prefix
+from frame_peaks import gate_counts, gate_statistic, load_null, out_prefix, require_labels
 from raster import connectivity, structure
 
 W = os.environ.get("LAUE_WORK") or sys.exit("LAUE_WORK is not set (peel_map/ is read and written under it)")
@@ -69,11 +71,13 @@ TOLS = [0.3, 0.5, 1.0]
 STAT = gate_statistic()
 _NULL = load_null(PHASE, W, PREFIX, STAT)
 NULLMAX = int(_NULL["max"])
-print(f"[{PHASE}] gold tier gates {STAT} > {NULLMAX} (null from {_NULL['source']})", flush=True)
+print(f"[{PHASE}] gold tier gates {STAT} > {NULLMAX} ({_NULL['kind']} null from "
+      f"{_NULL['source']})", flush=True)
 
 _src = f"{W}/peel_map/{PREFIX}_{PHASE}_validated.npz"
 z = np.load(_src, allow_pickle=True)
 oms, X, Z, lab = z["oms"], z["X"].astype(float), z["Z"].astype(float), z["labels"]
+require_labels(lab, _src)
 nhit = gate_counts(z, STAT, _src)           # the statistic in force, whatever its name
 
 # Symmetry follows the space group of the phase, not its name. The old
