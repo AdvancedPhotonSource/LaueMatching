@@ -76,3 +76,14 @@ if __name__ == "__main__":
                test_stream_format_offsets_are_runimage_plus_one,
                test_parse_solutions_empty, test_parse_solutions_snapshot]:
         fn(); print(f"PASS  {fn.__name__}")
+
+
+def test_output_type_hints_resolve():
+    # output.py annotated Dict without importing it; harmless only while
+    # annotations stay strings (from __future__ import annotations).
+    import typing
+    from laue_index import output
+    for name in dir(output):
+        obj = getattr(output, name)
+        if callable(obj) and getattr(obj, "__module__", None) == output.__name__:
+            typing.get_type_hints(obj)

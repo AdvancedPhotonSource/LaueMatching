@@ -8,6 +8,11 @@
 # Elo and Ehi, and the C indexer in LatticeParameter, P_Array, R_Array, Elo and
 # Ehi (and requires 0 < Elo < Ehi), naming the key; 0.7.1 and earlier silently
 # fell back to a default or to 0.
+# From 0.8 the Python parsers also REQUIRE every key in
+# laue_index.config_schema.REQUIRED_KEYS (LatticeParameter, P_Array, R_Array,
+# NrPxX, NrPxY, PxX, PxY, MaxNrLaueSpots, MinIntensity, NMeadianPasses,
+# MinGoodSpots, RobustFilter, BackgroundFile): their defaults used to differ
+# between RunImage, streaming and the C, so a file without one is refused.
 # Other keys are not checked by the parsers. run_laue.sh,
 # pipeline/dispatch/preflight.sh and pipeline/dispatch/mkrun.py also refuse a file
 # that still contains one, before anything is launched.
@@ -51,8 +56,10 @@ ThresholdMethod percentile
 ThresholdPercentile 99.8
 MinNrSpots 8
 MinGoodSpots 4
+RobustFilter 1                                    # 1 = twin/CSL-aware filter (keeps Sigma3 twins); 0 = legacy
 MinIntensity 50
 MinArea 4
+NMeadianPasses 1                                  # background median passes (streaming used 1)
 GaussSigmaMax 2.5                                 # cap on auto detection-blur (peel widens it)
 WatershedImage 1
 MaxNrLaueSpots 30

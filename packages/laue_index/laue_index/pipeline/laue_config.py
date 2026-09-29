@@ -36,6 +36,14 @@ if _INSTALL_PATH not in sys.path:
 from laue_index import config_schema as _schema  # noqa: E402
 
 
+def _sd(key: str):
+    """Default for *key* from config_schema.SCHEMA: the ONE place defaults live
+    (0.8). This dataclass used to carry its own, and several disagreed with the
+    schema and with the streaming parser (NMeadianPasses 5 vs 1,
+    EnableSimulation/EnableVisualization True vs 0, PxX 0.2 not metres)."""
+    return _schema.SCHEMA_BY_KEY[key].default
+
+
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
@@ -109,32 +117,32 @@ logger = logging.getLogger("LaueMatching")
 @dataclass
 class ImageProcessingConfig:
     """Image processing configuration parameters."""
-    threshold_method: str = "adaptive"  # adaptive, otsu, fixed, or percentile
-    threshold_value: float = 0.0       # Used only if threshold_method is 'fixed'
-    threshold_percentile: float = 90.0 # Used only if threshold_method is 'percentile'
-    min_area: int = 10
+    threshold_method: str = _sd("ThresholdMethod")  # adaptive, otsu, fixed, or percentile
+    threshold_value: float = _sd("Threshold")       # Used only if threshold_method is 'fixed'
+    threshold_percentile: float = _sd("ThresholdPercentile") # Used only if threshold_method is 'percentile'
+    min_area: int = _sd("MinArea")
     # Cap (px) on the automatic matching-blur sigma, 0 = none. Applied by
     # laue_index.preprocess (streaming) and RunImage. See config_schema.
-    gauss_sigma_max: float = 0.0
+    gauss_sigma_max: float = _sd("GaussSigmaMax")
     # 0 = choose automatically (laue_index.workers). See config_schema.
-    preprocess_workers: int = 0
+    preprocess_workers: int = _sd("PreprocessWorkers")
     # Detector positions whose spots must not count as evidence (a known substrate,
     # or the spots an accepted orientation already explains between iterative
-    # passes). Consumed in laue_index.preprocess.  NOTE: this dataclass is
-    # hand-maintained and is NOT generated from config_schema.SCHEMA -- a key
-    # present in the schema but missing here is parsed and then silently dropped,
-    # so the run proceeds with the exclusion quietly not applied.  Keep the two
-    # in step.
-    exclude_spots_file: str = ""
-    exclude_spots_dir: str = ""
-    filter_radius: int = 101
-    median_passes: int = 5
-    watershed_enabled: bool = True
-    gaussian_factor: float = 0.25
-    enhance_contrast: bool = False
-    denoise_image: bool = False
-    denoise_strength: float = 1.0
-    edge_enhancement: bool = False
+    # passes). Consumed in laue_index.preprocess.  NOTE: the FIELD LIST of this
+    # dataclass is hand-maintained (only the defaults come from
+    # config_schema.SCHEMA, via _sd) -- a key present in the schema but missing
+    # here is parsed and then silently dropped, so the run proceeds with the
+    # exclusion quietly not applied.  Keep the two in step.
+    exclude_spots_file: str = _sd("ExcludeSpotsFile")
+    exclude_spots_dir: str = _sd("ExcludeSpotsDir")
+    filter_radius: int = _sd("FilterRadius")
+    median_passes: int = _sd("NMeadianPasses")
+    watershed_enabled: bool = _sd("WatershedImage")
+    gaussian_factor: float = _sd("GaussianFactor")
+    enhance_contrast: bool = _sd("EnhanceContrast")
+    denoise_image: bool = _sd("DenoiseImage")
+    denoise_strength: float = _sd("DenoiseStrength")
+    edge_enhancement: bool = _sd("EdgeEnhancement")
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
@@ -152,7 +160,7 @@ class VisualizationConfig:
     generate_report: bool = True
     report_template: str = "default"
     show_hkl_labels: bool = False
-    enable_visualization: bool = True
+    enable_visualization: bool = _sd("EnableVisualization")
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
@@ -162,10 +170,10 @@ class VisualizationConfig:
 @dataclass
 class SimulationConfig:
     """Configuration parameters for diffraction simulation."""
-    enable_simulation: bool = True
-    skip_percentage: float = 0.0
+    enable_simulation: bool = _sd("EnableSimulation")
+    skip_percentage: float = _sd("SkipPercentage")
     orientation_file: str = "orientations.txt"
-    energies: str = "5 30"  # Energy range in keV (Elo Ehi)
+    energies: str = _sd("SimulationEnergies")  # Energy range in keV (Elo Ehi)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
@@ -176,52 +184,52 @@ class SimulationConfig:
 class LaueConfig:
     """Main configuration class for Laue matching."""
     # Core parameters
-    space_group: int = 225
-    symmetry: str = "F"
-    lattice_parameter: str = "0.3615 0.3615 0.3615 90 90 90"
-    r_array: str = "-1.2 -1.2 -1.2"
-    p_array: str = "0.02 0.002 0.513"
+    space_group: int = _sd("SpaceGroup")
+    symmetry: str = _sd("Symmetry")
+    lattice_parameter: str = _sd("LatticeParameter")
+    r_array: str = _sd("R_Array")
+    p_array: str = _sd("P_Array")
     # Exclusive-spot floor for the orientation filter: WINNER-TAKE-ALL across
     # the frame's orientations (laue_index.filtering.calculate_unique_spots),
     # not a count of distinct observed peaks.
-    min_good_spots: int = 5
-    max_laue_spots: int = 7
-    min_nr_spots: int = 5
+    min_good_spots: int = _sd("MinGoodSpots")
+    max_laue_spots: int = _sd("MaxNrLaueSpots")
+    min_nr_spots: int = _sd("MinNrSpots")
     # Twin/CSL-aware robust orientation filter (default on). When True, a real
     # Sigma3 twin is not deleted just because the winner-take-all assignment
     # gave its shared reflections to the parent; set False for the legacy
     # filter (exclusive-spot count only).
-    robust_filter: bool = True
+    robust_filter: bool = _sd("RobustFilter")
     # Per-thread orientation batch size for the indexer.  Bounds memory:
     # peak RAM ~= numProcs * batch_size * (1 + 2*max_laue_spots) * 2 bytes.
-    batch_size: int = 1_000_000
+    batch_size: int = _sd("BatchSize")
 
     # File paths
-    result_dir: str = "results"
-    orientation_file: str = "orientations.bin"
-    hkl_file: str = "hkls.bin"
-    background_file: str = "median.bin"
-    forward_file: str = "forward.bin"
+    result_dir: str = _sd("ResultDir")
+    orientation_file: str = _sd("OrientationFile")
+    hkl_file: str = _sd("HKLFile")
+    background_file: str = _sd("BackgroundFile")
+    forward_file: str = _sd("ForwardFile")
 
     # Detector parameters
-    px_x: float = 0.2
-    px_y: float = 0.2
-    nr_px_x: int = 2048
-    nr_px_y: int = 2048
-    orientation_spacing: float = 0.4
+    px_x: float = _sd("PxX")
+    px_y: float = _sd("PxY")
+    nr_px_x: int = _sd("NrPxX")
+    nr_px_y: int = _sd("NrPxY")
+    orientation_spacing: float = _sd("OrientationSpacing")
     distance: float = 0.513
-    min_intensity: float = 50.0
-    elo: float = 5.0
-    ehi: float = 30.0
-    maxAngle: float = 2.0
+    min_intensity: float = _sd("MinIntensity")
+    elo: float = _sd("Elo")
+    ehi: float = _sd("Ehi")
+    maxAngle: float = _sd("MaxAngle")
     # Read by the C binaries straight from the params file; mirrored here so
     # config_schema validates them (FRACTIONS in [0, 1)) and a rewrite keeps them.
-    min_spot_intensity: float = 0.0
-    tol_lat_c: str = "0 0 0 0 0 0"
-    tol_c_over_a: float = 0.0
+    min_spot_intensity: float = _sd("MinSpotIntensity")
+    tol_lat_c: str = _sd("tol_LatC")
+    tol_c_over_a: float = _sd("tol_c_over_a")
 
     # Processing parameters
-    do_forward: bool = True
+    do_forward: bool = _sd("DoFwd")
     processing_type: str = "CPU"
     num_cpus: int = 60
 
@@ -235,9 +243,9 @@ class LaueConfig:
     log_file: Optional[str] = None
 
     # Optional IndexFile metadata (used by laue_indexfile.py, alongside this file)
-    xtal_file: str = ""           # path to a CIF/xml crystal description (optional)
-    structure_desc: str = ""      # short structure tag, e.g. "Ni", "Cu"
-    atom_description: str = ""    # raw ``AtomDesctiption`` line contents (sic)
+    xtal_file: str = _sd("XtalFile")           # path to a CIF/xml crystal description (optional)
+    structure_desc: str = _sd("StructureDesc")      # short structure tag, e.g. "Ni", "Cu"
+    atom_description: str = _sd("AtomDescription")    # raw ``AtomDesctiption`` line contents (sic)
     write_indexfile: bool = True  # emit .indexing.txt alongside output HDF5 (runtime flag)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -332,10 +340,24 @@ class ConfigurationManager:
             logger.error(f"Error reading or parsing configuration file '{self.config_file}': {str(e)}")
             sys.exit(1)
 
+    def _check_required_dict(self, config_dict) -> None:
+        """REQUIRED_KEYS for a JSON/YAML config, which is keyed by field name."""
+        present = set()
+        for key in _schema.REQUIRED_KEYS:
+            prm = _schema.SCHEMA_BY_KEY[key]
+            d = config_dict if prm.target == "config" else (config_dict or {}).get(prm.target, {})
+            if isinstance(d, dict) and prm.field in d:
+                present.add(key)
+        missing = _schema.missing_required(present)
+        if missing:
+            raise _schema.FatalConfigError(
+                _schema.missing_required_message(missing, self.config_file))
+
     def _load_from_json(self) -> None:
         """Load configuration from JSON file."""
         with open(self.config_file, 'r') as f:
             config_dict = json.load(f)
+            self._check_required_dict(config_dict)
             self.config = LaueConfig.from_dict(config_dict)
 
     def _load_from_yaml(self) -> None:
@@ -344,6 +366,7 @@ class ConfigurationManager:
             raise ImportError("PyYAML is required for YAML config files: pip install pyyaml")
         with open(self.config_file, 'r') as f:
             config_dict = yaml.safe_load(f)
+            self._check_required_dict(config_dict)
             self.config = LaueConfig.from_dict(config_dict)
 
     def _load_from_text(self) -> None:
@@ -351,9 +374,13 @@ class ConfigurationManager:
         with open(self.config_file, 'r') as f:
             lines = f.readlines()
 
+        present = set()
         for line_num, line in enumerate(lines):
              line_content = line.strip()
              if line_content and not line_content.startswith('#'):
+                key_tok = line_content.split('#', 1)[0].split()
+                if key_tok:
+                    present.add(_schema._ALIASES.get(key_tok[0], key_tok[0]))
                 try:
                     self._parse_classic_config_line(line_content)
                 except _schema.FatalConfigError as e:
@@ -365,6 +392,12 @@ class ConfigurationManager:
                         f"line {line_num + 1} of {self.config_file}: {e}") from e
                 except Exception as e:
                     logger.error(f"Error parsing line {line_num + 1} in {self.config_file}: '{line_content}' - {str(e)}")
+        # Keys with no default (config_schema.REQUIRED_KEYS): all missing ones
+        # named at once; _load_config exits non-zero.
+        missing = _schema.missing_required(present)
+        if missing:
+            raise _schema.FatalConfigError(
+                _schema.missing_required_message(missing, self.config_file))
 
     def _parse_classic_config_line(self, line: str) -> None:
         """Parse one classic-format config line via the declarative schema

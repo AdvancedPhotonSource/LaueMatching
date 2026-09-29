@@ -5,11 +5,10 @@ laue_postprocess.py — Post-processing for LaueMatchingGPUStream results
 Reads the daemon's appended output files (solutions.txt, spots.txt),
 splits them by ImageNr, applies the config-selected orientation filter
 (RobustFilter, MinGoodSpots, MinNrSpots, MaxAngle -- the same PostProcessor and
-the same keys as the non-streaming RunImage path; an explicit key means the
-same on both paths, an ABSENT RobustFilter keeps the 0.7.1 streaming legacy
-filter), and generates
-per-image HDF5 output + an interactive HTML visualization with an image
-selector dropdown.
+the same keys as the non-streaming RunImage path, meaning the same on both;
+RobustFilter and MinGoodSpots are required keys since 0.8), and generates
+per-image HDF5 output (one per mapped frame; skipped and no-solution frames
+get a stub carrying skip_reason).
 
 Usage:
     python laue_postprocess.py \
@@ -47,6 +46,8 @@ from laue_index.records import SOLUTION_FORMATS
 from laue_index.postprocess import PostProcessor
 _PP_RUNIMAGE = SOLUTION_FORMATS["runimage"]
 _PP_STREAM = SOLUTION_FORMATS["stream"]
+# Stream spots.txt: ImageNr GrainNr SpotNr h k l X Y Q0 Q1 Q2 Intensity
+_STREAM_SPOT_COLS = 12
 
 # Optional imports
 try:
@@ -94,9 +95,9 @@ def process_single_image(
     1. Use real image segmentation labels (if provided), else build dummy labels.
     2. Calculate winner-take-all (exclusive) spots per orientation.
     3. Filter orientations with the config-selected filter: ``RobustFilter``
-       1 (twin/CSL-aware) or 0 (legacy); ABSENT = legacy, as in 0.7.1
-       streaming (RunImage's absent default is 1). ``MinGoodSpots`` (or
-       *min_unique* when given; 2 when absent) is the exclusive-label floor.
+       1 (twin/CSL-aware) or 0 (legacy); a hand-built *cfg* with None means
+       legacy (parse_config requires the key since 0.8). ``MinGoodSpots`` (or
+       *min_unique* when given) is the exclusive-label floor.
        The robust filter also uses ``MinNrSpots`` (floor on own winner-take-all
        pixels) and ``MaxAngle`` (near-duplicate angle); legacy uses neither.
     4. Sort filtered orientations by quality (descending).
@@ -128,6 +129,8 @@ def process_single_image(
 
     if orientations.size == 0 or spots.size == 0:
         logger.warning(f"Image {image_nr}: no orientations or spots to process")
+        if HAS_H5PY:
+            _write_stub_h5(image_nr, output_dir, "no_solution", mapping_info)
         return result
 
     # Build a simple label image from spot positions for the winner-take-all
@@ -172,12 +175,10 @@ def process_single_image(
     # MinNrSpots in Python, so streaming and non-streaming runs of one frame
     # could keep different orientations.
     #
-    # Explicit keys are honoured exactly as RunImage honours them; ABSENT keys
-    # keep 0.7.1 streaming behaviour so an existing config reproduces its
-    # result: RobustFilter absent (None) -> legacy, MinGoodSpots absent -> 2.
-    # MinNrSpots / MaxAngle are used only by the robust filter (the legacy
-    # filter, on either path, reads neither), so with RobustFilter absent they
-    # change nothing, as in 0.7.1.
+    # Keys are honoured exactly as RunImage honours them. RobustFilter and
+    # MinGoodSpots are required since 0.8 (0.7.2 kept 0.7.1 behaviour for an
+    # absent key: legacy filter, floor 2). MinNrSpots / MaxAngle are used only
+    # by the robust filter (the legacy filter, on either path, reads neither).
     if min_unique is None:
         min_unique = int(cfg.get("min_good_spots", 2))
     robust = _robust_in_force(cfg)
@@ -236,6 +237,42 @@ def _robust_in_force(cfg: Dict[str, Any]) -> bool:
     return False if rf is None else bool(rf)
 
 
+def _write_stub_h5(
+    image_nr: int,
+    output_dir: str,
+    reason: str,
+    mapping_info: Optional[Dict] = None,
+) -> None:
+    """An output h5 for a frame with nothing indexed: the server skipped it
+    (``reason`` from frame_mapping.json, e.g. ``no_spots``) or the daemon found
+    no solution (``no_solution``).
+
+    Written so that every frame sent to a run has exactly one
+    image_*.output.h5: pipeline/dispatch/wait_static.sh counts these against
+    the frames sent, and without a file per empty frame it could never report
+    COMPLETE. Same layout as a real output, with empty tables (stream widths),
+    ``n_filtered`` = 0 and ``skip_reason`` set; no /entry/data.
+    """
+    h5_path = os.path.join(output_dir, f"image_{image_nr:05d}.output.h5")
+    try:
+        with h5py.File(h5_path, "w") as hf:
+            grp = hf.require_group("/entry/results")
+            grp.create_dataset("orientations", data=np.empty((0, _PP_STREAM.n_cols)))
+            grp.create_dataset("filtered_orientations", data=np.empty((0, _PP_STREAM.n_cols)))
+            grp.create_dataset("spots", data=np.empty((0, _STREAM_SPOT_COLS)))
+            grp.create_dataset("filtered_spots", data=np.empty((0, _STREAM_SPOT_COLS)))
+            grp.create_dataset("unique_spots_per_orientation",
+                               data=np.empty((0, 2), dtype=np.int32))
+            grp.attrs["image_nr"] = image_nr
+            grp.attrs["n_filtered"] = 0
+            grp.attrs["skip_reason"] = reason
+            if mapping_info:
+                grp.attrs["source_file"] = mapping_info.get("file", "")
+                grp.attrs["source_frame"] = mapping_info.get("frame", -1)
+    except Exception as e:
+        logger.error(f"  Error writing stub H5 for image {image_nr}: {e}")
+
+
 def _save_image_h5(
     image_nr: int,
     output_dir: str,
@@ -283,12 +320,20 @@ def _save_image_h5(
 
                     if os.path.isfile(h5_path_src):
                         raw = lsu.load_h5_image(
-                            h5_path_src, frame_idx=src_frame,
+                            h5_path_src, frame_index=src_frame,
                             h5_location=cfg.get("h5_location", "/entry/data/data"),
                         )
                         if raw is not None:
+                            # The server's background and this frame's exclusion
+                            # mask (see postprocess()); without a record the
+                            # background is recomputed from this frame.
+                            bg_used = cfg.get("_background_used", "")
+                            background = (lsu.load_background(
+                                bg_used, cfg["nr_px_x"], cfg["nr_px_y"])
+                                if bg_used else None)
                             intermediates = lsu.preprocess_image(
-                                raw, cfg, return_intermediates=True,
+                                raw, lsu.cfg_for_frame(cfg, h5_path_src),
+                                background=background, return_intermediates=True,
                             )
 
                             data_grp = hf.require_group("/entry/data")
@@ -297,7 +342,7 @@ def _save_image_h5(
                             )
                             data_grp.create_dataset(
                                 "cleaned_data_threshold",
-                                data=intermediates["thresholded"], dtype=np.uint16,
+                                data=intermediates["thresholded"], dtype=np.float32,
                             )
                             data_grp.create_dataset(
                                 "cleaned_data_threshold_labels_unfiltered",
@@ -305,7 +350,7 @@ def _save_image_h5(
                             )
                             data_grp.create_dataset(
                                 "cleaned_data_threshold_filtered",
-                                data=intermediates["filt_img"], dtype=np.uint16,
+                                data=intermediates["filt_img"], dtype=np.float32,
                             )
                             data_grp.create_dataset(
                                 "cleaned_data_threshold_filtered_labels",
@@ -404,6 +449,7 @@ def postprocess(
     nprocs: int = 1,
     write_indexfile: bool = True,
     indexfile_dir: str = "",
+    preprocess_record: str = "",
 ) -> None:
     """
     Main post-processing entry point.
@@ -422,15 +468,24 @@ def postprocess(
                         orientation. None (default) = MinGoodSpots from the
                         config, as on the non-streaming path.
         nprocs:         Number of parallel processes (default: 1 = serial).
+        preprocess_record: The image server's record of the background and
+                        exclusion lists it used (default: the one beside
+                        *mapping_file*). Used to re-preprocess each embedded
+                        frame exactly as it was indexed.
     """
     cfg = lsu.parse_config(config_file)
     os.makedirs(output_dir, exist_ok=True)
-    if cfg.get("robust_filter") is None:
+    rec_path = preprocess_record or lsu.preprocess_record_path(mapping_file)
+    rec = lsu.read_preprocess_record(rec_path)
+    if rec is not None:
+        cfg["_background_used"] = rec["background_file"]
+        cfg["exclude_spots_file"] = rec["exclude_spots_file"]
+        cfg["exclude_spots_dir"] = rec["exclude_spots_dir"]
+    elif folder:
         logger.warning(
-            "RobustFilter is not set in %s: streaming uses RobustFilter 0 "
-            "(legacy filter, as in 0.7.1). RunImage's default for an absent key "
-            "is 1 (twin/CSL-aware); add 'RobustFilter 0' or 'RobustFilter 1' to "
-            "make the two paths agree.", config_file)
+            "No image-server preprocessing record at %s: the frames embedded in "
+            "the output h5 are re-preprocessed with a per-frame background and "
+            "may differ from what was indexed.", rec_path)
 
     # Load frame mapping
     frame_mapping = lsu.load_frame_mapping(mapping_file)
@@ -445,21 +500,22 @@ def postprocess(
     logger.info(f"  {len(spots)} spots loaded")
 
     if solutions.size == 0 or spots.size == 0:
-        logger.error("No solutions or spots — nothing to post-process.")
-        return
+        # Not an early return: every frame still gets its (stub) output below.
+        logger.error("No solutions or spots: every frame gets a stub output.")
+        spots_by_image, solutions_by_image = {}, {}
+    else:
+        # Split by ImageNr — solutions already have ImageNr in col 0 in stream
+        # format, so split directly with vectorized groupby.
+        spots_by_image = lsu.split_spots_by_image(spots, image_col=0)
 
-    # Split by ImageNr — solutions already have ImageNr in col 0 in stream
-    # format, so split directly with vectorized groupby.
-    spots_by_image = lsu.split_spots_by_image(spots, image_col=0)
-
-    # Solutions: split directly by ImageNr (col 0) — much faster than the
-    # indirect grain→spots→image path used by split_solutions_by_image.
-    sol_img_ids = solutions[:, 0].astype(int)
-    unique_sol_imgs = np.unique(sol_img_ids)
-    solutions_by_image = {
-        int(img): solutions[sol_img_ids == img]
-        for img in unique_sol_imgs
-    }
+        # Solutions: split directly by ImageNr (col 0) — much faster than the
+        # indirect grain→spots→image path used by split_solutions_by_image.
+        sol_img_ids = solutions[:, 0].astype(int)
+        unique_sol_imgs = np.unique(sol_img_ids)
+        solutions_by_image = {
+            int(img): solutions[sol_img_ids == img]
+            for img in unique_sol_imgs
+        }
 
     if image_nr > 0:
         # Process only a specific image
@@ -564,6 +620,21 @@ def postprocess(
     if labels_h5f is not None:
         labels_h5f.close()
 
+    # Frames in the mapping that produced nothing above: skipped by the server
+    # (no spots, load or send error) or never in the daemon's output.
+    if image_nr == 0 and HAS_H5PY:
+        done = {r["image_nr"] for r in all_results}
+        for key, info in sorted(frame_mapping.items(), key=lambda kv: int(kv[0])):
+            img = int(key)
+            if img in done:
+                continue
+            reason = (info.get("reason", "skipped") if info.get("skipped", False)
+                      else "no_solution")
+            _write_stub_h5(img, output_dir, reason, info)
+            all_results.append({"image_nr": img, "n_orientations": 0, "n_filtered": 0,
+                                "n_spots": 0, "file": info.get("file", ""),
+                                "frame": info.get("frame", -1)})
+
     # Summary
     _write_summary(all_results, output_dir, frame_mapping)
 
@@ -632,6 +703,11 @@ def main() -> None:
         "--indexfile-out", default="",
         help="Directory for .indexing.txt output (default: same as --output-dir)"
     )
+    parser.add_argument(
+        "--preprocess-record", default="",
+        help="Image server's background/exclusion record "
+             f"(default: {lsu.PREPROCESS_RECORD} beside --mapping)"
+    )
     args = parser.parse_args()
 
     _setup_logging(args.log_level)
@@ -659,6 +735,7 @@ def main() -> None:
         nprocs=args.nprocs,
         write_indexfile=not args.no_indexfile,
         indexfile_dir=args.indexfile_out,
+        preprocess_record=args.preprocess_record,
     )
 
 

@@ -15,6 +15,7 @@ import subprocess
 import pytest
 
 import laue_orchestrator as lo
+from _required import with_required
 
 
 class _FakeProc:
@@ -61,7 +62,8 @@ def stubbed(tmp_path, monkeypatch):
     monkeypatch.setattr(lo.subprocess, "run", run)
 
     params = tmp_path / "params.txt"
-    params.write_text("SpaceGroup 225\nResultDir results_stream\n")
+    params.write_text(with_required("SpaceGroup 225\nResultDir results_stream\n",
+                                    RobustFilter=0))
     frames = tmp_path / "frames"
     frames.mkdir()
     out = tmp_path / "run"
@@ -117,9 +119,9 @@ def test_provenance_records_the_effective_streaming_filter(stubbed, tmp_path):
     go()
     p = _prov(tmp_path / "run")
     spp = p["extra"]["streaming_postprocess"]
-    # params.txt has no RobustFilter line: ConfigurationManager says True, streaming uses legacy
-    assert p["config"]["robust_filter"] is True
-    assert spp["robust_filter_key_present"] is False
+    # RobustFilter is required since 0.8: the snapshot and the streaming path agree
+    assert p["config"]["robust_filter"] is False
+    assert spp["robust_filter_key_present"] is True
     assert spp["robust_filter_effective"] is False
     assert spp["min_unique_effective"] == 2
     assert "robust_filter" in p["config_notes"]
@@ -127,12 +129,11 @@ def test_provenance_records_the_effective_streaming_filter(stubbed, tmp_path):
 
 @pytest.mark.parametrize("lines,expect_rf,expect_floor", [
     ("RobustFilter 1\nMinGoodSpots 4\n", True, 4),
-    ("RobustFilter 0\n", False, 2),
-    ("MinGoodSpots 4\n", False, 4),
+    ("RobustFilter 0\nMinGoodSpots 2\n", False, 2),
 ])
 def test_streaming_settings_helper(tmp_path, lines, expect_rf, expect_floor):
     f = tmp_path / "p.txt"
-    f.write_text("SpaceGroup 225\n" + lines)
+    f.write_text(with_required("SpaceGroup 225\n" + lines))
     s = lo._streaming_postprocess_settings(str(f))
     assert s["robust_filter_effective"] is expect_rf
     assert s["min_unique_effective"] == expect_floor

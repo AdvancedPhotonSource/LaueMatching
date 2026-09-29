@@ -96,10 +96,14 @@ CSL_TABLE = {
 }
 
 
-def disorientation_deg_axis(A: np.ndarray, B: np.ndarray, ops: np.ndarray = CUBIC_OPS):
+def disorientation_deg_axis(A: np.ndarray, B: np.ndarray, *, ops: np.ndarray):
     """Symmetry-reduced disorientation angle (deg) and rotation-axis family
     (sorted |components|) between two 3x3 orientation matrices, minimised over
-    both-sided point-group symmetry.  Crystal-frame misorientation M = A^T B."""
+    both-sided point-group symmetry.  Crystal-frame misorientation M = A^T B.
+
+    ``ops`` (the crystal's proper rotations) is a required keyword: it used to
+    default to the cubic group, which gave a cubic answer for any crystal whose
+    caller forgot to pass its own operators."""
     M = A.T @ B
     best_ang, best_M = 999.0, M
     for O1 in ops:
@@ -120,7 +124,7 @@ def disorientation_deg_axis(A: np.ndarray, B: np.ndarray, ops: np.ndarray = CUBI
 def is_csl_related(A, B, sigmas=(3,), tol_deg: float = 3.0,
                    ops: np.ndarray = CUBIC_OPS) -> bool:
     """True if A,B are related by one of the requested cubic CSL boundaries."""
-    ang, axfam = disorientation_deg_axis(A, B, ops)
+    ang, axfam = disorientation_deg_axis(A, B, ops=ops)
     for s in sigmas:
         ref = CSL_TABLE.get(s)
         if ref is None:

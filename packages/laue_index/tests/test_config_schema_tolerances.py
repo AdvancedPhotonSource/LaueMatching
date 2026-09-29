@@ -9,6 +9,7 @@ puts the lower bound at zero. Python now mirrors
 ``validateCrystalFitTolerances`` in LaueMatchingHeaders.h: reject >= 1 (and
 negative / NaN), warn above 0.1.
 """
+from _required import with_required
 import logging
 
 import pytest
@@ -66,8 +67,8 @@ def test_not_logged_as_unknown_and_kept_on_rewrite(tmp_path, caplog):
     And a rewrite of the params file (render_text) must keep the keys, since
     the C reads the same file."""
     p = tmp_path / "params.txt"
-    p.write_text("SpaceGroup 194\ntol_c_over_a 0.01\n"
-                 "tol_LatC 0 0 0.02 0 0 0\nMinSpotIntensity 3\n")
+    p.write_text(with_required("SpaceGroup 194\ntol_c_over_a 0.01\n"
+                               "tol_LatC 0 0 0.02 0 0 0\nMinSpotIntensity 3\n"))
     with caplog.at_level(logging.WARNING, logger="LaueMatching"):
         cm = ConfigurationManager(str(p))
     assert "unknown configuration key" not in caplog.text
@@ -84,7 +85,7 @@ def test_not_logged_as_unknown_and_kept_on_rewrite(tmp_path, caplog):
 
 def _load(tmp_path, text):
     p = tmp_path / "params.txt"
-    p.write_text(text)
+    p.write_text(with_required(text))
     return ConfigurationManager(str(p))
 
 
@@ -125,7 +126,7 @@ def test_bad_tolerance_does_not_reach_the_config(tmp_path, caplog):
     """A rejected line is logged as an error and not stored (the manager logs
     per-line errors rather than aborting, as for every other key)."""
     p = tmp_path / "params.txt"
-    p.write_text("tol_c_over_a 1.0\n")
+    p.write_text(with_required("tol_c_over_a 1.0\n"))
     with caplog.at_level(logging.ERROR, logger="LaueMatching"):
         cm = ConfigurationManager(str(p))
     assert cm.config.tol_c_over_a == 0.0

@@ -37,7 +37,7 @@ _PAIRS = {
 def test_char_disorientation():
     snap = {}
     for name, B in _PAIRS.items():
-        ang, axfam = lsu._disorientation_deg_axis(_MAT, B)
+        ang, axfam = lsu._disorientation_deg_axis(_MAT, B, ops=lsu._CUBIC_OPS)
         snap[name] = {"angle_deg": float(ang), "axis_family": axfam.tolist()}
     check_golden("disorientation", snap)
 

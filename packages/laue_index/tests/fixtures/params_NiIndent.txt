@@ -24,3 +24,6 @@ OrientationSpacing 0.4
 DoFwd 0
 HKLFile valid_hkls_Ni.csv
 ResultDir results
+NMeadianPasses 1
+RobustFilter 1
+BackgroundFile median_NiIndent.bin

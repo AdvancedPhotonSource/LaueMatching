@@ -17,9 +17,13 @@
 # not finished while post-processing is still running, so "short" is only
 # declared once each run's orchestrator has logged its summary.
 #
-# EXPECTED_FRAMES is the number of frames sent, summed over the plans. Frames
-# with the beam off the specimen legitimately produce no output, so SHORT is a
-# prompt to look, not proof of loss.
+# EXPECTED_FRAMES is the number of frames in the shards, summed over the plans.
+# Post-processing writes one image_*.output.h5 per frame the image server saw,
+# including a stub (n_filtered 0, skip_reason set) for a frame it skipped (no
+# spots, beam off the specimen) or the daemon found no solution for, so the
+# count reaches EXPECTED_FRAMES on a complete run and SHORT means frames are
+# missing. (Runs post-processed before 0.8 wrote no stubs: there, SHORT is only
+# a prompt to look.)
 #
 # Environment: WAIT_INTERVAL (s, default 30), WAIT_MAX_POLLS (default 480).
 set -uo pipefail

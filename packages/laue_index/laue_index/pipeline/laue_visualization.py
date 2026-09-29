@@ -56,8 +56,34 @@ except ImportError:
 
 logger = logging.getLogger("LaueStream")
 
+from laue_index.records import SOLUTION_FORMATS  # noqa: E402
+
+# Every function here reads the RunImage column layout, by name (_RI.*).
+# A streaming table (ImageNr prepended: 35 solution / 12 spot columns) is
+# brought to it by _runimage_layout at each entry point; the column numbers
+# used to be hard-coded for RunImage only, so a streaming h5 plotted h/k/l as
+# pixel positions and grouped spots by image number instead of grain.
+_RI = SOLUTION_FORMATS["runimage"]
+_ST = SOLUTION_FORMATS["stream"]
+_STREAM_SPOT_COLS = 12   # ImageNr GrainNr SpotNr h k l X Y Q0 Q1 Q2 Intensity
+_H = 2                   # h (then k, l) in a RunImage spot row: GrainNr SpotNr h k l X Y ...
+
 
 # ── helpers ───────────────────────────────────────────────────────────────
+
+def _runimage_layout(orientations: np.ndarray, spots: np.ndarray):
+    """(orientations, spots) in the RunImage layout, dropping a leading
+    ImageNr column from streaming tables. RunImage tables pass through."""
+    o = np.asarray(orientations)
+    sp = np.asarray(spots)
+    if o.ndim == 2 and o.shape[1] >= _ST.n_cols:
+        o = o[:, 1:]
+    elif o.ndim == 1 and o.size >= _ST.n_cols:
+        o = o[1:]
+    if sp.ndim == 2 and sp.shape[1] >= _STREAM_SPOT_COLS:
+        sp = sp[:, 1:]
+    return o, sp
+
 
 def _figure_size(image_shape: Tuple[int, int]) -> Tuple[float, float]:
     """Return (width, height) in inches given an image (Y, X) shape."""
@@ -158,6 +184,7 @@ def create_static_visualization(
     orientation_unique_spots: Optional[Dict[int, Dict]] = None,
 ) -> Dict[str, Any]:
     """Create static PNG of labelled spots and quality map."""
+    orientations, spots = _runimage_layout(orientations, spots)
     if not HAS_MPL:
         return {"success": False, "error": "matplotlib not available"}
 
@@ -223,6 +250,7 @@ def create_quality_map(
     orientation_unique_spots: Optional[Dict[int, Dict]] = None,
 ) -> None:
     """Create a quality map PNG (Gaussian-blurred per-pixel quality score)."""
+    orientations, spots = _runimage_layout(orientations, spots)
     if not HAS_MPL:
         return
 
@@ -237,16 +265,16 @@ def create_quality_map(
 
     max_q = 0.0
     for orientation in orientations:
-        grain_nr = int(orientation[0])
-        q = orientation[4]
+        grain_nr = int(orientation[_RI.grain])
+        q = orientation[_RI.quality]
         uc = 0
         if orientation_unique_spots and grain_nr in orientation_unique_spots:
             uc = orientation_unique_spots[grain_nr].get("unique_label_count", 0)
         eq = q * (1.0 + 0.1 * uc)
         max_q = max(max_q, eq)
-        for spot in spots[spots[:, 0] == grain_nr]:
+        for spot in spots[spots[:, _RI.spot_grain] == grain_nr]:
             try:
-                x, y = int(spot[5]), int(spot[6])
+                x, y = int(spot[_RI.spot_x]), int(spot[_RI.spot_y])
                 if 0 <= y < quality_map.shape[0] and 0 <= x < quality_map.shape[1]:
                     quality_map[y, x] = max(quality_map[y, x], eq)
             except (IndexError, ValueError):
@@ -280,6 +308,7 @@ def create_interactive_visualization(
     orientation_unique_spots: Optional[Dict[int, Dict]] = None,
 ) -> Dict[str, Any]:
     """Create a 2-panel interactive Plotly HTML (spots + quality map)."""
+    orientations, spots = _runimage_layout(orientations, spots)
     if not HAS_PLOTLY:
         return {"success": False, "error": "plotly not available"}
 
@@ -309,16 +338,16 @@ def create_interactive_visualization(
         if orientations.size > 0:
             orients_2d = orientations if orientations.ndim == 2 else np.expand_dims(orientations, 0)
             for ori in orients_2d:
-                gn = int(ori[0])
-                q = ori[4]
+                gn = int(ori[_RI.grain])
+                q = ori[_RI.quality]
                 uc = 0
                 if orientation_unique_spots and gn in orientation_unique_spots:
                     uc = orientation_unique_spots[gn].get("unique_label_count", 0)
                 eq = q * (1.0 + 0.1 * uc)
                 max_q = max(max_q, eq)
-                for spot in spots[spots[:, 0] == gn]:
+                for spot in spots[spots[:, _RI.spot_grain] == gn]:
                     try:
-                        x, y = int(spot[5]), int(spot[6])
+                        x, y = int(spot[_RI.spot_x]), int(spot[_RI.spot_y])
                         if 0 <= y < quality_map.shape[0] and 0 <= x < quality_map.shape[1]:
                             quality_map[y, x] = max(quality_map[y, x], eq)
                     except (IndexError, ValueError):
@@ -339,23 +368,23 @@ def create_interactive_visualization(
         if orientations.size > 0 and spots.size > 0:
             orients_plot = orientations if orientations.ndim == 2 else np.expand_dims(orientations, 0)
             for i, ori in enumerate(orients_plot):
-                gn = int(ori[0])
+                gn = int(ori[_RI.grain])
                 color = palette[i % len(palette)]
                 uc = 0
                 if orientation_unique_spots and gn in orientation_unique_spots:
                     uc = orientation_unique_spots[gn].get("unique_label_count", 0)
-                os_ = spots[spots[:, 0] == gn]
+                os_ = spots[spots[:, _RI.spot_grain] == gn]
                 if os_.size == 0:
                     continue
                 fig.add_trace(
                     go.Scatter(
-                        x=os_[:, 5], y=os_[:, 6],
+                        x=os_[:, _RI.spot_x], y=os_[:, _RI.spot_y],
                         mode="markers", name=f"Grain {gn} ({uc} exclusive)",
                         legendgroup=f"grain_{gn}",
                         marker=dict(color=color, size=7, symbol="circle-open", line=dict(width=1.5)),
                         hovertext=[
-                            f"Grain: {gn}<br>HKL: ({int(s[2])},{int(s[3])},{int(s[4])})<br>"
-                            f"Pos: ({s[5]:.1f}, {s[6]:.1f})<br>Exclusive (WTA): {uc}"
+                            f"Grain: {gn}<br>HKL: ({int(s[_H])},{int(s[_H + 1])},{int(s[_H + 2])})<br>"
+                            f"Pos: ({s[_RI.spot_x]:.1f}, {s[_RI.spot_y]:.1f})<br>Exclusive (WTA): {uc}"
                             for s in os_
                         ],
                         hoverinfo="text",
@@ -401,6 +430,7 @@ def create_3d_visualization(
     spots: np.ndarray,
 ) -> None:
     """Create a 3-D Plotly HTML of crystal orientation axes."""
+    orientations, spots = _runimage_layout(orientations, spots)
     if not HAS_PLOTLY:
         logger.warning("plotly not available; skipping 3D visualization")
         return
@@ -417,10 +447,10 @@ def create_3d_visualization(
     palette = px.colors.qualitative.Plotly
 
     for i, ori in enumerate(orientations):
-        gn = int(ori[0])
+        gn = int(ori[_RI.grain])
         color = palette[i % len(palette)]
         try:
-            matrix = ori[22:31].reshape(3, 3)
+            matrix = ori[_RI.om_start:_RI.om_start + 9].reshape(3, 3)
         except (IndexError, ValueError):
             logger.warning(f"Could not extract matrix for Grain {gn}; skipping.")
             continue
@@ -488,6 +518,7 @@ def create_analysis_report(
         config_obj: Full ``LaueConfig`` dataclass (optional; if *None* the
                     processing-parameters section is omitted).
     """
+    orientations, spots = _runimage_layout(orientations, spots)
     logger.info("Generating analysis report...")
     if orientations.size == 0:
         logger.warning("No orientations; skipping report.")
@@ -558,16 +589,16 @@ def create_analysis_report(
     """
 
     for orientation in orientations:
-        gn = int(orientation[0])
-        quality = orientation[4]
-        total = int(orientation[5])
+        gn = int(orientation[_RI.grain])
+        quality = orientation[_RI.quality]
+        total = int(orientation[_RI.n_matches])
         us = 0
         if orientation_unique_spots and gn in orientation_unique_spots:
             us = orientation_unique_spots[gn].get("unique_label_count", 0)
 
         mat_html = "<span class='matrix-table'><table>"
         try:
-            mat = orientation[22:31].reshape(3, 3)
+            mat = orientation[_RI.om_start:_RI.om_start + 9].reshape(3, 3)
             for row in mat:
                 mat_html += "<tr>" + "".join([f"<td>{x: .4f}</td>" for x in row]) + "</tr>"
         except (IndexError, ValueError):
@@ -585,11 +616,11 @@ def create_analysis_report(
     """
 
     # ── Spot distribution chart ──────────────────────────────────────
-    grain_numbers = [int(o[0]) for o in orientations]
+    grain_numbers = [int(o[_RI.grain]) for o in orientations]
     spo = {}
     uso = {}
     for gn in grain_numbers:
-        spo[gn] = int(np.sum(spots[:, 0] == gn))
+        spo[gn] = int(np.sum(spots[:, _RI.spot_grain] == gn)) if spots.size else 0
         uso[gn] = (orientation_unique_spots or {}).get(gn, {}).get("unique_label_count", 0)
 
     html += f"""
@@ -717,19 +748,20 @@ def plot_orientation_spots(
     show_hkl_labels: bool = False,
 ) -> None:
     """Plot filtered spots per orientation on a Matplotlib axis."""
+    orientations, spots = _runimage_layout(orientations, spots)
     if orientations.size == 0 or spots.size == 0 or colors is None:
         return
     if orientations.ndim == 1:
         orientations = np.expand_dims(orientations, axis=0)
 
     for i, ori in enumerate(orientations):
-        gn = int(ori[0])
+        gn = int(ori[_RI.grain])
         color = colors(i / len(orientations)) if len(orientations) > 1 else colors(0)
-        os_ = spots[spots[:, 0] == gn]
+        os_ = spots[spots[:, _RI.spot_grain] == gn]
         if os_.size == 0:
             continue
         ax.plot(
-            os_[:, 5], os_[:, 6], "o",
+            os_[:, _RI.spot_x], os_[:, _RI.spot_y], "o",
             markerfacecolor="none", markersize=4,
             markeredgecolor=color, markeredgewidth=0.5,
             label=f"Grain {gn} ({len(os_)} spots)",
@@ -737,8 +769,8 @@ def plot_orientation_spots(
         if show_hkl_labels:
             for spot in os_:
                 try:
-                    h, k, l = int(spot[2]), int(spot[3]), int(spot[4])
-                    x, y = spot[5], spot[6]
+                    h, k, l = int(spot[_H]), int(spot[_H + 1]), int(spot[_H + 2])
+                    x, y = spot[_RI.spot_x], spot[_RI.spot_y]
                     ax.text(x, y + 5, f"({h}{k}{l})", fontsize=1.5, ha="center", color=color, clip_on=True)
                 except (IndexError, ValueError):
                     continue
@@ -756,7 +788,8 @@ def create_simulation_comparison_visualization(
     """
     Create a 3-panel Plotly HTML comparing experimental and simulated spots.
 
-    Panels: Experimental Spots | Simulated Spots | Overlay & Missing.
+    Panels: measured image with the indexed (predicted) spots | simulated
+    spots | overlay & missing.
 
     Args:
         output_path:          Base file path (e.g. ``results/image_001``).
@@ -780,13 +813,17 @@ def create_simulation_comparison_visualization(
         elif all_exp_spots.size == 0:
             all_exp_spots = np.empty((0, 8))
 
+        indexed_orientations, all_exp_spots = _runimage_layout(
+            indexed_orientations, all_exp_spots)
+        if indexed_orientations.ndim == 1 and indexed_orientations.size > 0:
+            indexed_orientations = np.expand_dims(indexed_orientations, axis=0)
         kept_grain_nrs = (
-            set(indexed_orientations[:, 0].astype(int))
+            set(indexed_orientations[:, _RI.grain].astype(int))
             if indexed_orientations.size > 0 else set()
         )
         if all_exp_spots.size > 0:
             exp_spots = all_exp_spots[
-                np.isin(all_exp_spots[:, 0].astype(int), list(kept_grain_nrs))
+                np.isin(all_exp_spots[:, _RI.spot_grain].astype(int), list(kept_grain_nrs))
             ]
         else:
             exp_spots = all_exp_spots
@@ -801,7 +838,7 @@ def create_simulation_comparison_visualization(
     # --- Plotly figure ---
     fig = make_subplots(
         rows=1, cols=3,
-        subplot_titles=["Experimental Spots", "Simulated Spots", "Overlay & Missing"],
+        subplot_titles=["Measured Image + Indexed Spots", "Simulated Spots", "Overlay & Missing"],
         horizontal_spacing=0.05,
         specs=[[{"type": "xy"}, {"type": "xy"}, {"type": "xy"}]],
         shared_xaxes=True, shared_yaxes=True,
@@ -824,19 +861,22 @@ def create_simulation_comparison_visualization(
     matched_exp_positions: Dict[int, set] = {}
 
     for i, ori in enumerate(indexed_orientations):
-        gn = int(ori[0])
+        gn = int(ori[_RI.grain])
         color = palette[i % len(palette)]
 
-        # Experimental spots for this grain
-        grain_exp = exp_spots[exp_spots[:, 0] == gn]
+        # This grain's indexed spots. Their positions are PREDICTED by the
+        # fitted orientation (the indexer's spots.txt), drawn over the measured
+        # image; they were labelled "Exp" (experimental), which they are not.
+        grain_exp = exp_spots[exp_spots[:, _RI.spot_grain] == gn]
         if grain_exp.size > 0:
             exp_trace = go.Scatter(
-                x=grain_exp[:, 5], y=grain_exp[:, 6],
-                mode="markers", name=f"Exp Grain {gn}", legendgroup=f"grain_{gn}",
+                x=grain_exp[:, _RI.spot_x], y=grain_exp[:, _RI.spot_y],
+                mode="markers", name=f"Indexed Grain {gn} (predicted)", legendgroup=f"grain_{gn}",
                 marker=dict(color=color, size=8, symbol="circle-open", line=dict(width=2, color=color)),
                 hovertext=[
-                    f"Grain: {gn}<br>HKL: ({int(s[2])},{int(s[3])},{int(s[4])})<br>"
-                    f"Pos: ({s[5]:.1f}, {s[6]:.1f})<br>Source: Exp"
+                    f"Grain: {gn}<br>HKL: ({int(s[_H])},{int(s[_H + 1])},{int(s[_H + 2])})<br>"
+                    f"Pos: ({s[_RI.spot_x]:.1f}, {s[_RI.spot_y]:.1f})<br>"
+                    f"Source: predicted by the fitted orientation, on a lit pixel"
                     for s in grain_exp
                 ],
                 hoverinfo="text",
@@ -844,7 +884,7 @@ def create_simulation_comparison_visualization(
             fig.add_trace(exp_trace, row=1, col=1)
             fig.add_trace(go.Scatter(exp_trace), row=1, col=3)
             matched_exp_positions[gn] = {
-                (round(float(s[5])), round(float(s[6]))) for s in grain_exp
+                (round(float(s[_RI.spot_x])), round(float(s[_RI.spot_y]))) for s in grain_exp
             }
 
         # Simulated spots for this grain
@@ -901,7 +941,7 @@ def create_simulation_comparison_visualization(
             continue
         ma = np.array(missing)
         try:
-            gidx = list(indexed_orientations[:, 0].astype(int)).index(gn)
+            gidx = list(indexed_orientations[:, _RI.grain].astype(int)).index(gn)
             color = palette[gidx % len(palette)]
         except ValueError:
             color = "grey"
@@ -943,8 +983,8 @@ def create_simulation_comparison_visualization(
     unique_exp_counts: Dict[int, int] = {}
     if exp_spots.size > 0:
         for gn_val in kept_grain_nrs:
-            gs = exp_spots[exp_spots[:, 0] == gn_val]
-            unique_exp_counts[gn_val] = len({(int(s[5]), int(s[6])) for s in gs}) if gs.size > 0 else 0
+            gs = exp_spots[exp_spots[:, _RI.spot_grain] == gn_val]
+            unique_exp_counts[gn_val] = len({(int(s[_RI.spot_x]), int(s[_RI.spot_y])) for s in gs}) if gs.size > 0 else 0
 
     counts_file = f"{output_path}.unique_spot_counts.txt"
     try:

@@ -92,77 +92,93 @@ def setup_logger(
 # Configuration — lightweight dict-based config for streaming
 # ---------------------------------------------------------------------------
 DEFAULT_CONFIG: Dict[str, Any] = {
+    # The KEYS this parser returns. Every value whose key is a config_schema
+    # key is replaced by SCHEMA's default just below, so the literals here are
+    # placeholders, not defaults. Keys in config_schema.REQUIRED_KEYS have no
+    # default at all: parse_config refuses a file without them.
     # Detector
-    "nr_px_x":          2048,
-    "nr_px_y":          2048,
-    "px_x":             0.2,
-    "px_y":             0.2,
-    "distance":         0.513,
+    "nr_px_x":          None,   # REQUIRED
+    "nr_px_y":          None,   # REQUIRED
+    "px_x":             None,   # REQUIRED (metres)
+    "px_y":             None,   # REQUIRED (metres)
+    "distance":         None,   # P_Array[2]
     # Energy range
-    "elo":              5.0,
-    "ehi":              30.0,
+    "elo":              None,
+    "ehi":              None,
     # Crystallography
-    "space_group":      225,
-    "symmetry":         "F",
-    "lattice_parameter":"0.3615 0.3615 0.3615 90 90 90",
-    "r_array":          "-1.2 -1.2 -1.2",
-    "p_array":          "0 0 0.513",
+    "space_group":      None,
+    "symmetry":         None,
+    "lattice_parameter":None,   # REQUIRED
+    "r_array":          None,   # REQUIRED
+    "p_array":          None,   # REQUIRED
     # Thresholding
-    "threshold_method": "adaptive",
-    "threshold_value":  0.0,
-    "threshold_percentile": 90.0,
+    "threshold_method": None,
+    "threshold_value":  None,
+    "threshold_percentile": None,
     # Image processing
-    "min_area":         10,
+    "min_area":         None,
     # Detector positions whose spots must not count as evidence. Empty = off.
     # NOTE: adding a parameter needs THREE edits kept in step -- this dict, the
-    # parser chain below, AND laue_config.ImageProcessingConfig. A key present in
-    # only some of them is parsed and then silently dropped, so the run proceeds
+    # parser chain below, AND laue_config.ImageProcessingConfig (plus a
+    # config_schema row, which supplies the default). A key present in only
+    # some of them is parsed and then silently dropped, so the run proceeds
     # with the setting quietly not applied.
-    "exclude_spots_file": "",
-    "exclude_spots_dir": "",
-    "filter_radius":    101,
-    "median_passes":    1,
-    "watershed_enabled":True,
-    "gaussian_factor":  0.25,
-    "enhance_contrast": False,
-    "denoise_image":    False,
-    "denoise_strength": 1.0,
-    "edge_enhancement": False,
+    "exclude_spots_file": None,
+    "exclude_spots_dir": None,
+    "filter_radius":    None,
+    "median_passes":    None,   # REQUIRED (NMeadianPasses)
+    "watershed_enabled":None,
+    "gaussian_factor":  None,
+    "enhance_contrast": None,
+    "denoise_image":    None,
+    "denoise_strength": None,
+    "edge_enhancement": None,
     # Preprocessing pool cap; 0 = let laue_index.workers decide. Read by
     # laue_image_server (the streaming path). LAUE_PREPROCESS_WORKERS overrides.
-    "preprocess_workers": 0,
+    "preprocess_workers": None,
     # Matching
-    "min_intensity":    0.0,
+    "min_intensity":    None,   # REQUIRED
     # Exclusive-spot floor for the orientation filter (winner-take-all label
-    # count). laue_postprocess uses it unless --min-unique is given. 2 when
-    # absent = 0.7.1 streaming's effective floor (its --min-unique default).
-    "min_good_spots":   2,
-    # 1 = twin/CSL-aware filter, 0 = legacy. None = the key is ABSENT from the
-    # params file: laue_postprocess then keeps 0.7.1 streaming behaviour (the
-    # legacy filter) so an existing config re-runs to the same result, and says
-    # so once at startup. RunImage's default for an absent key is 1 (robust);
-    # an explicit key means the same thing on both paths.
+    # count). laue_postprocess uses it unless --min-unique is given. REQUIRED:
+    # it used to default to 2 here and 5 in RunImage.
+    "min_good_spots":   None,
+    # 1 = twin/CSL-aware filter, 0 = legacy. REQUIRED: an absent key used to
+    # mean legacy here and robust in RunImage.
     "robust_filter":    None,
-    "min_nr_spots":     5,
-    "max_angle":        2.0,
-    "max_laue_spots":   400,
-    "orientation_spacing": 0.4,
-    "gauss_sigma_max":  0.0,   # 0 = no cap on the auto matching-blur sigma
+    "min_nr_spots":     None,
+    "max_angle":        None,
+    "max_laue_spots":   None,   # REQUIRED
+    "orientation_spacing": None,
+    "gauss_sigma_max":  None,   # 0 = no cap on the auto matching-blur sigma
     # Files
-    "background_file":  "",
-    "orientation_file": "orientations.bin",
-    "hkl_file":         "hkls.bin",
-    "result_dir":       "results",
-    # H5 data location
+    "background_file":  None,   # REQUIRED
+    "orientation_file": None,
+    "hkl_file":         None,
+    "result_dir":       None,
+    # H5 data location (not a schema key)
     "h5_location":      "/entry/data/data",
 }
 
 
-# Keys whose DEFAULT_CONFIG value is another experiment's (the Ni lattice, a
-# 0.513 m detector): a malformed line for one of these raises instead of being
-# skipped with a warning, so a template's literal __SET_ME__ cannot run as Ni.
-_FATAL_KEYS = ("SpaceGroup", "Symmetry", "LatticeParameter", "R_Array", "P_Array",
-               "Elo", "Ehi")
+# One source of defaults (0.8, decision D5): every DEFAULT_CONFIG entry that is
+# a schema key takes config_schema.SCHEMA's default, so this parser and
+# laue_config's cannot drift apart again. Keys in config_schema.REQUIRED_KEYS
+# (their defaults used to disagree between the parsers: MaxNrLaueSpots 400 here
+# vs 7 in RunImage vs 500 in the C, MinIntensity 0 vs 50 vs 1000, ...) must be
+# present: parse_config raises when any is missing.
+_STREAM_NAME = {"maxAngle": "max_angle"}      # schema field -> name used here
+for _p in _schema.SCHEMA:
+    _k = _STREAM_NAME.get(_p.field, _p.field)
+    if _k in DEFAULT_CONFIG:
+        DEFAULT_CONFIG[_k] = _p.default
+DEFAULT_CONFIG["distance"] = float(DEFAULT_CONFIG["p_array"].split()[2])
+del _p, _k
+
+# Keys whose default is another experiment's (the Ni lattice, a 0.513 m
+# detector), plus the REQUIRED ones: a malformed line for one of these raises
+# instead of being skipped with a warning, so a template's literal __SET_ME__
+# cannot run as Ni.
+_FATAL_KEYS = _schema.FATAL_KEYS
 
 
 def _floats(key: str, rest: List[str], n: int) -> List[float]:
@@ -181,15 +197,19 @@ def parse_config(config_file: str) -> Dict[str, Any]:
     Parse a classic LaueMatching text config file into a flat dictionary.
 
     Returns a dict with the same keys as DEFAULT_CONFIG, overridden by
-    values found in the file. A malformed SpaceGroup, Symmetry,
-    LatticeParameter, R_Array, P_Array, Elo or Ehi raises ValueError naming
-    the key and the value; other malformed lines are skipped with a warning.
+    values found in the file. A key in config_schema.REQUIRED_KEYS that is
+    absent, or a malformed value for one of config_schema.FATAL_KEYS
+    (SpaceGroup, Symmetry, Elo, Ehi and the required keys), raises
+    ValueError naming the key(s); other malformed lines are skipped with a
+    warning.
     """
     cfg = dict(DEFAULT_CONFIG)
     if not os.path.exists(config_file):
-        logger.warning(f"Config file '{config_file}' not found — using defaults.")
-        return cfg
+        # Used to return the built-in defaults; there are none for the
+        # required keys any more.
+        raise ValueError(f"Config file '{config_file}' not found.")
 
+    present = set()
     with open(config_file, "r") as f:
         for line in f:
             line = line.strip()
@@ -199,9 +219,15 @@ def parse_config(config_file: str) -> Dict[str, Any]:
             if "#" in line:
                 line = line[: line.index("#")].strip()
             parts = line.split()
-            if len(parts) < 2:
+            if not parts:
                 continue
             key, rest = parts[0], parts[1:]
+            present.add(key)
+            if not rest:
+                if key in _FATAL_KEYS:
+                    raise ValueError(f"{config_file}: {key} has no value. {key} has "
+                                     f"no safe default -- set it for this experiment.")
+                continue
 
             try:
                 if key == "SpaceGroup":
@@ -295,6 +321,9 @@ def parse_config(config_file: str) -> Dict[str, Any]:
                         f"experiment.") from e
                 logger.warning(f"Skipping malformed config line '{line}': {e}")
 
+    missing = _schema.missing_required(present)
+    if missing:
+        raise ValueError(_schema.missing_required_message(missing, config_file))
     return cfg
 
 
@@ -377,6 +406,7 @@ def count_h5_frames(path: str, h5_location: str = "/entry/data/data") -> int:
 from laue_index.preprocess import (  # noqa: E402
     compute_background,
     load_background,
+    save_background,
     enhance_image,
     find_connected_components,
     filter_small_components,
@@ -387,6 +417,67 @@ from laue_index.preprocess import (  # noqa: E402
 # (byte-for-byte equivalent) so RunImage/preprocess callers are unchanged.  This
 # line previously sat inline among the preprocessing funcs that moved out in §6.5.
 from laue_index.thresholds import apply_threshold  # noqa: E402,F401
+
+
+# ---------------------------------------------------------------------------
+# What the image server actually preprocessed with
+#
+# Post-processing re-runs the preprocessing to embed /entry/data in each output
+# h5. It used to do so with a per-frame median background (the server computes
+# ONE background, from the first frame, or loads BackgroundFile) and with
+# ExcludeSpotsFile/Dir resolved against its own cwd (the server runs in the
+# output dir), so the embedded images were not the ones that were indexed. The
+# server now saves its background and records absolute paths in this file, next
+# to frame_mapping.json; post-processing reads it back.
+# ---------------------------------------------------------------------------
+PREPROCESS_RECORD = "stream_preprocess.json"
+STREAM_BACKGROUND = "stream_background.bin"
+
+
+def preprocess_record_path(mapping_file: str) -> str:
+    """The record written beside *mapping_file*."""
+    return os.path.join(os.path.dirname(os.path.abspath(mapping_file)),
+                        PREPROCESS_RECORD)
+
+
+def write_preprocess_record(path: str, background_file: str,
+                            cfg: Dict[str, Any]) -> None:
+    rec = {
+        "background_file": os.path.abspath(background_file),
+        "exclude_spots_file": (os.path.abspath(cfg["exclude_spots_file"])
+                               if cfg.get("exclude_spots_file") else ""),
+        "exclude_spots_dir": (os.path.abspath(cfg["exclude_spots_dir"])
+                              if cfg.get("exclude_spots_dir") else ""),
+        "nr_px_x": int(cfg["nr_px_x"]),
+        "nr_px_y": int(cfg["nr_px_y"]),
+    }
+    with open(path, "w") as f:
+        json.dump(rec, f, indent=1)
+
+
+def read_preprocess_record(path: str) -> Optional[Dict[str, Any]]:
+    """The record, or None if there is none (a run from before 0.8)."""
+    if not path or not os.path.isfile(path):
+        return None
+    with open(path) as f:
+        return json.load(f)
+
+
+def cfg_for_frame(cfg: Dict[str, Any], h5_path: str) -> Dict[str, Any]:
+    """*cfg* with this frame's ExcludeSpotsDir mask attached, if there is one.
+
+    A copy, because the mask is frame-specific and *cfg* is shared: caching it
+    on the shared dict would leak one frame's exclusions onto every later frame.
+    """
+    _dir = cfg.get("exclude_spots_dir", "")
+    if not _dir:
+        return cfg
+    from laue_index.preprocess import exclusion_file_for_frame, load_exclusion_mask
+    _f = exclusion_file_for_frame(_dir, h5_path)
+    cfg = dict(cfg)
+    cfg["_exclude_mask_frame"] = (
+        load_exclusion_mask(_f, cfg["nr_px_y"], cfg["nr_px_x"]) if _f else None)
+    return cfg
 
 
 # ---------------------------------------------------------------------------

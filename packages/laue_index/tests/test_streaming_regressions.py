@@ -161,20 +161,17 @@ def test_watch_unset_still_defaults_to_watch():
 
 # ---------------------------------------------------------------------------
 # Bug 3: the daemon was terminated as soon as solutions.txt EXISTED, before it
-#        finished writing, losing the tail of the scan. The fix waits for the
-#        file to stop growing. (Logic is inline in run_pipeline; pin by contract.)
+#        finished writing, losing the tail of the scan. The first fix waited for
+#        the file to stop growing; 0.8 waits for the daemon's per-frame reports.
 # ---------------------------------------------------------------------------
 
 def test_drain_waits_for_quiescence_not_mere_existence():
-    """The flush wait must key on the file no longer growing, not on it existing."""
-    # the old, buggy predicate broke as soon as the file was non-empty
-    assert 'os.path.getsize(solutions_file) > 0:' not in _ORCH_SRC or \
-        "quiescent" in _ORCH_SRC, (
-        "orchestrator appears to break on solutions.txt existence again; "
-        "it must wait for the file to stop growing"
-    )
-    assert "quiescent" in _ORCH_SRC, "drain-quiescence logic missing"
-    # and it must warn (not silently proceed) if it gives up while still growing
+    """The flush wait must not key on solutions.txt existing. Since 0.8 it keys
+    on the daemon reporting every sent frame, which a quiet solutions.txt did
+    not guarantee either (behaviour: test_p1_orchestrator.py, fake daemon)."""
+    assert 'os.path.getsize(solutions_file) > 0:' not in _ORCH_SRC
+    assert "_wait_for_daemon_drain(" in _ORCH_SRC, "drain logic missing"
+    # and it must warn (not silently proceed) if it gives up before the end
     assert "may be truncated" in _ORCH_SRC
 
 

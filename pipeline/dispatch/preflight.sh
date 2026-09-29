@@ -22,7 +22,8 @@
 #    the card; two of them compete for memory and time. Set ALLOW_SHARED_GPU=1
 #    if that is really intended.
 #  * A missing BackgroundFile does NOT fail: the image server silently computes
-#    one from the FIRST FRAME. A background built from dead or blank frames has
+#    one from the FIRST FRAME. A relative path is refused: the server resolves it
+#    in the run's output directory, never where this script runs. A background built from dead or blank frames has
 #    a median of a few counts and subtracts nothing; hence the size and median
 #    checks (size = NrPxX * NrPxY float64 read from each params file, e.g.
 #    33554432 bytes for 2048 x 2048).
@@ -69,6 +70,9 @@ for ln in "${PLAN_LINES[@]}"; do
   RDS+=("$RD")
   BG=$(param BackgroundFile "$PAR")
   [ -n "$BG" ] || fail "$TAG: no BackgroundFile -- the server would compute one from frame 1"
+  # The image server resolves a relative path in the run's own (timestamped)
+  # output directory, not here, so checking it here would test another file.
+  case "$BG" in /*) ;; *) fail "$TAG: BackgroundFile must be an absolute path (got '$BG'): the image server looks for it in each run's output directory" ;; esac
   [ -s "$BG" ] || fail "$TAG: BackgroundFile missing or empty: $BG"
   # The detector size comes from THIS params file; no 2048 x 2048 default.
   nx=$(param NrPxX "$PAR"); ny=$(param NrPxY "$PAR")

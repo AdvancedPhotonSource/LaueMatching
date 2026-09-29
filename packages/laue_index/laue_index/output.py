@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+from typing import Dict
 
 import numpy as np
 
@@ -40,8 +41,10 @@ def store_txt_files_in_h5(
         f"{output_path}.bin.solutions.txt":           "/entry/results/solutions_text",
         f"{output_path}.bin.solutions_filtered.txt":  "/entry/results/solutions_filtered_text",
         f"{output_path}.bin.spots.txt":               "/entry/results/spots_text",
-        f"{output_path}.bin.LaueMatching_stdout.txt": "/entry/logs/stdout",
-        f"{output_path}.bin.LaueMatching_stderr.txt": "/entry/logs/stderr",
+        # laue_index.indexer.run_indexer writes <output_path>.LaueMatching_std*.txt
+        # (no ".bin"): the old ".bin." keys never matched, so no log was stored.
+        f"{output_path}.LaueMatching_stdout.txt":     "/entry/logs/stdout",
+        f"{output_path}.LaueMatching_stderr.txt":     "/entry/logs/stderr",
         f"{output_path}.simulation_stdout.txt":       "/entry/logs/simulation_stdout",
         # Written by laue_visualization as f"{output_path}.unique_spot_counts.txt"
         # (no ".bin"): the old ".bin." key here never matched, so the counts

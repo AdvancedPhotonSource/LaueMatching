@@ -24,8 +24,8 @@
 #                         port collision, or the daemon never got to bind
 #                         (often NFS saturated by simultaneous launches).
 #   CUDA error, Traceback, Post-processing failed
-#                         the orchestrator logs "Pipeline complete" even after
-#                         a failed post-processing step, so look for this too.
+#                         (from 0.7.2 a failed post-processing step also exits
+#                         the orchestrator non-zero; the grep stays as a belt.)
 #   fork: / Resource temporarily unavailable (in logs/dispatch_*.out)
 #                         the dispatcher itself could not fork: later shards
 #                         never launched.

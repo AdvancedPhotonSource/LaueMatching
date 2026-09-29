@@ -36,7 +36,8 @@ it may flatten earlier; ``benchmark_workers`` measures the machine in front of
 you rather than extrapolating this curve onto it.
 
 THE MEMORY MODEL IS FITTED, NOT GUESSED. Peak RSS of a forked worker
-preprocessing one frame, measured at three frame sizes on the same host:
+preprocessing one frame, measured at three frame sizes on the same host (the
+ORIGINAL fit, uint16 code; the slope is superseded by the re-measurement below):
 
     frame        pixels     peak MB    bytes/pixel
     1024x1024   1048576        68.0          64.8
@@ -46,10 +47,57 @@ preprocessing one frame, measured at three frame sizes on the same host:
     least squares:  peak_bytes = 44.19 * pixels + 2.18e7
     residuals:      0.2, -0.2, 0.0 MB   (over a 16x range in pixels)
 
-44.2 bytes/pixel is about 5.5 live float64 frames per worker, which is what the
-pipeline holds at peak (background-subtracted, enhanced float32, thresholded,
-uint16 copy, int32 labels, the float64 blur input and its output). The constant
-term is the interpreter plus numpy/scipy/cv2.
+That fit was made while preprocess_image cast the threshold image to uint16.
+It now keeps float32 (a uint16 cast wrapped counts above 65535), so the
+thresholded copy, cv2.threshold's output and filter_small_components' copy are
+each 4 B/px instead of 2. RE-MEASURED 2026-09-28, peak of ONE preprocess_image
+call on synthetic frames (smooth background + Poisson + Gaussian noise, 300
+Gaussian spots per 2048^2, params_alpha template values, percentile 99.8,
+MinArea 4, background precomputed and passed in as the server does). Each
+point is a fresh interpreter, thread pools pinned to 1, a warm-up call on a
+256^2 crop first; peak = ru_maxrss after the call minus RSS just after the raw
+float64 frame is loaded (so, like the fit above, the raw frame itself is not
+charged: the old code measured this way gives 43.86 B/px, reproducing 44.19).
+5 repeats x 3 sizes, least squares per repeat, Linux (copland):
+
+    code             slope B/px, median [min, max]    2048^2 peak MB
+    old (uint16)     43.86 [43.80, 43.89]                   187.7
+    new (float32)    48.05 [47.99, 48.05]                   199.8
+
+tracemalloc over the same span agrees (44.01 old, 48.01 new, deterministic);
+macOS gives 49.5 new / 44.4 old with the same harness. The constant term was
+not re-measured (the harness baseline already contains the interpreter), so
+WORKER_BASE_BYTES keeps its fitted value, which only adds headroom. Script:
+measure_worker_peak.py in the 2026-09 LaueMatching fixes analysis folder.
+
+WHAT A WORKER ACTUALLY HOLDS (2026-09-28, the constants below). The numbers
+above charge one preprocess_image call only. A pool worker also loads the raw
+frame itself (_preprocess_one in laue_image_server), receives the background
+as a pickled argument on every task, and pickles its result back. Measured
+as the max RSS of a REAL one-worker ProcessPoolExecutor running
+_preprocess_one on HDF5 frames, peak minus the worker's idle RSS, Linux
+(alleppey), production pool setup (_pin_library_threads, the worker
+initializer), fresh interpreter per run:
+
+    steady state:   1024^2 104.2 MB (flat from task 3 to 60)
+                    2048^2 312.5 MB (flat from task 3 to 400: no leak)
+    three sizes, independent script (VmHWM): 97.0 / 295.8 / 1087.6 MB at
+    1024^2 / 2048^2 / 4096^2 -> 63.0 B/px + 31 MB
+    across runs, host load and size pairs the slope ranged ~55-68 B/px
+
+(tracemalloc of the whole task: 56.0 B/px = 48.0 + the 8 B/px raw frame, plus
+8 B/px for the background copy.) The constants are a GUARD, so they sit above
+every measured point: 64 B/px, and a base of 53 MB (the 21.8 MB interpreter
+allowance plus ~31 MB of per-task fixed cost). The old 44.19 B/px + 21.8 MB
+said 207 MB for a 2048^2 worker that measured 296-313 MB above idle.
+(macOS spawn workers keep growing ~23% for 15-20 tasks before levelling; the
+Linux fork workers these hosts run do not.) Scripts: measure_pool_worker.py,
+child_pool.py, child_growth.py (same folder).
+
+48 bytes/pixel is about 6 live float64 frames per worker, which is what the
+pipeline holds at peak (background-subtracted, enhanced float32, thresholded
+float32 copy, int32 labels, the float64 blur input and its output). The
+constant term is the interpreter plus numpy/scipy/cv2.
 
 The other term is the parent's, and on the streaming path it dominates: the
 futures queue is ``FUTURES_QUEUE_DEPTH`` deep and each completed result carries
@@ -101,8 +149,8 @@ logger = logging.getLogger("LaueStream")
 
 # Fitted above. Deliberately module constants so a future re-measurement is a
 # one-line change with the fit that justifies it sitting in the docstring.
-BYTES_PER_PIXEL_PER_WORKER = 44.19
-WORKER_BASE_BYTES = 21_800_000
+BYTES_PER_PIXEL_PER_WORKER = 64.0      # whole worker task, a guard above every 2026-09-28 measurement (was 44.19)
+WORKER_BASE_BYTES = 53_000_000     # 21.8 MB interpreter + 31 MB measured per-task fixed cost
 
 # Fraction of available memory left alone: the OS page cache, the parent, the
 # GPU daemon if it is co-resident, and the headroom to not be the process the

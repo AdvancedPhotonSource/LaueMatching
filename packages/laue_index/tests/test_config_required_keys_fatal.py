@@ -15,6 +15,7 @@ import pytest
 import laue_stream_utils as lsu
 from laue_index import config_schema as S
 from laue_index.pipeline.laue_config import ConfigurationManager
+from _required import with_required
 
 _GOOD = {
     "SpaceGroup": "194",
@@ -45,7 +46,7 @@ def _params(tmp_path, **override):
     vals = dict(_GOOD)
     vals.update(override)
     p = tmp_path / "params.txt"
-    p.write_text("".join(f"{k} {v}\n" for k, v in vals.items()))
+    p.write_text(with_required("".join(f"{k} {v}\n" for k, v in vals.items())))
     return p
 
 
@@ -150,9 +151,25 @@ def test_energy_band_valid_and_absent(tmp_path):
     p = _params(tmp_path)
     assert ConfigurationManager(str(p)).config.elo == 7.5
     assert lsu.parse_config(str(p))["ehi"] == 28.0
-    p.write_text("".join(f"{k} {v}\n" for k, v in _GOOD.items()
-                         if k not in ("Elo", "Ehi")))
+    p.write_text(with_required("".join(f"{k} {v}\n" for k, v in _GOOD.items()
+                                       if k not in ("Elo", "Ehi"))))
     cm = ConfigurationManager(str(p))
     cfg = lsu.parse_config(str(p))
     assert (cm.config.elo, cm.config.ehi) == (5.0, 30.0)
     assert (cfg["elo"], cfg["ehi"]) == (5.0, 30.0)
+
+
+# 0.8 (decision D5): keys whose defaults disagreed between the RunImage,
+# streaming and C parsers are REQUIRED -- absent is fatal on both Python paths.
+@pytest.mark.parametrize("key", sorted(S.REQUIRED_KEYS))
+def test_absent_required_key_is_fatal_on_both_paths(tmp_path, key, caplog):
+    p = tmp_path / "params.txt"
+    p.write_text("".join(ln + "\n" for ln in with_required(
+        "".join(f"{k} {v}\n" for k, v in _GOOD.items())).splitlines()
+        if ln.split()[0] != key))
+    with caplog.at_level(logging.ERROR, logger="LaueMatching"), \
+            pytest.raises(SystemExit):
+        ConfigurationManager(str(p))
+    assert key in caplog.text
+    with pytest.raises(ValueError, match=key):
+        lsu.parse_config(str(p))

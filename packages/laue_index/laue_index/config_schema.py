@@ -24,8 +24,10 @@ from dataclasses import dataclass
 logger = logging.getLogger("LaueMatching")
 
 __all__ = ["Param", "SCHEMA", "SCHEMA_BY_KEY", "parse_line", "render_text",
-           "FatalConfigError", "FATAL_KEYS", "validate_tolerances",
-           "parse_space_group", "SYMMETRY_LETTERS", "SYMMETRY_RULE"]
+           "FatalConfigError", "FATAL_KEYS", "REQUIRED_KEYS", "missing_required",
+           "missing_required_message",
+           "validate_tolerances", "parse_space_group", "SYMMETRY_LETTERS",
+           "SYMMETRY_RULE"]
 
 
 class FatalConfigError(ValueError):
@@ -43,8 +45,45 @@ class FatalConfigError(ValueError):
 # Elo/Ehi: the band's 5/30 keV default is not this beamline's either; the C
 # reads them with an unchecked sscanf, so an unparseable value silently keeps
 # 5/30 there.
+# Keys that must be PRESENT (decision D5, 0.8): their defaults disagreed between
+# the parsers that read them -- RunImage (laue_config), streaming
+# (laue_stream_utils) and the C indexers -- so an absent key meant a different
+# run depending on the path. Rather than pick one default, both Python parsers
+# now stop when one is missing, naming every missing key at once:
+#
+#   key              RunImage     streaming      C
+#   LatticeParameter Ni           Ni             FATAL (a = 0)
+#   P_Array          .02 .002 .513  0 0 .513     0 0 0
+#   R_Array          -1.2 x3      -1.2 x3        0 0 0
+#   NrPxX, NrPxY     2048         2048           FATAL (0)
+#   PxX, PxY         0.2          0.2            0  (and 0.2 is not metres)
+#   MaxNrLaueSpots   7            400            500
+#   MinIntensity     50           0              1000
+#   NMeadianPasses   5            1              -
+#   MinGoodSpots     5            2              5 (Stream final gate)
+#   RobustFilter     1            absent=legacy  -
+#   BackgroundFile   median.bin   "" (compute)   -
+#
+# Every other key takes its default from SCHEMA, in both parsers. A malformed
+# value for one of these is fatal too (there is no default to fall back on).
+REQUIRED_KEYS = frozenset({"LatticeParameter", "P_Array", "R_Array", "NrPxX", "NrPxY",
+                           "PxX", "PxY", "MaxNrLaueSpots", "MinIntensity",
+                           "NMeadianPasses", "MinGoodSpots", "RobustFilter",
+                           "BackgroundFile"})
+
 FATAL_KEYS = frozenset({"SpaceGroup", "Symmetry", "LatticeParameter",
-                        "P_Array", "R_Array", "Elo", "Ehi"})
+                        "P_Array", "R_Array", "Elo", "Ehi"}) | REQUIRED_KEYS
+
+
+def missing_required(present_keys) -> list:
+    """The REQUIRED_KEYS not in *present_keys* (canonical key names), sorted."""
+    return sorted(REQUIRED_KEYS - set(present_keys))
+
+
+def missing_required_message(missing, source: str) -> str:
+    return (f"{source}: required key(s) missing: {', '.join(missing)}. These have "
+            f"no default (the RunImage, streaming and C parsers used to disagree "
+            f"on one); set each for this experiment.")
 
 
 @dataclass(frozen=True)
@@ -85,8 +124,10 @@ SCHEMA = [
     # --- Detector ---
     Param("NrPxX", "nr_px_x", int, 2048, "config", _DET),
     Param("NrPxY", "nr_px_y", int, 2048, "config", _DET),
-    Param("PxX", "px_x", float, 0.2, "config", _DET),
-    Param("PxY", "px_y", float, 0.2, "config", _DET),
+    # Metres. REQUIRED (REQUIRED_KEYS): the default is written by `RunImage
+    # config -o` only, never used for a file that omits the key.
+    Param("PxX", "px_x", float, 0.0002, "config", _DET),
+    Param("PxY", "px_y", float, 0.0002, "config", _DET),
     Param("OrientationSpacing", "orientation_spacing", float, 0.4, "config", _DET),
     # --- HKL ---
     Param("Elo", "elo", float, 5.0, "config", _HKL),
@@ -163,6 +204,9 @@ SCHEMA = [
               "editing the images: removing a reflection promotes its neighbourhood "
               "to local maxima and manufactures a ring of false peaks (measured "
               "2.7-3.4x for weak spots, 21x for a saturated one)."),
+    Param("GaussianFactor", "gaussian_factor", float, 0.25, "image_processing", _IMG,
+          doc="Matching-blur sigma = GaussianFactor x min(spot spacing, one "
+              "orientation-grid step in px), before GaussSigmaMax"),
     Param("FilterRadius", "filter_radius", int, 101, "image_processing", _IMG),
     Param("NMeadianPasses", "median_passes", int, 1, "image_processing", _IMG),
     Param("WatershedImage", "watershed_enabled", bool, True, "image_processing", _IMG),

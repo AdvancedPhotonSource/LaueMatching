@@ -47,6 +47,7 @@ HKLFile {hkls}
 ForwardFile {fwd}
 DoFwd 0
 ResultDir {results}
+BackgroundFile {results}/median.bin
 EnableVisualization 0
 EnableSimulation 0
 """

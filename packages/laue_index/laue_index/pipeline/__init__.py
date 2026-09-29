@@ -30,7 +30,7 @@ import runpy
 import sys
 from pathlib import Path
 
-__all__ = ["PIPELINE_DIR", "add_to_path", "run_module", "SCRIPTS"]
+__all__ = ["PIPELINE_DIR", "add_to_path", "run_module", "repo_root", "SCRIPTS"]
 
 #: Directory holding the orchestration modules (this package's own directory).
 PIPELINE_DIR = Path(__file__).resolve().parent
@@ -47,6 +47,22 @@ SCRIPTS = (
     "laue_image_server",
     "laue_postprocess",
 )
+
+
+def repo_root() -> Path | None:
+    """The source checkout this package is running from, or None.
+
+    The nearest ancestor holding both ``scripts/`` and ``CMakeLists.txt`` (the
+    same rule as the test suite's conftest). None for an installed package.
+    Callers used to take ``dirname(dirname(__file__))``, which was the repo
+    root while these modules lived in ``scripts/`` and became the PACKAGE
+    directory after the move, so ``bin/``, ``build/``, the orientation DB and
+    the /dev/shm copy source were all looked for in the wrong place.
+    """
+    for candidate in PIPELINE_DIR.parents:
+        if (candidate / "scripts").is_dir() and (candidate / "CMakeLists.txt").is_file():
+            return candidate
+    return None
 
 
 def add_to_path() -> str:

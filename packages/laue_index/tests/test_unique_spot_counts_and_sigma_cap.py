@@ -6,6 +6,7 @@
 * GaussSigmaMax was applied by laue_index.preprocess (streaming) but ignored by
   RunImage's own blur.
 """
+from _required import with_required
 import inspect
 
 import numpy as np
@@ -44,9 +45,10 @@ def _segment_blur(tmp_path, smax):
     import RunImage
     from laue_index.pipeline.laue_config import ConfigurationManager
     p = tmp_path / f"params_{smax}.txt"
-    p.write_text("SpaceGroup 225\nNrPxX 128\nNrPxY 128\nPxX 0.0002\nPxY 0.0002\n"
-                 "P_Array 0.02 0.002 0.513\nMinArea 2\nWatershedImage 0\n"
-                 + (f"GaussSigmaMax {smax}\n" if smax else ""))
+    p.write_text(with_required(
+        "SpaceGroup 225\nNrPxX 128\nNrPxY 128\nPxX 0.0002\nPxY 0.0002\n"
+        "P_Array 0.02 0.002 0.513\nMinArea 2\nWatershedImage 0\n"
+        + (f"GaussSigmaMax {smax}\n" if smax else "")))
     cm = ConfigurationManager(str(p))
     proc = object.__new__(RunImage.EnhancedImageProcessor)   # no background load
     proc.config = cm
@@ -79,5 +81,5 @@ def test_runimage_applies_gauss_sigma_max(tmp_path):
 def test_gauss_sigma_max_reaches_runimage_config(tmp_path):
     from laue_index.pipeline.laue_config import ConfigurationManager
     p = tmp_path / "params.txt"
-    p.write_text("SpaceGroup 225\nGaussSigmaMax 1.5\n")
+    p.write_text(with_required("SpaceGroup 225\nGaussSigmaMax 1.5\n"))
     assert ConfigurationManager(str(p)).get("gauss_sigma_max") == 1.5

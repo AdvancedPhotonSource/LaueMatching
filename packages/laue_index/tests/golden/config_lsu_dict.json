@@ -1,5 +1,5 @@
 {
-  "background_file": "",
+  "background_file": "median_NiIndent.bin",
   "denoise_image": false,
   "denoise_strength": 1.0,
   "distance": 0.512993,
@@ -32,7 +32,7 @@
   "px_y": 0.0002,
   "r_array": "-1.20161887 -1.21404493 -1.21852276",
   "result_dir": "results",
-  "robust_filter": null,
+  "robust_filter": true,
   "space_group": 225,
   "symmetry": "F",
   "threshold_method": "adaptive",

@@ -6,6 +6,7 @@ what these tests pin: the cap of 8 threw away measured throughput, and
 a cpuset or a container CPU quota the pool oversubscribed whatever we were
 actually given. Both failure modes are asserted directly, not implied.
 """
+from _required import with_required
 import os
 from unittest import mock
 
@@ -58,22 +59,85 @@ def test_usable_cpu_count_never_zero():
 # ---------------------------------------------------------------------------
 
 def test_worker_peak_matches_the_measurement():
-    """Fitted on shannon at 1024^2, 2048^2 and 4096^2; residuals were <=0.2 MB.
-    If someone edits the constants, these three must still be reproduced."""
-    for n, measured_mb in ((1024, 68.0), (2048, 207.4), (4096, 763.1)):
+    """Pinned to the 2026-09-28 measurements of a REAL pool worker on Linux
+    (see the workers.py docstring): steady-state peak above idle 104.2 MB at
+    1024^2 and 312.5 MB at 2048^2 (flat to 400 tasks), and 1087.6 MB at 4096^2
+    from an independent three-size run. The model is a guard: it must sit
+    ABOVE every point, and not by more than 45 MB. The old 44.19 B/px + 21.8 MB
+    said 207 MB at 2048^2 and fails here."""
+    assert W.BYTES_PER_PIXEL_PER_WORKER == pytest.approx(64.0, abs=0.5)
+    assert W.WORKER_BASE_BYTES == pytest.approx(53.0e6, abs=0.5e6)
+    for n, measured_mb in ((1024, 104.2), (2048, 312.5), (4096, 1087.6)):
         got_mb = W.worker_peak_bytes(n * n) / 1e6
-        assert got_mb == pytest.approx(measured_mb, abs=1.0), (
-            f"{n}x{n}: model says {got_mb:.1f} MB, measurement said {measured_mb} MB")
+        assert measured_mb <= got_mb <= measured_mb + 45.0, (
+            f"{n}x{n}: model says {got_mb:.1f} MB, a real worker measured {measured_mb} MB")
 
 
 def test_worker_peak_scales_with_pixels_not_frames():
-    """A 4096^2 detector costs ~4x a 2048^2 one. The old constant-8 cap was blind
-    to frame size entirely."""
+    """A 4096^2 detector costs ~4x a 2048^2 one (3.49x with the measured 53 MB
+    fixed term). The old constant-8 cap was blind to frame size entirely."""
     small = W.worker_peak_bytes(2048 * 2048)
     big = W.worker_peak_bytes(4096 * 4096)
-    assert 3.5 < big / small < 4.0
+    assert 3.3 < big / small < 4.0
 
 
+def _synthetic_frame(n, nspots, seed=0):
+    import numpy as np
+    rng = np.random.default_rng(seed)
+    yy, xx = np.mgrid[0:n, 0:n] / n
+    img = 100.0 + 40.0 * xx + 25.0 * np.sin(3.0 * yy)
+    for _ in range(nspots):
+        cy, cx = rng.uniform(16, n - 16, 2)
+        s = rng.uniform(1.2, 3.0)
+        amp = 10 ** rng.uniform(2.3, 4.3)
+        r = int(4 * s) + 1
+        y0, x0 = int(cy) - r, int(cx) - r
+        gy, gx = np.mgrid[y0:y0 + 2 * r + 1, x0:x0 + 2 * r + 1]
+        img[gy, gx] += amp * np.exp(-((gy - cy) ** 2 + (gx - cx) ** 2) / (2 * s * s))
+    return rng.poisson(img).astype(np.float64) + rng.normal(0, 3.0, img.shape)
+
+
+def test_bytes_per_pixel_matches_a_live_measurement(tmp_path):
+    """Measures, not pins: tracemalloc peak of one WHOLE worker task
+    (laue_image_server._preprocess_one: HDF5 load + preprocess) as a SLOPE
+    between 512^2 and 1024^2 synthetic frames, so fixed overhead cancels, plus
+    the 8 B/px background copy every task receives pickled. That sum (56 + 8)
+    must agree with the constant (64, a guard over the real-worker RSS) to 6%;
+    the call-only 48.05 is 25% short and fails."""
+    import tracemalloc
+    import h5py
+    import numpy as np
+    from laue_index.pipeline import laue_stream_utils as lsu
+    from laue_index import preprocess as P
+    import laue_image_server as srv
+
+    def peak_of_one_task(n):
+        p = tmp_path / f"params_{n}.txt"
+        p.write_text(with_required(
+            f"NrPxX {n}\nNrPxY {n}\nThresholdMethod percentile\n"
+            "ThresholdPercentile 99.8\nMinArea 4\nGaussSigmaMax 2.5\n"))
+        cfg = lsu.parse_config(str(p))
+        raw = _synthetic_frame(n, nspots=int(75 * (n / 1024) ** 2), seed=n)
+        h5 = tmp_path / f"frame_{n}.h5"
+        with h5py.File(h5, "w") as f:
+            f["entry1/data/data"] = np.clip(raw, 0, 65535).astype(np.uint16)
+        background = P.compute_background(raw, 101, 1)
+        srv._preprocess_one(str(h5), "/entry1/data/data", 0, n, n, cfg, background)  # warm-up
+        tracemalloc.start()
+        try:
+            tracemalloc.reset_peak()
+            out = srv._preprocess_one(str(h5), "/entry1/data/data", 0, n, n, cfg, background)
+            _cur, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+        assert "error" not in out and out.get("n_spots", 0) > 0, out
+        return peak
+
+    task = ((peak_of_one_task(1024) - peak_of_one_task(512))
+            / (1024 * 1024 - 512 * 512))
+    measured = task + 8.0          # the background copy each task receives
+    assert W.BYTES_PER_PIXEL_PER_WORKER == pytest.approx(measured, rel=0.06), (
+        f"measured {measured:.2f} B/px (task {task:.2f} + 8), constant {W.BYTES_PER_PIXEL_PER_WORKER}")
 # ---------------------------------------------------------------------------
 # choose_preprocess_workers
 # ---------------------------------------------------------------------------
@@ -220,9 +284,9 @@ def test_streaming_parser_reads_preprocess_workers(tmp_path):
     and only the environment variable worked. The test above checked the other
     parser, which is why this went unnoticed."""
     import laue_stream_utils as lsu
-    assert lsu.parse_config(str(tmp_path / "absent.txt"))["preprocess_workers"] == 0
+    assert lsu.DEFAULT_CONFIG["preprocess_workers"] == 0
     p = tmp_path / "params.txt"
-    p.write_text("NrPxX 2048\nPreprocessWorkers 7   # cap\n")
+    p.write_text(with_required("NrPxX 2048\nPreprocessWorkers 7   # cap\n"))
     assert lsu.parse_config(str(p))["preprocess_workers"] == 7
 
 

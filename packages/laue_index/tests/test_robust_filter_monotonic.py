@@ -157,7 +157,7 @@ def test_hex_ops_see_a_60_degree_c_rotation_as_identity():
     to ~1e-7, which shows up as ~1e-5 deg in the arccos."""
     a = _MAT
     b = _MAT @ _R([0, 0, 1], 60) @ _R([1, 0, 0], 1.0)
-    ang, _ = disorientation_deg_axis(a, b, HEX_OPS)
+    ang, _ = disorientation_deg_axis(a, b, ops=HEX_OPS)
     assert ang == pytest.approx(1.0, abs=1e-3)
 
 

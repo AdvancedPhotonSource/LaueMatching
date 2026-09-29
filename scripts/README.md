@@ -198,12 +198,19 @@ python scripts/laue_postprocess.py \
 | `--output-dir` | auto-timestamped | Output directory |
 | `--port` | `60517` | Daemon TCP port |
 | `--port-timeout` | `180` | Max seconds to wait for daemon startup |
-| `--flush-time` | `5` | Seconds to wait after server finishes before killing daemon |
-| `--min-unique` | `2` | Minimum unique spots for orientation filtering |
+| `--flush-time` | `5` | Extra seconds (on top of one hour) the daemon may take to finish the frames it was sent |
+| `--drain-stall` | `600` | After the server finishes, stop waiting when the daemon has reported no new frame for this long |
+| `--min-unique` | MinGoodSpots | Minimum exclusive (winner-take-all) spots for orientation filtering |
 | `--log-level` | `INFO` | Logging verbosity |
 | `--watch` | off | Real-time mode: keep watching `--folder` and stream new `.h5` files as they arrive (works with an initially empty folder). Stop with a `STOP_LAUE` file in the folder or `--watch-idle`. |
 | `--watch-poll` | `2` | Seconds between folder rescans in watch mode |
 | `--watch-idle` | `0` | Exit watch mode after N seconds with no new files (0 = never) |
+
+After the image server exits, the orchestrator waits until the daemon has
+logged a finishing line (`[Image N] Total:` or `[Image N] No matches, skipping
+fitting.`) for every frame the server sent (per `frame_mapping.json`), then
+stops it. The daemon's output directory is resolved exactly as the daemon does
+it: the params file's `ResultDir`, else `results_stream`.
 
 The daemon TCP port is passed to `LaueMatchingGPUStream` via the
 `LAUE_STREAM_PORT` environment variable (default `60517`), so several
@@ -263,8 +270,15 @@ All frames across all H5 files are submitted to the pool upfront, giving the wor
 | `--labels` | *(none)* | Path to `labels.h5` with real image segmentation labels |
 | `--folder` | *(none)* | Source H5 image folder (enables raw/processed data in output H5) |
 | `--image-nr` | `0` | Process specific image (0 = all) |
-| `--min-unique` | `2` | Minimum unique spots to keep an orientation |
+| `--min-unique` | MinGoodSpots | Minimum exclusive (winner-take-all) spots to keep an orientation |
 | `--nprocs` | `1` | Number of parallel processes for per-image processing |
+| `--preprocess-record` | beside `--mapping` | The image server's `stream_preprocess.json` (its saved background and absolute exclusion paths), used to re-preprocess each embedded frame exactly as it was indexed |
+
+Every frame in the mapping gets one `image_NNNNN.output.h5`: a frame the server
+skipped (e.g. no spots) or the daemon found no solution for gets a stub with
+empty tables, `n_filtered` 0 and `skip_reason` set, so the count of output
+files equals the number of frames sent (what `pipeline/dispatch/wait_static.sh`
+checks).
 | `--log-level` | `INFO` | Logging verbosity |
 
 ---
@@ -281,6 +295,12 @@ Dataclass-based configuration with three main sections:
 | `VisualizationConfig` | Plot settings, report templates, output formats |
 | `OptimizerConfig` | Optimizer tolerances and bounds (Nelder–Mead; the `Optimizer` key is accepted but ignored) |
 | `ConfigurationManager` | Parses `params.txt`, resolves paths, validates settings |
+
+Defaults for every params key come from `laue_index.config_schema.SCHEMA`, in
+both this parser and the streaming one (`laue_stream_utils.parse_config`). Keys
+whose defaults used to differ between RunImage, streaming and the C
+(`config_schema.REQUIRED_KEYS`) have none: a params file without one is refused
+by both parsers, naming every missing key.
 
 ### `laue_stream_utils.py`
 

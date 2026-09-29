@@ -33,7 +33,7 @@ except ImportError:
 logger = logging.getLogger("LaueStream")
 
 __all__ = [
-    "compute_background", "load_background", "enhance_image",
+    "compute_background", "load_background", "save_background", "enhance_image",
     "find_connected_components", "filter_small_components",
     "calculate_gaussian_sigma", "preprocess_image", "Preprocessor",
 ]
@@ -70,11 +70,17 @@ def load_background(
     nr_px_x: int,
     nr_px_y: int,
 ) -> np.ndarray:
-    """Load a pre-computed background from a raw binary file."""
+    """Load a pre-computed background from a raw binary file.
+
+    Its provenance record (``<file>.meta.json``) is checked first: a record
+    that disagrees with the file refuses (ArtifactMismatch); no record warns.
+    """
     expected = nr_px_x * nr_px_y * np.dtype(np.float64).itemsize
     if background_file and os.path.exists(background_file):
         actual = os.path.getsize(background_file)
         if actual == expected:
+            from . import artifacts
+            artifacts.require(background_file, "background", log=logger)
             return np.fromfile(
                 background_file, dtype=np.float64
             ).reshape((nr_px_y, nr_px_x))
@@ -84,6 +90,37 @@ def load_background(
                 f"got {actual}). Ignoring."
             )
     return np.zeros((nr_px_y, nr_px_x), dtype=np.float64)
+
+
+def save_background(
+    background: np.ndarray,
+    path: str,
+    *,
+    source: str | None = None,
+    frame_index: int | None = None,
+    filter_radius: int | None = None,
+    median_passes: int | None = None,
+) -> None:
+    """Write a background (float64, row-major) and its provenance record.
+
+    The record says what made it: the median filter settings and the frame it
+    was computed from (file + index), so a background is never again an
+    anonymous file that was silently computed from whichever frame came first
+    (invariant 16).
+    """
+    from . import artifacts
+    arr = np.ascontiguousarray(background, dtype=np.float64)
+    arr.tofile(path)
+    config = {}
+    if filter_radius is not None:
+        config["FilterRadius"] = int(filter_radius)
+    if median_passes is not None:
+        config["NMeadianPasses"] = int(median_passes)
+    artifacts.write_record(
+        path, "background", config=config,
+        layout={"shape": list(arr.shape), "dtype": "float64"},
+        inputs=[("source_frame", source)] if source else (),
+        extra={"frame_index": frame_index} if frame_index is not None else {})
 
 
 def enhance_image(
@@ -362,10 +399,13 @@ def calculate_gaussian_sigma(
     pixel_size: float = 0.2,
     distance: float = 0.513,
     orient_spacing: float = 0.4,
+    factor: float = 0.25,
 ) -> float:
     """
     Calculate Gaussian blur sigma from spot spacing.
 
+    sigma = *factor* x min(robust spot spacing, one orientation-grid step in
+    pixels); *factor* is the params key GaussianFactor (0.25 when absent).
     Returns sigma in pixels (float, >= 1.0).
     """
     if not centers or len(centers) < 2:
@@ -390,7 +430,7 @@ def calculate_gaussian_sigma(
     else:
         delta = min_px_dist
 
-    sigma = 0.25 * min(min_px_dist, delta) if delta > 0 else 0.25 * min_px_dist
+    sigma = factor * min(min_px_dist, delta) if delta > 0 else factor * min_px_dist
     return max(sigma, 1.0)
 
 
@@ -465,24 +505,28 @@ def preprocess_image(
             percentile=cfg["threshold_percentile"],
         )
 
-    thresholded_u16 = thresholded.astype(np.uint16)
+    # float32, not uint16: a uint16 cast wrapped counts above 65535 (a 70000-count
+    # spot became 4464) and truncated fractional ones to 0, so 32-bit and float
+    # frames lost or shrank spots. float32 is exact for integer counts < 2**24,
+    # so uint16-range frames are unchanged.
+    thresholded_f = thresholded.astype(np.float32)
 
     # --- Step 4: Connected components ---
-    labels, bboxes, areas, nlabels = find_connected_components(thresholded_u16)
+    labels, bboxes, areas, nlabels = find_connected_components(thresholded_f)
     if nlabels <= 1:
         # No components — return zero image
         blurred = np.zeros_like(raw_image, dtype=np.float64)
         if return_intermediates:
             return {
-                "background": background, "thresholded": thresholded_u16,
-                "labels_unfiltered": labels, "filt_img": thresholded_u16,
+                "background": background, "thresholded": thresholded_f,
+                "labels_unfiltered": labels, "filt_img": thresholded_f,
                 "filt_labels": labels, "blurred": blurred, "centers": [],
             }
-        return blurred, thresholded_u16, labels, []
+        return blurred, thresholded_f, labels, []
 
     # --- Step 5: Filter small components ---
     filt_img, filt_labels, centers = filter_small_components(
-        thresholded_u16, labels, bboxes, areas, nlabels,
+        thresholded_f, labels, bboxes, areas, nlabels,
         min_area=cfg["min_area"],
     )
 
@@ -509,7 +553,7 @@ def preprocess_image(
         blurred = np.zeros_like(raw_image, dtype=np.float64)
         if return_intermediates:
             return {
-                "background": background, "thresholded": thresholded_u16,
+                "background": background, "thresholded": thresholded_f,
                 "labels_unfiltered": labels, "filt_img": filt_img,
                 "filt_labels": filt_labels, "blurred": blurred, "centers": centers,
             }
@@ -521,6 +565,7 @@ def preprocess_image(
         pixel_size=cfg["px_x"],
         distance=cfg["distance"],
         orient_spacing=cfg["orientation_spacing"],
+        factor=float(cfg.get("gaussian_factor", 0.25)),
     )
     # Optional cap (param GaussSigmaMax): on DENSE frames a large blur lights
     # so much of the detector that chance matches flood the coarse gate and
@@ -532,7 +577,7 @@ def preprocess_image(
 
     if return_intermediates:
         return {
-            "background": background, "thresholded": thresholded_u16,
+            "background": background, "thresholded": thresholded_f,
             "labels_unfiltered": labels, "filt_img": filt_img,
             "filt_labels": filt_labels, "blurred": blurred, "centers": centers,
         }

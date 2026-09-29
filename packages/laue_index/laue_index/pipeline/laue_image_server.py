@@ -150,18 +150,9 @@ def _preprocess_one(h5_path, h5loc, frame_idx, nr_px_y, nr_px_x, cfg, background
     if raw.shape != (nr_px_y, nr_px_x):
         return {"error": f"shape {raw.shape} != ({nr_px_y},{nr_px_x})"}
     # Iterative indexing: if ExcludeSpotsDir is set, this frame's own residual
-    # list is loaded here, where the frame's identity is still known. cfg is
-    # copied because it is shared across the worker pool and the mask is
-    # frame-specific -- caching it on the shared dict would leak one frame's
-    # exclusions onto every later frame.
-    _dir = cfg.get("exclude_spots_dir", "")
-    if _dir:
-        from laue_index.preprocess import (exclusion_file_for_frame,
-                                           load_exclusion_mask)
-        _f = exclusion_file_for_frame(_dir, h5_path)
-        cfg = dict(cfg)
-        cfg["_exclude_mask_frame"] = (
-            load_exclusion_mask(_f, nr_px_y, nr_px_x) if _f else None)
+    # list is loaded here, where the frame's identity is still known (on a copy
+    # of cfg; see lsu.cfg_for_frame). Post-processing uses the same helper.
+    cfg = lsu.cfg_for_frame(cfg, h5_path)
     blurred, _filt_img, filt_labels, centers = lsu.preprocess_image(
         raw, cfg, background=background
     )
@@ -313,14 +304,34 @@ def serve_images(
             filter_radius=cfg["filter_radius"],
             median_passes=cfg["median_passes"],
         )
-        # Save for re-use
+        # Save for re-use, with its provenance record (the frame it came from)
         bg_path = cfg.get("background_file", "")
         if bg_path:
             try:
-                background.tofile(bg_path)
+                lsu.save_background(background, bg_path, source=h5_files[0], frame_index=0,
+                                    filter_radius=cfg["filter_radius"],
+                                    median_passes=cfg["median_passes"])
                 logger.info(f"Background saved to {bg_path}")
             except Exception as e:
                 logger.warning(f"Could not save background: {e}")
+
+    # Save the background actually used, and record it with the exclusion paths
+    # resolved HERE (the server's cwd), so post-processing can re-preprocess
+    # each frame exactly as it was sent (lsu.PREPROCESS_RECORD).
+    record_path = lsu.preprocess_record_path(mapping_file)
+    bg_used = os.path.join(os.path.dirname(record_path), lsu.STREAM_BACKGROUND)
+    try:
+        _bg_src = cfg.get("background_file", "")
+        _bg_src = _bg_src if _bg_src and os.path.exists(_bg_src) else h5_files[0]
+        lsu.save_background(background, bg_used, source=_bg_src,
+                            frame_index=None if _bg_src != h5_files[0] else 0,
+                            filter_radius=cfg["filter_radius"],
+                            median_passes=cfg["median_passes"])
+        lsu.write_preprocess_record(record_path, bg_used, cfg)
+        logger.info(f"Preprocessing record: {record_path}")
+    except OSError as e:
+        logger.warning(f"Could not write preprocessing record {record_path}: {e}; "
+                       "post-processing will not reproduce this run's background")
 
     # --- 4. Connect to daemon ---
     logger.info(f"Connecting to daemon at {host}:{port}...")

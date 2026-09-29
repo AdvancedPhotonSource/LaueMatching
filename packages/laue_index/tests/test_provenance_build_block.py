@@ -9,6 +9,7 @@ because the streaming orchestrator can run a daemon from
 ``processing_type`` in the config snapshot is a config label ("CPU" by default
 even on a GPUStream run), so it is annotated rather than trusted.
 """
+from _required import with_required
 import hashlib
 import json
 from pathlib import Path
@@ -113,7 +114,7 @@ def test_orchestrator_records_the_daemon_it_launches(fake_install, tmp_path,
 
     monkeypatch.setattr(lo.subprocess, "Popen", _no_launch)
     params = tmp_path / "params.txt"
-    params.write_text("SpaceGroup 225\nResultDir results_stream\n")
+    params.write_text(with_required("SpaceGroup 225\nResultDir results_stream\n"))
     (tmp_path / "frames").mkdir()
     out = tmp_path / "run"
     with pytest.raises(_Stop):

@@ -216,7 +216,7 @@ def filter_orientations_robust(
                 om = None
 
         if om is not None and kept_oms and \
-                any(disorientation_deg_axis(om, k, sym_ops)[0] < max_angle_deg
+                any(disorientation_deg_axis(om, k, ops=sym_ops)[0] < max_angle_deg
                     for k in kept_oms):
             continue
 

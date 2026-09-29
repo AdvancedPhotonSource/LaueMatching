@@ -11,6 +11,7 @@ Run:
 
 from __future__ import annotations
 
+from _required import with_required
 import sys
 from pathlib import Path
 
@@ -41,6 +42,7 @@ def test_set_write_indexfile_roundtrips(tmp_path: Path):
         "R_Array -1.2 -1.2 -1.2\n"
         "P_Array 0.02 0.002 0.513\n"
     )
+    p.write_text(with_required(p.read_text()))
     mgr = ConfigurationManager(str(p))
 
     # Default: True
@@ -80,6 +82,7 @@ def test_parser_accepts_indexfile_metadata(tmp_path: Path):
         "XtalFile /path/to/Ni.xml\n"
         "AtomDesctiption Ni001  0 0 0 1\n"
     )
+    p.write_text(with_required(p.read_text()))
     mgr = ConfigurationManager(str(p))
     assert mgr.config.structure_desc == "Ni"
     assert mgr.config.xtal_file == "/path/to/Ni.xml"

@@ -40,9 +40,13 @@ from plotly.subplots import make_subplots
 # Configure matplotlib
 plt.rcParams['font.size'] = 3
 
-# Get installation path — repo root is one level above scripts/
+# SCRIPT_DIR is this module's directory (laue_index/pipeline/). INSTALL_PATH,
+# one level up, is the laue_index PACKAGE directory since the move out of
+# scripts/ -- NOT the repo root; it is kept only for the sys.path insert below.
+# The checkout (bin/, build/, the orientation DB) is repo_root(), None when
+# running from an installed package.
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-INSTALL_PATH = os.path.dirname(SCRIPT_DIR)  # repo root (contains bin/, LIBS/, etc.)
+INSTALL_PATH = os.path.dirname(SCRIPT_DIR)
 PYTHON_PATH = sys.executable
 
 # Shared streaming utilities (also used by laue_image_server / laue_postprocess)
@@ -58,6 +62,7 @@ from laue_index.records import SOLUTION_FORMATS
 from laue_index.filtering import LegacyUniqueSpotFilter, RobustCSLAwareFilter
 from laue_index.indexer import run_indexer
 from laue_index.postprocess import PostProcessor
+from laue_index.pipeline import repo_root
 _RI = SOLUTION_FORMATS["runimage"]  # RunImage solution layout (GrainNr at col 0)
 
 # Configuration system (extracted to laue_config.py)
@@ -106,7 +111,8 @@ class EnhancedImageProcessor:
             self.config.get("nr_px_y", 2048),
         )
 
-    def compute_background(self, image: np.ndarray) -> np.ndarray:
+    def compute_background(self, image: np.ndarray, source: str | None = None,
+                           frame_index: int | None = None) -> np.ndarray:
         """
         Compute background by applying median filter to the image.
 
@@ -128,11 +134,18 @@ class EnhancedImageProcessor:
             median_passes=img_config.median_passes,
         )
 
-        # Save the background for future use
+        # Save the background for future use, with its provenance record
+        # (the frame and filter it was computed from).
         background_file_path = self.config.get("background_file")
         if background_file_path:
             try:
-                self.background.tofile(background_file_path)
+                if source is None:   # called from a step that does not know the path
+                    source = getattr(self, "_current_image_path", None)
+                    frame_index = 0 if source else frame_index
+                lsu.save_background(self.background, background_file_path, source=source,
+                                    frame_index=frame_index,
+                                    filter_radius=img_config.filter_radius,
+                                    median_passes=img_config.median_passes)
                 logger.info(f"Computed background saved to {background_file_path}")
             except Exception as e:
                 logger.error(f"Error saving computed background to {background_file_path}: {e}")
@@ -210,8 +223,9 @@ class EnhancedImageProcessor:
         # Apply thresholding to the enhanced, background-corrected image
         thresholded, threshold_value_used = self.apply_threshold(enhanced, override_thresh) # Returns float
 
-        # Return the image after enhancement and thresholding, cast to uint16 for compatibility
-        return thresholded.astype(np.uint16), threshold_value_used
+        # float32, not uint16: see laue_index.preprocess.preprocess_image (a uint16
+        # cast wrapped counts above 65535 and truncated fractional counts to 0).
+        return thresholded.astype(np.float32), threshold_value_used
 
     @staticmethod
     def find_connected_components(image: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray, int]:
@@ -235,12 +249,35 @@ class EnhancedImageProcessor:
         )
 
     @staticmethod
-    def calculate_gaussian_width(centers: List, pixel_size: float, distance: float, orient_spacing: float) -> float:
+    def calculate_gaussian_width(centers: List, pixel_size: float, distance: float,
+                                 orient_spacing: float, factor: float = 0.25) -> float:
         """Calculate optimal Gaussian blur sigma based on spot spacing."""
-        return lsu.calculate_gaussian_sigma(centers, pixel_size, distance, orient_spacing)
+        return lsu.calculate_gaussian_sigma(centers, pixel_size, distance, orient_spacing,
+                                            factor=factor)
 
 
-    def _segment(self, thresholded_image, output_path, output_h5, data_group, progress):
+    def _exclusion_mask(self, image_path, shape):
+        """ExcludeSpotsFile (loaded once) OR'd with this frame's ExcludeSpotsDir
+        list, or None. The same two keys, with the same meaning, as the streaming
+        path applies in laue_index.preprocess; RunImage used to parse both and
+        apply neither."""
+        from laue_index.preprocess import exclusion_file_for_frame, load_exclusion_mask
+        img_config = self.config.get("image_processing")
+        ny, nx = shape
+        if not hasattr(self, "_static_exclusion"):
+            spec = getattr(img_config, "exclude_spots_file", "") if img_config else ""
+            self._static_exclusion = load_exclusion_mask(spec, ny, nx) if spec else None
+        mask = self._static_exclusion
+        frame_dir = getattr(img_config, "exclude_spots_dir", "") if img_config else ""
+        if frame_dir and image_path:
+            f = exclusion_file_for_frame(frame_dir, image_path)
+            fm = load_exclusion_mask(f, ny, nx) if f else None
+            if fm is not None:
+                mask = fm if mask is None else (mask | fm)
+        return mask
+
+    def _segment(self, thresholded_image, output_path, output_h5, data_group, progress,
+                 image_path=None):
         """Connected-components -> small-component filter -> Gaussian blur ->
         optional watershed.  Writes intermediate datasets into *data_group* and
         the blurred indexing input to <output_path>.bin.  Returns the
@@ -263,7 +300,14 @@ class EnhancedImageProcessor:
         filtered_thresholded_image, filtered_labels, centers = self.filter_small_components(
             thresholded_image, labels, bboxes, areas, nlabels
         )
-        data_group.create_dataset('cleaned_data_threshold_filtered', data=filtered_thresholded_image, dtype=np.uint16)
+        # Whole components at excluded positions never reach the matcher.
+        excl = self._exclusion_mask(image_path, filtered_thresholded_image.shape)
+        if excl is not None:
+            from laue_index.preprocess import apply_exclusion
+            filtered_thresholded_image, filtered_labels, centers, n_drop = apply_exclusion(
+                filtered_thresholded_image, filtered_labels, centers, excl)
+            logger.info(f"Excluded {n_drop} spot(s) at ExcludeSpotsFile/Dir positions")
+        data_group.create_dataset('cleaned_data_threshold_filtered', data=filtered_thresholded_image, dtype=np.float32)
         data_group.create_dataset('cleaned_data_threshold_filtered_labels', data=filtered_labels, dtype=np.int32)
         if centers:
             centers_array = np.array([[float(c[0]), float(c[1][0]), float(c[1][1]), float(c[2])] for c in centers], dtype=np.float64)
@@ -282,7 +326,8 @@ class EnhancedImageProcessor:
             centers,
             self.config.get("px_x", 0.2),
             self.config.get("distance", 0.513),
-            self.config.get("orientation_spacing", 0.4)
+            self.config.get("orientation_spacing", 0.4),
+            factor=float(self.config.get("image_processing").gaussian_factor),
         )
         # GaussSigmaMax: the same optional cap laue_index.preprocess applies on
         # the streaming path (0 = no cap). RunImage used to ignore the key.
@@ -344,6 +389,7 @@ class EnhancedImageProcessor:
         Returns:
             Dictionary of processing results
         """
+        self._current_image_path = image_path   # the background record names its source
         logger.info(f"Processing image: {image_path}")
         start_time = time.time()
 
@@ -392,7 +438,7 @@ class EnhancedImageProcessor:
         # Ensure background is ready (load or compute if needed)
         if np.count_nonzero(self.background) == 0 and not os.path.exists(self.config.get("background_file", "")):
              logger.info("Background not loaded and file doesn't exist, computing from current raw image.")
-             self.compute_background(raw_image) # Compute from raw image if needed
+             self.compute_background(raw_image, source=image_path, frame_index=0) # Compute from raw image if needed
         elif np.count_nonzero(self.background) == 0 and os.path.exists(self.config.get("background_file", "")):
              self._load_background() # Try loading again if it was zero initially
 
@@ -415,7 +461,7 @@ class EnhancedImageProcessor:
             background_already_subtracted=True # Signal that subtraction is done
         )
         # 'corrected_image_post_subtraction' holds the image after enhancement and thresholding
-        thresholded_image = corrected_image_post_subtraction.astype(np.uint16) # Ensure correct type
+        thresholded_image = corrected_image_post_subtraction.astype(np.float32)
 
         progress.update(1, "Image corrected & thresholded")
 
@@ -431,13 +477,13 @@ class EnhancedImageProcessor:
             data_group.create_dataset('raw_data', data=raw_image)
             data_group.create_dataset('background_median', data=self.background)
             data_group.create_dataset('background_subtracted', data=background_subtracted)
-            data_group.create_dataset('cleaned_data_threshold', data=thresholded_image, dtype=np.uint16)
+            data_group.create_dataset('cleaned_data_threshold', data=thresholded_image, dtype=np.float32)
             data_group['cleaned_data_threshold'].attrs['threshold_value'] = threshold_value_used
             logger.debug(f"Initial data saved to {output_h5}")
 
             # --- Continue processing ---
             seg = self._segment(thresholded_image, output_path, output_h5,
-                                data_group, progress)
+                                data_group, progress, image_path=image_path)
             if "stop" in seg:
                 return seg["stop"]
             final_labels = seg["final_labels"]
@@ -525,10 +571,11 @@ class EnhancedImageProcessor:
                 # neighbours (see laue_provenance._collect_build).
                 try:
                     from laue_index.indexer import binary_path as _binary_path
+                    _root = repo_root()
                     _exe = str(_binary_path(
                         str(self.config.get("processing_type", "CPU")).upper(),
                         bool(self.config.get("do_forward", False)),
-                        os.path.dirname(os.path.dirname(os.path.realpath(__file__)))))
+                        str(_root) if _root is not None else None))
                 except Exception:
                     _exe = None
                 prov = _lp.collect(
@@ -540,6 +587,7 @@ class EnhancedImageProcessor:
                     },
                     executable=_exe,
                 )
+                prov["artifacts"] = getattr(self, "_artifact_lineage", None)
                 _lp.write_to_h5(hf_out, prov, group="/entry/provenance")
             except Exception as prov_exc:
                 logger.warning(f"Could not write provenance group: {prov_exc}")
@@ -615,7 +663,8 @@ class EnhancedImageProcessor:
         compute_type = self.config.get("processing_type", "CPU").upper()
         ncpus = self.config.get("num_cpus", 1)
         do_forward = self.config.get("do_forward", False)
-        repo_root = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+        _root = repo_root()
+        checkout = str(_root) if _root is not None else None
 
         # --- Prepare required input files (orchestration) ---
         config_file = self.config.config_file
@@ -624,17 +673,17 @@ class EnhancedImageProcessor:
         indexing_input_image = f"{output_path}.bin"  # blurred image saved to file
 
         # Ensure orientation database exists (copy default if needed).
-        # INSTALL_PATH is the repo root in a checkout, but inside an installed
-        # package it points at site-packages, where nobody keeps a 7.2 GB (6.7 GiB) file.
-        # LAUEMATCHING_ORIENT_DB is how a pip user says where theirs lives;
-        # `laue-index fetch-db` prints exactly that line.
+        # The default is LAUEMATCHING_ORIENT_DB (how a pip user says where theirs
+        # lives; `laue-index fetch-db` prints exactly that line), else
+        # 100MilOrients.bin in the source checkout. An installed package has no
+        # checkout and nobody keeps a 7.2 GB (6.7 GiB) file in site-packages.
         if not os.path.exists(orient_db_file):
             default_orient_db = os.environ.get(
                 "LAUEMATCHING_ORIENT_DB",
-                os.path.join(INSTALL_PATH, '100MilOrients.bin'))
-            if os.path.isdir(default_orient_db):
+                os.path.join(checkout, '100MilOrients.bin') if checkout else "")
+            if default_orient_db and os.path.isdir(default_orient_db):
                 default_orient_db = os.path.join(default_orient_db, '100MilOrients.bin')
-            if os.path.exists(default_orient_db):
+            if default_orient_db and os.path.exists(default_orient_db):
                 logger.info(f"Orientation database '{orient_db_file}' not found. Copying default from '{default_orient_db}'.")
                 try:
                     shutil.copy2(default_orient_db, orient_db_file)
@@ -642,8 +691,12 @@ class EnhancedImageProcessor:
                     logger.error(f"Failed to copy default orientation database: {e}")
                     return {"success": False, "error": "Orientation database missing and copy failed"}
             else:
-                logger.error(f"Orientation database '{orient_db_file}' not found, and default DB '{default_orient_db}' is also missing.")
-                return {"success": False, "error": "Orientation database missing"}
+                msg = (f"Orientation database '{orient_db_file}' not found, and no default "
+                       f"at '{default_orient_db or '(no LAUEMATCHING_ORIENT_DB, no checkout)'}'. "
+                       "Run `laue-index fetch-db` to download it, then set "
+                       "LAUEMATCHING_ORIENT_DB (or OrientationFile) to its path.")
+                logger.error(msg)
+                return {"success": False, "error": msg}
 
         # Generate HKL file if it doesn't exist
         if not os.path.exists(hkl_file):
@@ -652,9 +705,23 @@ class EnhancedImageProcessor:
             if not hkl_gen_result["success"]:
                 return {"success": False, "error": f"Failed to generate HKL file: {hkl_gen_result.get('error', 'Unknown')}"}
 
+        # --- Data artifacts against their provenance records ---
+        # Refuse a record that disagrees with its file or an HKL list made for
+        # another crystal; warn on unrecorded files. The identities are kept for
+        # this image's /entry/provenance (lineage).
+        from laue_index import artifacts as _art
+        try:
+            self._artifact_lineage = _art.check_run_inputs(
+                config_file, orient_db=orient_db_file, hkl=hkl_file,
+                forward=self.config.get("forward_file") or None,
+                background=self.config.get("background_file") or None, log=logger)
+        except _art.ArtifactMismatch as exc:
+            logger.error(f"Refusing to index: {exc}")
+            return {"success": False, "error": f"artifact mismatch: {exc}"}
+
         # --- Run the indexing binary (Indexer stage, REFACTOR_PLAN §6.5) ---
         result = run_indexer(
-            repo_root=repo_root, config_file=config_file,
+            repo_root=checkout, config_file=config_file,
             orient_db_file=orient_db_file, hkl_file=hkl_file,
             image_bin=indexing_input_image, ncpus=ncpus, output_path=output_path,
             compute_type=compute_type, do_forward=do_forward,
@@ -1081,7 +1148,9 @@ Examples:
 
     # --- Post-parsing Validation ---
     if args.command == 'process' and args.threshold > 0 and args.threshold_percentile is not None:
-         parser.warning("Both --threshold and --threshold-percentile provided. --threshold value override will be used.")
+         # argparse has no parser.warning (this raised AttributeError).
+         print("WARNING: Both --threshold and --threshold-percentile provided. "
+               "--threshold value override will be used.", file=sys.stderr)
 
     # Output path for report command
     if args.command == 'report' and args.output is None:
@@ -1095,6 +1164,11 @@ Examples:
 def process_images(args):
     """
     Process images based on command line arguments.
+
+    Returns the per-image results, [] for a dry run, or None when nothing
+    could be run (bad config, no input files, processor failed to start).
+    main() exits non-zero on None or on any failed image; it used to exit 0
+    whatever happened.
     """
     # Set up logging based on args
     log_level = LogLevel[args.loglevel]
@@ -1106,7 +1180,7 @@ def process_images(args):
         config_manager = ConfigurationManager(args.config)
     except SystemExit: # Raised by ConfigurationManager on fatal error
          logger.critical("Exiting due to configuration loading errors.")
-         return [] # Indicate failure
+         return None  # failure: main() exits 1
 
     # Override configuration from command line arguments
     if args.gpu:
@@ -1146,14 +1220,14 @@ def process_images(args):
         os.makedirs(result_dir, exist_ok=True)
     except OSError as e:
         logger.error(f"Could not create output directory '{result_dir}': {e}")
-        return []
+        return None  # failure: main() exits 1
 
     # --- Find Image Files ---
     if '*' in args.image or '?' in args.image:
         image_files_raw = glob.glob(args.image)
         if not image_files_raw:
             logger.error(f"No files found matching glob pattern: {args.image}")
-            return []
+            return None  # failure: main() exits 1
         image_files = sorted(image_files_raw)
     elif args.nfiles > 1 : # Legacy mode check
         # Check if the input file looks like a pattern base
@@ -1161,12 +1235,12 @@ def process_images(args):
         image_files = get_image_files(args.image, args.nfiles)
         if not image_files:
              logger.error(f"Could not generate file list using legacy pattern: base={args.image}, nfiles={args.nfiles}")
-             return []
+             return None  # failure: main() exits 1
     else:
         # Single file input
         if not os.path.exists(args.image):
              logger.error(f"Input image file not found: {args.image}")
-             return []
+             return None  # failure: main() exits 1
         image_files = [args.image]
 
     # Limit number of files if -a/nfiles used with glob
@@ -1184,14 +1258,14 @@ def process_images(args):
         logger.info("Dry run requested. Configuration loaded and files found. No processing will occur.")
         logger.info("Files identified:")
         for f in image_files: logger.info(f"  - {f}")
-        return []
+        return []  # nothing run, nothing failed
 
     # --- Initialize Image Processor ---
     try:
         processor = EnhancedImageProcessor(config_manager)
     except Exception as e:
          logger.error(f"Failed to initialize image processor: {e}")
-         return []
+         return None  # failure: main() exits 1
 
     # --- Process Images ---
     results = []
@@ -1455,8 +1529,13 @@ def main():
     args = parse_arguments()
 
     # Execute command based on subparser selected
+    exit_code = 0
     if args.command == 'process':
-        process_images(args)
+        results = process_images(args)
+        if results is None:
+            exit_code = 1
+        elif any(not (r and r.get("success", False)) for r in results):
+            exit_code = 1
     elif args.command == 'config':
         generate_config(args)
     elif args.command == 'view':
@@ -1471,6 +1550,9 @@ def main():
     end_time = time.time()
     logger.info(f"Command '{args.command}' finished in {end_time - start_time:.2f} seconds.")
     print(f"--- Command '{args.command}' finished in {end_time - start_time:.2f} seconds ---")
+    if exit_code:
+        logger.error(f"Command '{args.command}' FAILED (see errors above); exit {exit_code}.")
+        sys.exit(exit_code)
 
 
 if __name__ == "__main__":

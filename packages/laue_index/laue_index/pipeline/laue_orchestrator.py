@@ -12,7 +12,7 @@ Workflow:
     4. Start laue_image_server.py as subprocess
     5. Monitor frame_mapping.json for progress
     6. Wait for server to finish
-    7. Allow daemon flush time, then terminate daemon (SIGTERM)
+    7. Wait until the daemon has reported every sent frame, then SIGTERM it
     8. Run laue_postprocess.py
     9. Print summary
 
@@ -28,6 +28,7 @@ Usage:
 import argparse
 import logging
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -71,22 +72,24 @@ def _find_daemon_binary() -> str:
     built in place with `cmake --build build/`, which the package cannot know
     about.
     """
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.dirname(script_dir)
+    from laue_index.pipeline import repo_root
+    root = repo_root()
+    project_root = str(root) if root is not None else None
 
     primary_error = None
     try:
-        from laue_index.indexer import BinaryUnavailableError, require_binary
+        from laue_index import indexer as _ix
     except ImportError:
         pass
     else:
         try:
-            return str(require_binary("STREAM", repo_root=project_root))
-        except BinaryUnavailableError as exc:
+            return str(_ix.require_binary("STREAM", repo_root=project_root))
+        except _ix.BinaryUnavailableError as exc:
             primary_error = exc
 
-    for c in (os.path.join(project_root, "build", "LaueMatchingGPUStream"),
-              os.path.join(project_root, "LaueMatchingGPUStream")):
+    for c in ((os.path.join(project_root, "build", "LaueMatchingGPUStream"),
+               os.path.join(project_root, "LaueMatchingGPUStream"))
+              if project_root else ()):
         if os.path.isfile(c) and os.access(c, os.X_OK):
             return c
 
@@ -203,8 +206,8 @@ def _ensure_shm_files(orient_file: str) -> None:
     """Copy orientation database to /dev/shm if the path points there.
 
     When the resolved *orient_file* lives under ``/dev/shm`` and does not
-    yet exist, this helper copies it from the LaueMatching project root
-    (``<project_root>/<basename>``).
+    yet exist, this helper copies it from the LaueMatching checkout root
+    (``<repo_root()>/<basename>``).
     """
     if not orient_file.startswith("/dev/shm/"):
         return  # not a shared-memory path, nothing to do
@@ -216,11 +219,17 @@ def _ensure_shm_files(orient_file: str) -> None:
         )
         return
 
-    # Source: <project_root>/<basename>
+    # Source: <checkout root>/<basename>
+    from laue_index.pipeline import repo_root
     basename = os.path.basename(orient_file)
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.dirname(script_dir)
-    source = os.path.join(project_root, basename)
+    root = repo_root()
+    if root is None:
+        logger.error(
+            f"Cannot copy to {orient_file}: no source checkout to copy it from. "
+            "Put the file there yourself (`laue-index fetch-db` downloads the "
+            "orientation database).")
+        sys.exit(1)
+    source = os.path.join(str(root), basename)
 
     if not os.path.isfile(source):
         logger.error(
@@ -236,6 +245,31 @@ def _ensure_shm_files(orient_file: str) -> None:
     logger.info("SHM copy complete.")
 
 
+# The daemon's ResultDir when the params file has no ResultDir line
+# (``char resultDir[1000] = "results_stream"`` in LaueMatchingGPUStream.cu).
+DAEMON_RESULT_DIR_DEFAULT = "results_stream"
+
+
+def _daemon_result_dir(config_file: str) -> str:
+    """ResultDir exactly as LaueMatchingGPUStream reads it.
+
+    The daemon matches the WHOLE first token of each raw line (``paramKeyCmp``,
+    0.8.0; a prefix match before) and takes the second ``%s`` token; a later line overrides an earlier one, and a
+    line with no value leaves the default. This used to come from
+    ConfigurationManager, whose default is RunImage's ``results``: a params file
+    without the line sent the orchestrator to a directory the daemon never
+    wrote, where it waited out the flush timeout and exited 1.
+    """
+    result_dir = DAEMON_RESULT_DIR_DEFAULT
+    with open(config_file, errors="replace") as f:
+        for line in f:
+            parts = line.split()
+            if line.startswith("ResultDir") and parts and parts[0] == "ResultDir":
+                if len(parts) >= 2:
+                    result_dir = parts[1]
+    return result_dir
+
+
 # ---------------------------------------------------------------------------
 # Orchestrator
 # ---------------------------------------------------------------------------
@@ -243,11 +277,10 @@ def _ensure_shm_files(orient_file: str) -> None:
 def _streaming_postprocess_settings(config_file: str, min_unique=None) -> dict:
     """What the STREAMING post-processor will actually apply, for provenance.
 
-    ``provenance.json``'s ``config`` block is a ``ConfigurationManager`` snapshot, which
-    fills an absent ``RobustFilter`` with RunImage's default (1). The streaming path
-    treats an absent key as 0 (legacy filter; ``laue_postprocess._robust_in_force``), so
-    the snapshot alone misreported the filter a streaming run used (0.7.2 known issue).
-    This reads the params file with the streaming parser and applies the same rules.
+    Read with the streaming parser, as the post-processor reads it. Up to 0.7.2 an
+    absent ``RobustFilter`` meant 1 in the ``ConfigurationManager`` snapshot and 0
+    on the streaming path, which is why this block exists; since 0.8 the key is
+    required, so the two agree, and the block stays as the explicit record.
     """
     import laue_stream_utils as _lsu
     import laue_postprocess as _pp
@@ -258,8 +291,22 @@ def _streaming_postprocess_settings(config_file: str, min_unique=None) -> dict:
         "robust_filter_key_present": rf is not None,
         "robust_filter_effective": bool(_pp._robust_in_force(cfg)),
         "min_unique_effective": floor,
-        "min_unique_source": "--min-unique" if min_unique is not None else "MinGoodSpots (2 if absent)",
+        "min_unique_source": "--min-unique" if min_unique is not None else "MinGoodSpots",
     }
+
+
+def _bg_for_lineage(config_file, output_dir):
+    """The BackgroundFile a run will read, resolved where the image server looks
+    (its cwd is output_dir), if it already exists; else None."""
+    try:
+        from laue_index import artifacts as _art
+        bg = _art.read_params(config_file).get("BackgroundFile")
+    except Exception:
+        return None
+    if not bg or not isinstance(bg, str):
+        return None
+    path = bg if os.path.isabs(bg) else os.path.join(output_dir, bg)
+    return path if os.path.exists(path) else None
 
 
 def run_pipeline(
@@ -279,6 +326,7 @@ def run_pipeline(
     watch: bool = False,
     watch_poll: float = 2.0,
     watch_idle: float = 0.0,
+    drain_stall: float = 600.0,
 ) -> None:
     """
     Run the full LaueMatching streaming pipeline.
@@ -296,7 +344,11 @@ def run_pipeline(
         port:         Daemon TCP port.
         port_timeout: Max seconds to wait for the daemon port while the
                       daemon is still alive (a dead daemon aborts immediately).
-        flush_time:   Seconds to wait after server finishes before killing daemon.
+        flush_time:   Extra seconds allowed (on top of one hour) for the daemon
+                      to finish the frames it was sent before it is stopped.
+        drain_stall:  Give up waiting for the daemon's per-frame reports after
+                      this many seconds without a new one (see
+                      _wait_for_daemon_drain).
         min_unique:   Minimum EXCLUSIVE (winner-take-all) spots for orientation
                       filtering. None (default) lets postprocess use MinGoodSpots
                       from the config, as the non-streaming path does.
@@ -331,35 +383,50 @@ def run_pipeline(
     # Copy orientation file to /dev/shm if the path points there.
     _ensure_shm_files(orient_file)
 
-    # Read the daemon's ResultDir and ForwardFile from config.
-    daemon_result_dir = "results_stream"  # C-code default
+    # Read the daemon's ResultDir (as the daemon itself does) and ForwardFile.
+    daemon_result_dir = _daemon_result_dir(config_file)
     forward_file = ""
     try:
         import laue_config
         cfg_mgr = laue_config.ConfigurationManager(config_file)
-        daemon_result_dir = getattr(cfg_mgr.config, "result_dir", daemon_result_dir)
         forward_file = getattr(cfg_mgr.config, "forward_file", "")
     except Exception:
         pass
     logger.info(f"Daemon ResultDir: {daemon_result_dir}")
-
-    # Warn if the forward simulation file does not exist yet.
-    if forward_file and not os.path.isfile(forward_file):
-        logger.warning("=" * 60)
-        logger.warning(
-            f"Forward simulation file not found: {forward_file}"
-        )
-        logger.warning(
-            "The daemon will generate the forward simulation from scratch. "
-            "This may take a considerable amount of time."
-        )
-        logger.warning("=" * 60)
 
     # --- 1. Create output directory ---
     if not output_dir:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         output_dir = f"laue_stream_{ts}"
     os.makedirs(output_dir, exist_ok=True)
+
+    # The daemon and the image server both run with cwd=output_dir, so a
+    # relative ForwardFile / BackgroundFile is looked up THERE. These checks
+    # used to look in this process's cwd and so warned, or stayed silent, about
+    # a different file from the one the run would use.
+    def _as_run_sees_it(p):
+        return p if os.path.isabs(p) else os.path.join(os.path.abspath(output_dir), p)
+
+    # Warn if the forward simulation file does not exist yet.
+    if forward_file and not os.path.isfile(_as_run_sees_it(forward_file)):
+        logger.warning("=" * 60)
+        logger.warning(
+            f"Forward simulation file not found: {_as_run_sees_it(forward_file)}"
+        )
+        logger.warning(
+            "The daemon will generate the forward simulation from scratch. "
+            "This may take a considerable amount of time."
+        )
+        logger.warning("=" * 60)
+    try:
+        background_file = lsu.parse_config(config_file).get("background_file", "")
+    except Exception:
+        background_file = ""
+    if background_file and not os.path.isfile(_as_run_sees_it(background_file)):
+        logger.warning(
+            f"BackgroundFile not found: {_as_run_sees_it(background_file)} "
+            "(relative paths are taken from the output directory). The image "
+            "server will compute a background from the first frame.")
 
     # Paths inside output dir.
     # The daemon writes solutions/spots to <CWD>/<ResultDir>/.
@@ -386,6 +453,23 @@ def run_pipeline(
     except FileNotFoundError as exc:
         daemon_bin, daemon_bin_error = None, exc
 
+    # --- 1a. Data artifacts against their provenance records ---
+    # A record that disagrees with its file, or an HKL list made for another
+    # crystal, stops the run here, before the daemon loads 19 GB; a file with
+    # no record only warns. The identities go into provenance.json (lineage).
+    from laue_index import artifacts as _art
+    _fwd = forward_file
+    if _fwd and not os.path.isabs(_fwd):
+        _fwd = os.path.join(output_dir, _fwd)
+    try:
+        artifact_lineage = _art.check_run_inputs(
+            config_file, orient_db=orient_file if os.path.exists(orient_file) else None,
+            hkl=hkl_file if os.path.exists(hkl_file) else None, forward=_fwd or None,
+            background=_bg_for_lineage(config_file, output_dir), log=logger)
+    except _art.ArtifactMismatch as exc:
+        logger.error(f"Refusing to run: {exc}")
+        sys.exit(1)
+
     # --- 1b. Stamp run-level provenance up-front ---
     # Written now (rather than at end-of-run) so a crashed/killed run still
     # leaves a record of which commit + config was in play.
@@ -407,11 +491,12 @@ def run_pipeline(
             spp = _streaming_postprocess_settings(config_file, min_unique)
             run_prov.setdefault("extra", {})["streaming_postprocess"] = spp
             run_prov.setdefault("config_notes", {})["robust_filter"] = (
-                "config.robust_filter is the ConfigurationManager default when the key is "
-                "absent; the filter this streaming run applies is "
-                "extra.streaming_postprocess.robust_filter_effective.")
+                "the filter this streaming run applies is "
+                "extra.streaming_postprocess.robust_filter_effective (RobustFilter is a "
+                "required key since 0.8, so it equals config.robust_filter).")
         except Exception as spp_exc:          # never fail a run over a provenance note
             run_prov.setdefault("extra", {})["streaming_postprocess"] = f"ERROR: {spp_exc}"
+        run_prov["artifacts"] = artifact_lineage
         _lp.write_sidecar_json(os.path.join(output_dir, "provenance.json"), run_prov)
         logger.info(f"Wrote run provenance: {os.path.join(output_dir, 'provenance.json')}")
     except Exception as prov_exc:
@@ -504,35 +589,17 @@ def run_pipeline(
     logger.info(f"Image server exited (code {server_proc.returncode}). "
                 f"Waiting for daemon to write results...")
 
-    # Wait for the daemon to finish WRITING, not merely to have started.
+    # Wait until the daemon has REPORTED every frame the server sent.
     #
-    # solutions.txt is appended to as each frame is fitted, so "the file exists and
-    # is non-empty" means the *first* frame landed, not the last. Breaking there and
-    # SIGTERMing the daemon two seconds later silently discards everything still in
-    # its queue — and the daemon is routinely behind (it logs "receive queue was full
-    # N times (backpressure from processing)"). Observed: a 6561-frame batch run lost
-    # the last 31 frames, contiguously, with no error anywhere.
-    #
-    # Instead, wait until the file stops growing: that is the daemon actually draining.
-    quiet_needed = max(flush_time, 10.0)
-    flush_deadline = time.time() + flush_time + 3600
-    last_size, last_change = -1, time.time()
-    while time.time() < flush_deadline:
-        if daemon_proc.poll() is not None:
-            logger.info("Daemon exited on its own.")
-            break
-        size = os.path.getsize(solutions_file) if os.path.isfile(solutions_file) else 0
-        now = time.time()
-        if size != last_size:
-            last_size, last_change = size, now
-        elif size > 0 and (now - last_change) >= quiet_needed:
-            logger.info(f"solutions.txt quiescent at {size} bytes after "
-                        f"{quiet_needed:.0f}s without growth — daemon has drained")
-            break
-        time.sleep(1.0)
-    else:
-        logger.warning("Timed out waiting for the daemon to finish writing "
-                       "solutions.txt; results may be truncated")
+    # This used to wait for solutions.txt to stop growing (which itself replaced
+    # "the file exists", after a 6561-frame batch lost its last 31 frames). But a
+    # frame with no solution never grows that file, so a tail of such frames, or
+    # one slow frame, read as "drained" and the SIGTERM discarded whatever was
+    # still queued. The daemon prints one terminal line per frame it finishes
+    # (see _DaemonProgress); the server's final frame_mapping.json says which
+    # frames were sent. Done = every sent frame has its line.
+    _wait_for_daemon_drain(daemon_proc, daemon_log, mapping_file,
+                           deadline=flush_time + 3600, stall=drain_stall)
 
     # --- 7. Terminate daemon ---
     _terminate_process(daemon_proc, "daemon")
@@ -575,7 +642,7 @@ def run_pipeline(
     logger.info(f"Running: {' '.join(os.path.basename(c) for c in pp_cmd)}")
     pp_result = subprocess.run(pp_cmd, capture_output=True, text=True)
     # Keep the post-processor's own output: it was captured and dropped on success,
-    # so its startup warnings (e.g. the absent-RobustFilter notice) reached no log.
+    # so its startup warnings reached no log.
     pp_log = os.path.join(output_dir, "postprocess.log")
     try:
         with open(pp_log, "w") as _f:
@@ -617,6 +684,82 @@ def run_pipeline(
     )
     logger.info(f"  Result files:      {len(result_files)} files, {total_sz / 1e6:.1f} MB total")
     logger.info("=" * 60)
+
+
+class _DaemonProgress:
+    """Frames LaueMatchingGPUStream has finished, read from its log.
+
+    finalize_stream() in LaueMatchingGPUStream.cu ends every frame with exactly
+    one of::
+
+        [Image %u] No matches, skipping fitting.
+        [Image %u] Total: %.3f s (GPU: ...)
+
+    The log is read incrementally; a partial last line is kept for the next read.
+    """
+    _TERMINAL = re.compile(r"^\[Image (\d+)\] (?:Total:|No matches, skipping fitting\.)")
+
+    def __init__(self, log_path: str):
+        self.log_path = log_path
+        self.done: set = set()
+        self._offset = 0
+        self._partial = ""
+
+    def update(self) -> set:
+        try:
+            with open(self.log_path, errors="replace") as f:
+                f.seek(self._offset)
+                chunk = f.read()
+                self._offset = f.tell()
+        except OSError:
+            return self.done
+        lines = (self._partial + chunk).split("\n")
+        self._partial = lines.pop()
+        for line in lines:
+            m = self._TERMINAL.match(line)
+            if m:
+                self.done.add(int(m.group(1)))
+        return self.done
+
+
+def _wait_for_daemon_drain(daemon_proc, daemon_log: str, mapping_file: str,
+                           deadline: float = 3600.0, stall: float = 600.0,
+                           poll: float = 1.0) -> bool:
+    """Block until the daemon has reported every non-skipped frame in the mapping.
+
+    Returns True when it has (or the daemon exited on its own). Returns False,
+    with a warning naming the frames not yet reported, after *deadline* seconds,
+    or after *stall* seconds in which no new frame was reported: the daemon
+    prints its "No matches" line without flushing stdout, so a trailing run of
+    such frames can sit in its buffer until it exits.
+    """
+    sent = {int(k) for k, v in lsu.load_frame_mapping(mapping_file).items()
+            if not v.get("skipped", False)}
+    prog = _DaemonProgress(daemon_log)
+    t0 = last_new = time.time()
+    n_done = -1
+    while True:
+        if daemon_proc.poll() is not None:
+            logger.info("Daemon exited on its own.")
+            return True
+        done = prog.update()
+        missing = sent - done
+        if not missing:
+            logger.info(f"Daemon reported all {len(sent)} sent frame(s); drained")
+            return True
+        now = time.time()
+        if len(done) != n_done:
+            n_done, last_new = len(done), now
+        if now - t0 >= deadline or now - last_new >= stall:
+            head = sorted(missing)[:20]
+            logger.warning(
+                f"Daemon has not reported {len(missing)} of {len(sent)} sent "
+                f"frame(s) (e.g. {head}) after {now - t0:.0f}s, {now - last_new:.0f}s "
+                "since its last report; stopping it anyway. Results "
+                "may be truncated (unless those frames had no matches, whose "
+                "log line the daemon may not have flushed yet).")
+            return False
+        time.sleep(poll)
 
 
 def _monitor(
@@ -743,7 +886,13 @@ def main() -> None:
     )
     parser.add_argument(
         "--flush-time", type=float, default=5.0,
-        help="Seconds to wait after server finishes before killing daemon (default: 5)"
+        help="Extra seconds (on top of one hour) the daemon may take to finish "
+             "the frames it was sent before it is stopped (default: 5)"
+    )
+    parser.add_argument(
+        "--drain-stall", type=float, default=600.0,
+        help="After the image server finishes, stop waiting for the daemon when "
+             "it has reported no new frame for this many seconds (default: 600)"
     )
     parser.add_argument(
         "--min-unique", type=int, default=None,
@@ -813,6 +962,7 @@ def main() -> None:
         watch=args.watch,
         watch_poll=args.watch_poll,
         watch_idle=args.watch_idle,
+        drain_stall=args.drain_stall,
     )
 
 

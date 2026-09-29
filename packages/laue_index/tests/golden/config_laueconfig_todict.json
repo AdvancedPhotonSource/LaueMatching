@@ -1,6 +1,6 @@
 {
   "atom_description": "",
-  "background_file": "median.bin",
+  "background_file": "median_NiIndent.bin",
   "batch_size": 1000000,
   "distance": 0.512993,
   "do_forward": false,
@@ -18,7 +18,7 @@
     "filter_radius": 101,
     "gauss_sigma_max": 0.0,
     "gaussian_factor": 0.25,
-    "median_passes": 5,
+    "median_passes": 1,
     "min_area": 5,
     "preprocess_workers": 0,
     "threshold_method": "adaptive",
@@ -48,7 +48,7 @@
   "result_dir": "results",
   "robust_filter": true,
   "simulation": {
-    "enable_simulation": true,
+    "enable_simulation": false,
     "energies": "5.0 30.0",
     "orientation_file": "orientations.txt",
     "skip_percentage": 0.0
@@ -60,7 +60,7 @@
   "tol_lat_c": "0 0 0 0 0 0",
   "visualization": {
     "colormap": "nipy_spectral",
-    "enable_visualization": true,
+    "enable_visualization": false,
     "generate_3d": false,
     "generate_report": true,
     "output_dpi": 600,
