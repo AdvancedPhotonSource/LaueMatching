@@ -39,9 +39,10 @@ def test_annotate_produces_sidecar(tiny_orient_file: Path):
     sidecar = annotate(tiny_orient_file)
     assert sidecar.exists()
     meta = json.loads(sidecar.read_text())
-    # Sanity: fingerprint covers the binary
-    assert meta["inputs"][0]["basename"] == tiny_orient_file.name
-    assert meta["inputs"][0]["size"] == 1000 * RECORD_BYTES
+    # Sanity: the record describes the binary itself (artifact record, 0.8.0)
+    assert meta["kind"] == "orientation_db"
+    assert meta["artifact"]["basename"] == tiny_orient_file.name
+    assert meta["artifact"]["size"] == 1000 * RECORD_BYTES
     # Retroactive metadata tag is present
     assert meta["extra"]["crystal_system"] == "cubic"
     assert "full SO(3)" in meta["extra"]["covers"]

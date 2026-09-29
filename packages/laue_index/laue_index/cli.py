@@ -203,6 +203,10 @@ def _cmd_fetch_db(args: argparse.Namespace) -> int:
     if dest.exists() and not args.force:
         size = dest.stat().st_size
         print(f"{dest} already exists ({size:,} B). Use --force to replace it.")
+        from . import artifacts as _A
+        if _A.read_record(dest) is None:
+            print(f"It has no provenance record; `laue-index provenance stamp --kind "
+                  f"orientation_db {dest}` hashes it and recognises the released database.")
         return 0 if size == ORIENT_DB_BYTES else 1
 
     parts_dir = Path(args.parts_dir).expanduser().resolve() if args.parts_dir else dest.parent
@@ -240,6 +244,31 @@ def _cmd_fetch_db(args: argparse.Namespace) -> int:
         print(f"warning: expected {ORIENT_DB_BYTES:,} B for the 100M database.",
               file=sys.stderr)
 
+    # Provenance: the full SHA-256 against the released database's, and an
+    # artifact record (<db>.meta.json) either way. A release-sized file with
+    # another hash is corrupt: refuse it (the parts are kept for a retry).
+    from . import artifacts as _A
+    from .pipeline.laue_provenance import _strong_hash
+    print("verifying SHA-256 ...")
+    sha = _strong_hash(dest)
+    verified = sha == _A.ORIENT_DB_SHA256
+    if size == ORIENT_DB_BYTES and not verified:
+        print(f"error: {dest} has SHA-256 {sha}, not the released database's "
+              f"{_A.ORIENT_DB_SHA256}. The download is corrupt; re-run with --force.",
+              file=sys.stderr)
+        return 1
+    config = {"source": ORIENT_DB_RELEASE, "parts": list(ORIENT_DB_PARTS)}
+    if verified:
+        config.update(spacing_deg=0.4, covers="full SO(3), not the fundamental zone",
+                      crystal_system_tag="cubic")
+    _A.write_record(dest, "orientation_db", config=config,
+                    layout={"record_bytes": 72, "n_orientations": size // 72,
+                            "record_layout": "row-major 3x3 float64 rotation matrix"},
+                    extra={"verified_against_release": verified, "is_release": verified,
+                           "fetched_by": "laue-index fetch-db"})
+    print(f"SHA-256 {'matches the release' if verified else 'is not the release hash'}; "
+          f"record written to {_A.sidecar_path(dest)}")
+
     if not args.keep_parts:
         for p in paths:
             p.unlink()
@@ -250,9 +279,55 @@ def _cmd_fetch_db(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_provenance(args) -> int:
+    """show / verify / stamp the provenance record of a data artifact."""
+    import json as _json
+    from pathlib import Path
+    from . import artifacts as _A
+    f = Path(args.file)
+    if args.action == "show":
+        rec = _A.read_record(f)
+        if rec is None:
+            print(f"{f}: no provenance record", file=sys.stderr)
+            return 1
+        print(_json.dumps(rec, indent=2, sort_keys=True, default=str))
+        return 0
+    if args.action == "verify":
+        c = _A.check(f, args.kind, full=args.full)
+        print(f"{f}: {c.status}" + (": " + "; ".join(c.reasons) if c.reasons else ""))
+        return {"ok": 0, "missing": 1}.get(c.status, 2)
+    # stamp: a RETROACTIVE record for an existing file. What is not known stays
+    # unknown; a --params file is recorded as DECLARED by the user, not verified.
+    if not f.exists():
+        print(f"error: {f} does not exist", file=sys.stderr)
+        return 1
+    if args.kind is None:
+        print("error: stamp needs --kind (orientation_db, hkl_list, forward_cache, "
+              "background)", file=sys.stderr)
+        return 2
+    if args.kind == "orientation_db":
+        from .pipeline import add_to_path
+        add_to_path()
+        from annotate_orientation_db import annotate
+        annotate(f, extra_notes=args.notes)
+    else:
+        extra = {"notes": args.notes} if args.notes else {}
+        config = {}
+        if args.params:
+            config = _A.read_params(args.params)
+            extra["config_declared_by_user"] = True
+        _A.write_record(f, args.kind, config=config, config_file=args.params,
+                        extra=extra, retroactive=True)
+    print(f"wrote {_A.sidecar_path(f)}")
+    return 0
+
+
 def _cmd_doctor(args) -> int:
     from .doctor import main as doctor_main
-    return doctor_main(["--json"] if getattr(args, "as_json", False) else [])
+    argv = ["--json"] if getattr(args, "as_json", False) else []
+    if getattr(args, "params", None):
+        argv += ["--params", args.params]
+    return doctor_main(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -274,6 +349,20 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser(
         "run", add_help=False,
         help="run the full pipeline (RunImage): laue-index run process -c ... -i ...")
+
+    pv = sub.add_parser("provenance", help="show / verify / stamp a data artifact's "
+                                            "provenance record (<file>.meta.json)")
+    pv.add_argument("action", choices=["show", "verify", "stamp"])
+    pv.add_argument("file")
+    pv.add_argument("--kind", choices=sorted(["orientation_db", "hkl_list", "forward_cache",
+                                             "background"]),
+                    help="artifact kind (required for stamp; checked by verify)")
+    pv.add_argument("--full", action="store_true",
+                    help="verify: re-hash the whole file (slow on 7-12 GB)")
+    pv.add_argument("--params", help="stamp: the parameter file the artifact was made from "
+                                     "(recorded as declared, not verified)")
+    pv.add_argument("--notes", help="stamp: free-text notes")
+    pv.set_defaults(func=_cmd_provenance)
 
     pd = sub.add_parser("fetch-db", help="download the 7.2 GB (6.7 GiB) orientation database")
     pd.add_argument("--dest", default=".",
@@ -314,6 +403,8 @@ def main(argv: list[str] | None = None) -> int:
              "manifest, and whether the GPU binary can launch on this card")
     pd2.add_argument("--json", action="store_true", dest="as_json",
                      help="machine-readable, for deployment checks")
+    pd2.add_argument("--params", help="also check the data artifacts this parameter "
+                                      "file names against their provenance records")
     pd2.set_defaults(func=_cmd_doctor)
 
     pc = sub.add_parser(

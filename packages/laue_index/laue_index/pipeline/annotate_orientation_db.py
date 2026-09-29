@@ -33,23 +33,29 @@ RECORD_BYTES = 9 * 8  # 3x3 float64, row-major
 
 # Best-known facts about the ``100MilOrients.bin`` that ships with the
 # repo. These are retroactive: the original generator script is lost.
-DEFAULT_DB_METADATA = {
-    "expected_n_orientations": 100_000_000,
-    "record_bytes": RECORD_BYTES,
-    "record_layout": "row-major 3x3 float64 rotation matrix",
-    "crystal_system": "cubic",
-    "step_deg": 0.4,
-    "covers": "full SO(3), not the fundamental zone — oversampled on purpose",
-    "origin": "GitHub Release tag v1.0-data, reassembled from 4 parts by build.sh",
-    "generator_script": "unknown — pre-repo-history",
-    "notes": (
-        "Provenance added retroactively. For reproducible regeneration use "
-        "scripts/GenerateOrientations.py, which writes a full provenance sidecar."
-    ),
+#: What is known about the RELEASED database (GitHub release v1.0-data). It is
+#: applied only when the file's full SHA-256 equals artifacts.ORIENT_DB_SHA256;
+#: any other file is described as what it is: generator unknown.
+RELEASE_CONFIG = {
+    "source": "GitHub release v1.0-data (4 parts, reassembled)",
+    "spacing_deg": 0.4,
+    "covers": "full SO(3), not the fundamental zone (oversampled on purpose)",
+    "crystal_system_tag": "cubic",
 }
+LAYOUT = {"record_bytes": RECORD_BYTES,
+          "record_layout": "row-major 3x3 float64 rotation matrix"}
 
 
-def annotate(orient_file: Path, extra_notes: str | None = None, *, strong_hash: bool = False) -> Path:
+def annotate(orient_file: Path, extra_notes: str | None = None, *, strong_hash: bool = True) -> Path:
+    """Stamp an EXISTING orientation database with an artifact record
+    (``<file>.meta.json``, kind ``orientation_db``, ``retroactive: true``).
+
+    The full SHA-256 is always computed (``strong_hash`` is kept for old
+    callers): it is how the released database is recognised. Unknowns stay
+    unknown; nothing is inferred from the file name or size.
+    """
+    from laue_index import artifacts as A
+    orient_file = Path(orient_file)
     if not orient_file.exists():
         raise FileNotFoundError(orient_file)
     size = orient_file.stat().st_size
@@ -60,24 +66,21 @@ def annotate(orient_file: Path, extra_notes: str | None = None, *, strong_hash: 
             file=sys.stderr,
         )
     n_records = size // RECORD_BYTES
-    meta = dict(DEFAULT_DB_METADATA)
-    meta["actual_n_orientations"] = n_records
-    meta["size_bytes"] = size
+    sha = lp._strong_hash(orient_file)
+    is_release = sha == A.ORIENT_DB_SHA256
+    extra = {"is_release": is_release, "actual_n_orientations": n_records,
+             "crystal_system": "cubic",
+             "covers": "full SO(3), not the fundamental zone",
+             "generator": ("unknown (pre-repo history); the released v1.0-data database"
+                           if is_release else
+                           "unknown: not the released database and no record of how it "
+                           "was made")}
     if extra_notes:
-        meta["extra_notes"] = extra_notes
-
-    prov = lp.collect(
-        config=None,
-        input_files=[orient_file],
-        extra=meta,
-        strong_hash=strong_hash,
-    )
-    out = orient_file.with_suffix(orient_file.suffix + ".meta.json")
-    # Keep the classic ``.meta.json`` naming convention as a straight sibling.
-    # ``with_suffix`` would give ``100MilOrients.bin.meta.json``; that's what
-    # we want since the binary is supposed to be immutable.
-    lp.write_sidecar_json(out, prov)
-    return out
+        extra["extra_notes"] = extra_notes
+    A.write_record(orient_file, "orientation_db", layout=dict(LAYOUT, n_orientations=n_records),
+                   config=dict(RELEASE_CONFIG) if is_release else {}, extra=extra,
+                   retroactive=True)
+    return A.sidecar_path(orient_file)
 
 
 def main() -> int:

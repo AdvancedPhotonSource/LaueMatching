@@ -155,10 +155,47 @@ def diagnose() -> dict[str, Any]:
             "healthy": not problems}
 
 
+#: Parameter-file keys naming data artifacts, and their kinds.
+_ARTIFACT_KEYS = (("OrientationFile", "orientation_db"), ("HKLFile", "hkl_list"),
+                  ("ForwardFile", "forward_cache"), ("BackgroundFile", "background"))
+
+
+def artifact_report(params_file: str) -> list[dict[str, Any]]:
+    """The data artifacts a params file names and each one's provenance-record
+    status: ok / missing (no record) / mismatch / absent (no such file).
+    The HKL list is also checked against the params file's crystal."""
+    from . import artifacts as A
+    params = A.read_params(params_file)
+    out = []
+    for key, kind in _ARTIFACT_KEYS:
+        path = params.get(key)
+        if not isinstance(path, str):
+            continue
+        if not os.path.exists(path):
+            out.append({"role": kind, "path": path, "status": "absent", "reasons": []})
+            continue
+        expect = ({k: params[k] for k in A.HKL_CRYSTAL_KEYS if k in params}
+                  if kind == "hkl_list" else None)
+        c = A.check(path, kind, expect=expect)
+        out.append({"role": kind, "path": path, "status": c.status, "reasons": c.reasons})
+    return out
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     as_json = "--json" in argv
     d = diagnose()
+    if "--params" in argv:
+        pfile = argv[argv.index("--params") + 1]
+        rep = artifact_report(pfile)
+        d["artifacts"] = rep
+        for r in rep:
+            if r["status"] == "mismatch":
+                d["problems"].append(f"{r['role']} {r['path']}: " + "; ".join(r["reasons"]))
+                d["healthy"] = False
+            elif r["status"] == "missing":
+                d["notes"].append(f"{r['role']} {r['path']} has no provenance record "
+                                  f"(`laue-index provenance stamp --kind {r['role']}`)")
     if as_json:
         print(json.dumps(d, indent=2))
         return 0 if d["healthy"] else 1
@@ -187,6 +224,8 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print("  device      none visible (no nvidia-smi, or no GPU)")
 
+    for r in d.get("artifacts", []):
+        print(f"  artifact    {r['status']:8s} {r['role']:15s} {r['path']}")
     for n in d["notes"]:
         print(f"  note   {n}")
     for p in d["problems"]:

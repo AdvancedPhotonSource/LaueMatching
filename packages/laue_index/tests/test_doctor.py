@@ -157,3 +157,25 @@ def test_cli_exposes_doctor():
     from laue_index import cli
     with pytest.raises(SystemExit):
         cli.main(["doctor", "--help"])
+
+
+def test_doctor_params_reports_each_data_artifact(tmp_path, capsys):
+    """`laue-index doctor --params FILE` lists the data artifacts the params
+    file names and each one's provenance-record status: a record that
+    disagrees is a PROBLEM, a missing record a note."""
+    from laue_index import artifacts as A
+    from laue_index import doctor
+    hkl = tmp_path / "hkls.csv"; hkl.write_bytes(b"1 0 0 1\n")
+    A.write_record(hkl, "hkl_list", config={"SpaceGroup": 194,
+                                            "LatticeParameter": [0.2921, 0.2921, 0.4665, 90, 90, 120]})
+    db = tmp_path / "db.bin"; db.write_bytes(b"\x00" * 72)
+    params = tmp_path / "p.txt"
+    params.write_text(f"SpaceGroup 225\nLatticeParameter 0.36 0.36 0.36 90 90 90\n"
+                      f"HKLFile {hkl}\nOrientationFile {db}\nForwardFile {tmp_path / 'fwd.bin'}\n")
+    rep = {r["role"]: r for r in doctor.artifact_report(str(params))}
+    assert rep["hkl_list"]["status"] == "mismatch"
+    assert rep["orientation_db"]["status"] == "missing"
+    assert rep["forward_cache"]["status"] == "absent"
+    rc = doctor.main(["--params", str(params)])
+    out = capsys.readouterr().out
+    assert rc == 1 and "PROBLEM" in out and "hkl_list" in out

@@ -15,14 +15,62 @@ The single source of truth is `packages/laue_index/laue_index/pipeline/laue_prov
 
 | Producer                     | Where the record lives                          |
 |------------------------------|--------------------------------------------------|
-| `GenerateHKLs.py`            | `<hkl_file>.provenance.json` sidecar             |
+| `GenerateHKLs.py`            | `<hkl_file>.meta.json` artifact record (0.8.0; `.provenance.json` before, still read) |
 | `GenerateSimulation.py`      | `/provenance` group inside the output HDF5       |
-| `GenerateOrientations.py`    | `<output>.meta.json` sidecar                      |
-| `annotate_orientation_db.py` | `<orient_file>.meta.json` sidecar                 |
+| `GenerateOrientations.py`    | `<output>.meta.json` artifact record              |
+| `annotate_orientation_db.py`, `laue-index provenance stamp` | `<file>.meta.json` artifact record (retroactive) |
+| `laue-index fetch-db`        | `<db>.meta.json` artifact record, full SHA-256 checked against the release |
+| the C binaries (forward cache) | `<ForwardFile>.meta.json` artifact record      |
+| `RunImage.py`, `laue_image_server.py` (backgrounds) | `<background>.meta.json` artifact record |
 | `laue_image_server.py`       | `<mapping_file>.provenance.json` sidecar          |
 | `laue_orchestrator.py`       | `<output_dir>/provenance.json` at start-of-run    |
 | `laue_postprocess.py`        | `/entry/provenance` group inside each `image_XXXXX.output.h5` |
 | `RunImage.py`                | `/entry/provenance` group inside the output HDF5 |
+
+## Data artifacts: `<file>.meta.json` (laue-index 0.8.0)
+
+The orientation database, HKL lists, forward caches and backgrounds are bare
+binary (or plain-text) files. Each now carries an artifact record beside it,
+written by `laue_index.artifacts` (Python) or `writeForwardCacheMeta` (C), in
+one schema:
+
+```
+{"schema": "laue-artifact/1",
+ "kind":   "orientation_db" | "hkl_list" | "forward_cache" | "background",
+ "retroactive": false,            # true when stamped after the fact
+ "artifact": {"path", "basename", "size", "quick", "sha256", "layout"},
+ "config":   {...the FULL configuration that generated it...},
+ "config_file": {"path", "sha256", "text"},   # when made from a params file
+ "inputs":   [{"role", "path", "size", "quick" | "sha256", "record"}],
+ "extra":    {...},
+ "producer": {...host, user, time, build (as the run records above)...}}
+```
+
+| kind | `config` holds | written by |
+|---|---|---|
+| `orientation_db` | spacing, coverage, sampling method, crystal-system tag (or nothing, for a database whose generator is unknown) | GenerateOrientations, fetch-db, annotate / `provenance stamp` |
+| `hkl_list` | SpaceGroup, Symmetry, LatticeParameter, P_Array, R_Array, NrPx*, Px*, Elo, Ehi (params-file key names) | GenerateHKLs |
+| `forward_cache` | the key, the format, every key input under its params-file name, and the params file's full text in `config_file` | the C binaries |
+| `background` | FilterRadius, NMeadianPasses; the source frame (file + index) in `inputs` | RunImage, laue_image_server |
+
+`quick` is SHA-256 over the first and last MiB and the size; `sha256` is the
+full hash. The released `100MilOrients.bin` is recognised by its full SHA-256,
+`351dc8e0dec0db91aff67493bf749957663e9926dda55db145205a1e0915fd20`
+(`artifacts.ORIENT_DB_SHA256`; `SHA256SUMS` on the v1.0-data release).
+
+**Policy.** A missing record WARNS (the file is used unverified). A record that
+disagrees with its file (size, hash, kind) or with the configuration REFUSES:
+an HKL list recorded for another space group, symmetry or lattice; a forward
+cache recorded for another key (the C prints `refusing to overwrite`; set
+`DoFwd 1` to rebuild it deliberately). An HKL list made for a different
+detector or energy window only warns. Runs check before launching the C
+(`artifacts.check_run_inputs`) and write what they used under `artifacts` in
+`provenance.json` / `/entry/provenance` (lineage).
+
+**Tools.** `laue-index provenance show|verify [--full]|stamp --kind K [--params P]
+FILE`; `stamp` writes a retroactive record and never invents what is unknown (a
+`--params` file is recorded as declared, not verified). `laue-index doctor
+--params FILE` reports every data artifact the params file names.
 
 ## Record shape (schema 2, laue-index 0.7.2 and later)
 

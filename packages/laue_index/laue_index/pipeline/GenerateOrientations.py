@@ -114,7 +114,12 @@ def generate(
     assert total_bytes == expected_bytes, (total_bytes, expected_bytes)
     print(f"Wrote {n:,} orientations ({total_bytes / 1e9:.2f} GB) in {write_time:.1f}s")
 
-    prov = lp.collect(
+    # Artifact record (<output>.meta.json, laue_index.artifacts): the FULL
+    # generating configuration, the layout and the full SHA-256 (strong_hash is
+    # kept for old callers; the full hash is always computed).
+    from laue_index import artifacts as _artifacts
+    _artifacts.write_record(
+        output_path, "orientation_db",
         config={
             "spacing_deg": spacing_deg,
             "crystal_system": crystal_system,
@@ -122,23 +127,20 @@ def generate(
             "sampling_method": sampling,
             "covers": "full SO(3), not the fundamental zone",
         },
-        input_files=[],
+        layout={"record_bytes": RECORD_BYTES,
+                "record_layout": "row-major 3x3 float64 rotation matrix",
+                "n_orientations": int(n)},
         extra={
+            "generator": "GenerateOrientations",
             "orix_version": orix.__version__,
             "numpy_version": np.__version__,
             "n_orientations": int(n),
-            "record_bytes": RECORD_BYTES,
-            "record_layout": "row-major 3x3 float64 rotation matrix",
             "output_size_bytes": int(total_bytes),
+            "is_release": False,
         },
-        strong_hash=strong_hash,
     )
-    # file_fingerprint was skipped (input_files=[]) because the binary we
-    # are describing *is* the output. Fingerprint it now and attach.
-    prov["inputs"] = [lp.file_fingerprint(output_path, strong=strong_hash)]
-    sidecar = output_path.with_suffix(output_path.suffix + ".meta.json")
-    lp.write_sidecar_json(sidecar, prov)
-    print(f"Wrote sidecar provenance → {sidecar}")
+    sidecar = _artifacts.sidecar_path(output_path)
+    print(f"Wrote provenance record → {sidecar}")
 
     return {"n_orientations": n, "output": str(output_path), "sidecar": str(sidecar)}
 
