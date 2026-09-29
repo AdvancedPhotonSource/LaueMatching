@@ -21,9 +21,10 @@ analytic gradients through every step of the forward map.
 - **Distribution-level recovery**: tangent-Gaussian on SO(3) for
   unimodal mosaic; mixture for twins / sub-grain modes; multivariate
   Gaussian on Voigt-6 strain.
-- **Tensor GND density**: Nye's dislocation density tensor follows
-  analytically from the recovered per-voxel ODF gradient; FCC slip-
-  system projection helper included.
+- **Tensor GND density**: the lattice curvature `κ` of the recovered
+  per-voxel orientation field and Nye's tensor `α = κᵀ − tr(κ) I` from it
+  (`laue_torch.nye.lattice_curvature`, `nye_alpha`); FCC slip-system
+  projection helper (minimum-norm) included.
 - **Posterior uncertainty**: Laplace approximation at convergence, returned
   with its Hessian eigenvalues, condition number, effective rank and a
   positive-definiteness flag. Read those before any marginal sigma (see
@@ -60,8 +61,9 @@ indexer are `image[row, col]` = `[Y, X]`, the transpose. Transpose a render
 (`img.T`) before writing it as a frame for the indexer or comparing it with a
 real frame; on a square detector nothing fails if you forget, and every spot
 lands on the wrong pixel. `laue-torch` CLI output carries
-`/entry1/axis_order = b"XY"` for this reason; `laue_torch.io.to_model_layout`
-converts and shape-checks.
+`/entry1/axis_order = b"XY"` for this reason (and warns); pass
+`-axisOrder YX` to write detector-layout frames the indexer can read directly.
+`laue_torch.io.to_model_layout` converts and shape-checks.
 
 ## Per-voxel ODF refinement on real data
 
@@ -96,8 +98,18 @@ What the loader and refiner do with the data:
   could not be right for both: `VoxelODFRefiner` did not transpose before
   0.1.4, and on a square detector a wrong guess is silent.)
 - **Energy band**: fits render in the parameter file's `Elo`..`Ehi`. A file
-  without them is refused by the refiners (the forward CLI still defaults to
-  5-30 keV).
+  without them is refused by every refiner (the forward CLI still defaults to
+  5-30 keV), and `make_lauematching_params` without a band flags it so
+  `write_lauematching_config` refuses to write it.
+- **Intensity scale and background**: `VoxelODFRefiner` fits
+  `a * render + b` to the frame with `(a, b)` solved in closed form at every
+  step (and in the posterior residual), so the recovered spread does not
+  depend on the counts or the pedestal; `(a, b)` are in
+  `result.metadata["intensity_scale" / "intensity_offset"]`. Before 0.1.5 the
+  loss was the raw MSE against a unit-intensity render.
+- **Harmonics**: reflections that share a seed pixel ((111), (222), ...) are
+  rendered once (the lowest order), as in `MultiGrainVoxelRefiner`; before
+  0.1.5 such a spot was predicted n times brighter than a single reflection.
 
 Each `result` is a `VoxelODFResult` carrying:
 
@@ -129,8 +141,11 @@ the fixed orientations (`metadata["posterior_conditional_on_fixed_means"]`),
 which understates strain uncertainty.
 
 For multi-voxel scans, the `plots` module supplies `plot_sigma_map`,
-`plot_orientation_map`, `plot_gnd_map` (which computes Nye's tensor on
-the recovered orientation field by central differences).
+`plot_orientation_map` (pass `space_group=params.sg_num`; it was cubic-only),
+and `plot_gnd_map`, which computes the lattice curvature of the recovered
+orientation field by central differences, Nye's tensor from it, and
+`||α||_F / b` with the voxel spacing converted from um to m (before 0.1.5 it
+plotted `||κ||_F / b` with the spacing left in um).
 
 ## Tutorial
 
@@ -158,7 +173,7 @@ pip install -e '.[dev]'
 KMP_DUPLICATE_LIB_OK=TRUE pytest
 ```
 
-290 tests cover parity against the NumPy/C reference, gradient flow /
+343 tests cover parity against the NumPy/C reference, gradient flow /
 `gradcheck` on every parameter group, calibration recovery, distribution
 moments, mixture / Nye correctness, coded-aperture and joint-fit paths, and a
 contract test pinning the `midas-stress` misorientation convention.

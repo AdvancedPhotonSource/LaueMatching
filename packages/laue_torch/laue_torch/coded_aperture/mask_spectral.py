@@ -229,4 +229,7 @@ class CodedApertureMaskSpectral(nn.Module):
         mu_sub_val = mu_si3n4(wl)
         absorb_sub = mu_sub_val * path_sub
 
-        return torch.exp(-(absorbance_au / cos_inc_safe + absorb_sub))
+        # Rays meeting the plane behind their origin (t <= 0) never pass it.
+        return torch.where(t > 0,
+                           torch.exp(-(absorbance_au / cos_inc_safe + absorb_sub)),
+                           torch.ones_like(t))

@@ -79,13 +79,19 @@ def plot_sigma_map(
 def plot_orientation_map(
     results,
     *,
+    space_group: int,
     grid_shape: Optional[Sequence[int]] = None,
     out_path: str | Path,
     reference_index: int = 0,
-    title: str = "cubic misorientation to reference voxel [deg]",
+    title: str = "misorientation to reference voxel [deg]",
+    lattice=None,
 ):
-    """Plot per-voxel cubic misorientation to a chosen reference voxel.
+    """Plot per-voxel misorientation to a chosen reference voxel.
 
+    ``space_group`` (required; it was hard-wired cubic before 0.1.5) sets the
+    point group the misorientation is reduced by: pass ``params.sg_num``.
+    ``lattice`` (``params.lattice``) fixes the crystal frame for monoclinic,
+    trigonal and hexagonal cells; see ``symmetry.misorientation_deg``.
     Useful for visualising intragranular orientation gradients within
     a single grain.
     """
@@ -94,11 +100,12 @@ def plot_orientation_map(
     import matplotlib.pyplot as plt
     import torch
 
-    from ..symmetry import cubic_misorientation_deg
+    from .. import symmetry
 
     U_field = torch.stack([r.U_mean for r in results], dim=0)
     U_ref = U_field[reference_index].unsqueeze(0)
-    miso = cubic_misorientation_deg(U_field, U_ref).numpy()
+    miso = symmetry.misorientation_deg(U_field, U_ref, space_group,
+                                      lattice=lattice).numpy()
 
     arr, is_2d = _reshape(miso, grid_shape)
     fig, ax = plt.subplots(figsize=(6, 4.5))
@@ -108,7 +115,7 @@ def plot_orientation_map(
     else:
         ax.plot(np.arange(len(arr)), arr, "o-")
         ax.set_xlabel("voxel index")
-        ax.set_ylabel("cubic miso to ref [deg]")
+        ax.set_ylabel(f"miso to ref (SG {space_group}) [deg]")
     ax.set_title(title)
     fig.tight_layout()
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
@@ -126,18 +133,21 @@ def plot_gnd_map(
     title: str = r"GND density $\rho_\mathrm{GND}$ [m$^{-2}$]",
 ):
     """Compute and plot the per-voxel GND density from the recovered
-    ``U_mean`` field.
+    ``U_mean`` field; returns the density array (1/m^2, shape ``grid_shape``).
 
-    Requires a 2-D or 3-D scan with known ``grid_shape``; the rotation
-    field is reshaped, Nye's tensor is computed by central differences,
-    and the Frobenius-norm GND density is plotted.
+    The rotation field is reshaped to ``grid_shape`` (grid axes = lab x, y,
+    z), the lattice curvature is computed by central differences in the
+    reference (centre-voxel) crystal frame, Nye's tensor is
+    ``alpha = kappa^T - tr(kappa) I`` and ``rho = ||alpha||_F / b``.
+    ``spacing_um`` is converted to metres. Before 0.1.5 this plotted
+    ``||kappa||_F / b`` with the spacing left in um (1e6 too small).
     """
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     import torch
 
-    from ..nye import nye_tensor, gnd_density
+    from ..nye import gnd_density, lattice_curvature, nye_alpha
 
     U_flat = torch.stack([r.U_mean for r in results], dim=0)
     U_field = U_flat.reshape(*grid_shape, 3, 3)
@@ -145,7 +155,8 @@ def plot_gnd_map(
         spacing = (float(spacing_um),) * len(grid_shape)
     else:
         spacing = tuple(float(s) for s in spacing_um)
-    alpha = nye_tensor(U_field, spacing=spacing)
+    spacing_m = tuple(s * 1e-6 for s in spacing)
+    alpha = nye_alpha(lattice_curvature(U_field, spacing=spacing_m))
     rho = gnd_density(alpha, burgers_m=burgers_m).cpu().numpy()
 
     fig, ax = plt.subplots(figsize=(6, 4.5))
@@ -170,6 +181,7 @@ def plot_gnd_map(
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=120)
     plt.close(fig)
+    return rho
 
 
 # ── Coded-aperture-specific plots (Phase 5) ────────────────────────────────

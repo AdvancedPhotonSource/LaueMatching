@@ -46,7 +46,7 @@ from midas_stress.orientation import quat_to_orient_mat
 from typing import TYPE_CHECKING
 
 from ..forward import LaueForwardModel
-from ..io import LaueParams
+from ..io import LaueParams, resolve_band
 from .mask import CodedApertureMask
 
 if TYPE_CHECKING:
@@ -108,6 +108,7 @@ def _build_loss_fn(
         px_size=(params.px_x, params.px_y),
         psf_sigma=params.psf_sigma,
         rotation="matrix",
+        sg_num=params.sg_num,
         detector_rotation="rodrigues",
         strain_mode="none",
         hard=False,
@@ -183,7 +184,8 @@ def autofocus_hessian(
         intensity (default 0.01); for real data use the measured
         Poisson + read-noise σ.
     E_range
-        Energy window; default reads from ``params``.
+        Energy window (keV); default ``experiment_band(params)``, which
+        refuses a band that was defaulted rather than measured.
 
     Returns
     -------
@@ -191,7 +193,7 @@ def autofocus_hessian(
     """
     dtype = measurements[0].frame_stack.dtype
     device = measurements[0].frame_stack.device
-    erange = E_range or (params.E_lo, params.E_hi)
+    erange = resolve_band(params, E_range)
 
     loss_fn = _build_loss_fn(
         measurements,

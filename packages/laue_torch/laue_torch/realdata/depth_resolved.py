@@ -23,13 +23,14 @@ of the existing :class:`VoxelODFRefiner`) are deferred to later phases
 recovery so the loss landscape and convergence properties can be
 characterised cleanly.
 
-See ``laue_torch/implementation_plan_coded_aperture.md`` §2 Phase 2.
+(Phase 2 of the coded-aperture work; see ``tests/test_depth_resolved_*.py``.)
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Optional
 
+import copy
 import math
 import time
 
@@ -43,7 +44,7 @@ from midas_stress.orientation import (
 
 from ..coded_aperture import CodedApertureMask
 from ..forward import LaueForwardModel
-from ..io import LaueParams
+from ..io import LaueParams, resolve_band
 from ..uncertainty import LaplacePosterior, laplace_posterior
 
 
@@ -218,7 +219,7 @@ class DepthResolvedVoxelRefiner:
         self.lr_strain = float(lr_strain)
         self.strain_mode = strain_mode
         self.refine_strain = bool(refine_strain)
-        self.E_range = E_range or (params.E_lo, params.E_hi)
+        self.E_range = resolve_band(params, E_range)
 
         sigma = psf_sigma if psf_sigma is not None else params.psf_sigma
         self.model = LaueForwardModel(
@@ -227,12 +228,16 @@ class DepthResolvedVoxelRefiner:
             px_size=(params.px_x, params.px_y),
             psf_sigma=sigma,
             rotation="matrix",
+            sg_num=params.sg_num,
             detector_rotation="rodrigues",
             strain_mode=strain_mode,
             hard=False,
         )
 
         if mask_edge_softness_um is not None:
+            # Work on a copy: this used to change the CALLER's mask in place
+            # (and so every later refiner / autofocus run that shared it).
+            self.mask = copy.deepcopy(mask)
             self.mask.edge_softness_um = float(mask_edge_softness_um)
 
     # ── core refinement ───────────────────────────────────────────────────
@@ -249,10 +254,10 @@ class DepthResolvedVoxelRefiner:
         U_seed = voxel.U_seed.to(dtype=dtype, device=device)
         # Parameterise the orientation perturbation as a quaternion δ_q
         # that multiplies the seed: ``U(δ_q) = quat_to_matrix(δ_q) · U_seed``.
-        # ``quat_to_matrix`` is smooth at the identity quaternion (1,0,0,0),
-        # unlike the Rodrigues parameterisation which has a ``torch.where``
-        # branch at the zero rotvec that detaches the gradient (see memory
-        # ``project_aa_grad_at_zero``).  Quaternion is unit-normalised inside
+        # ``quat_to_matrix`` is smooth at the identity quaternion (1,0,0,0).
+        # (Older axis-angle helpers had a ``torch.where`` switch at the zero
+        # rotvec that zeroed the gradient; ``geometry.rodrigues_to_matrix`` no
+        # longer does.)  Quaternion is unit-normalised inside
         # ``quat_to_matrix``, so we can leave it unconstrained during Adam.
         delta_quat = nn.Parameter(
             torch.tensor([1.0, 0.0, 0.0, 0.0], dtype=dtype, device=device)
@@ -352,10 +357,14 @@ class DepthResolvedVoxelRefiner:
 
         Builds a closure mapping the *tangent-space* parameters
         ``(z [µm], ω₃ [rad axis-angle around the refined U], ε)`` to
-        the MSE loss, computes the Hessian via autograd at the
-        converged state (tangent vector = 0), and inverts it to a
-        Gaussian posterior covariance via the canonical
-        :func:`laue_torch.uncertainty.laplace_posterior`.
+        ``0.5 * SSR`` (half the SUM of squared residuals), computes the
+        Hessian via autograd at the converged state (tangent vector = 0),
+        divides by the noise variance and inverts it (Jacobi-scaled
+        pseudo-inverse with a 1e-8 relative ridge) to a Gaussian posterior
+        covariance. At a zero-residual optimum this is
+        ``noise_variance * inv(J^T J)``. Before 0.1.5 the loss was the MEAN
+        squared residual (sigmas sqrt(N/2) too large) and the ridge was
+        1e-8 x the largest diagonal (it set sigma_z).
 
         Parameters
         ----------
@@ -447,7 +456,11 @@ class DepthResolvedVoxelRefiner:
                 source_xyz=src_xyz,
                 E_range=self.E_range,
             )
-            return (pred - target).pow(2).mean()
+            # 0.5 * SSR: its Hessian at the optimum is J^T J, so dividing by
+            # the per-pixel noise variance gives the Laplace precision. (The
+            # MEAN squared residual used before has Hessian 2 J^T J / N and
+            # inflated every sigma by sqrt(N / 2).)
+            return 0.5 * (pred - target).pow(2).sum()
 
         theta_at_conv = torch.zeros(n_total, dtype=dtype, device=device)
         nv = float(noise_variance) if noise_variance is not None else max(
@@ -464,47 +477,52 @@ class DepthResolvedVoxelRefiner:
         )
         H_sym = 0.5 * (H_loss + H_loss.T) / nv
 
-        # Tikhonov ridge: typical Hessians of this problem have
-        # near-zero eigenvalues (the position-orientation degeneracy
-        # we quantify in §3) that crash both ``eigvalsh`` and ``svd``.
-        # Add a ridge proportional to the diagonal scale so
-        # well-conditioned directions are unaffected.
-        diag_scale = float(H_sym.diag().abs().max().item())
-        ridge = max(diag_scale * 1.0e-8, 1.0e-30)
-        H_sym = H_sym + ridge * torch.eye(n_total, dtype=dtype, device=device)
+        # Eigen-analysis of the precision itself (reported, not inverted).
+        # ``torch.linalg.svd`` uses a Jacobi-style backend on small problems
+        # and converges where eigvalsh's divide-and-conquer does not.
+        def _svd(A: Tensor):
+            A64 = A.to(torch.float64)
+            try:
+                return torch.linalg.svd(A64, full_matrices=False)
+            except torch._C._LinAlgError:
+                # Last-resort: numpy backend uses a different LAPACK path.
+                import numpy as np
+                Un, Sn, Vhn = np.linalg.svd(A64.detach().cpu().numpy(),
+                                             full_matrices=False)
+                return (torch.from_numpy(Un).to(A64), torch.from_numpy(Sn).to(A64),
+                        torch.from_numpy(Vhn).to(A64))
 
-        # SVD-based eigenanalysis + pseudoinverse.  ``torch.linalg.svd``
-        # uses a Jacobi-style backend on small problems and converges
-        # where eigvalsh's divide-and-conquer does not.
-        H_for_svd = H_sym.to(torch.float64)
-        try:
-            Uvec, S, Vh = torch.linalg.svd(H_for_svd, full_matrices=False)
-        except torch._C._LinAlgError:
-            # Last-resort: numpy backend uses a different LAPACK path
-            # that sometimes converges where torch's does not.
-            import numpy as np
-            Un, Sn, Vhn = np.linalg.svd(H_for_svd.detach().cpu().numpy(),
-                                         full_matrices=False)
-            Uvec = torch.from_numpy(Un).to(H_for_svd)
-            S = torch.from_numpy(Sn).to(H_for_svd)
-            Vh = torch.from_numpy(Vhn).to(H_for_svd)
-        # Symmetric H ⇒ singular values = absolute eigenvalues.  Recover
-        # signed eigenvalues from the U/V projection sign.
-        # For numerical PSD enforcement (the Hessian *should* be PSD at
-        # the MAP up to optimizer slack), we clamp negative values to 0.
+        Uvec, S_raw, Vh = _svd(H_sym)
+        # Symmetric H ⇒ singular values = absolute eigenvalues; signs from
+        # the U/V projection.
         signs = torch.sign((Uvec * Vh.T).sum(dim=0))
-        eigvals_signed = (S * signs).to(dtype)
+        eigvals_signed = (S_raw * signs).to(dtype)
+
+        # Inverse in Jacobi-scaled coordinates. The parameters have very
+        # different units (z in um, rotation in quaternion units): here the
+        # depth curvature is ~1e12 below the rotation one. The old ridge,
+        # 1e-8 x the LARGEST diagonal, therefore swamped the z curvature and
+        # set sigma_z itself. Scaling each parameter by its own curvature
+        # first makes the ridge (1e-8 of each diagonal) and the pinv floor
+        # unit-independent.
+        d = H_sym.diag().clamp_min(0.0).sqrt()
+        d = torch.where(d > 0, d, torch.ones_like(d))
+        Hs = H_sym / (d[:, None] * d[None, :])
+        Hs = Hs + 1.0e-8 * torch.eye(n_total, dtype=dtype, device=device)
+        Us, S, Vhs = _svd(Hs)
         # Pseudoinverse via SVD: drop singular values below a relative tol.
         s_floor = float(S.max().item()) * 1.0e-9
         S_inv = torch.where(S > s_floor, 1.0 / S, torch.zeros_like(S))
-        cov = (Vh.T @ torch.diag(S_inv) @ Uvec.T).to(dtype)
+        cov_s = (Vhs.T @ torch.diag(S_inv) @ Us.T).to(dtype)
+        cov = cov_s / (d[:, None] * d[None, :])
         cov = 0.5 * (cov + cov.T)
         sigma = cov.diag().clamp_min(0.0).sqrt()
 
-        rank_eff = int((S > s_floor).sum().item())
+        rank_eff = int((S > s_floor).sum().item())       # in scaled coordinates
         eigvals_sorted, _ = torch.sort(eigvals_signed)
         max_e = float(eigvals_sorted.max().item())
-        min_e = max(float(eigvals_sorted.min().item()), s_floor)
+        min_e = max(float(eigvals_sorted.min().item()),
+                    float(S_raw.max().item()) * 1.0e-30)
         cond_number = float(max_e / min_e) if min_e > 0 else float("inf")
 
         lap = LaplacePosterior(

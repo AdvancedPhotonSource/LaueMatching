@@ -75,7 +75,8 @@ class LaueForwardModel(nn.Module):
         Gaussian PSF standard deviation in pixels (matches
         `SimulationSmoothingWidth`).
     render_window : int
-        Odd window size for per-spot Gaussian splat. Default = ceil(3σ)*2+1.
+        Odd window size for per-spot splat. Default = ceil(3σ)*2+1 for a
+        Gaussian PSF, ceil(6σ)*2+1 when ``psf_eta > 0`` (pseudo-Voigt).
     rotation : "quat" | "rodrigues" | "6d" | "matrix"
         Parameterization of the per-grain orientation `U`.
     detector_rotation : "rodrigues" | "quat" | "matrix"
@@ -90,7 +91,14 @@ class LaueForwardModel(nn.Module):
     reduce : "sum" | "stack"
         Output reduction across grains.
     energy_image : bool
-        If True, also splat per-spot energies onto a (Nx, Ny) image.
+        If True, also splat per-spot energies onto a (Nx, Ny) image,
+        returned as ``aux.energy_image`` (only with ``return_aux=True``;
+        without it nothing is computed).
+    sg_num : int, optional
+        Space-group number. Only used to choose the lattice embedding for the
+        R-centred groups 146/148/155/160/161/166/167 (hexagonal axes: a along
+        x; rhombohedral axes: 3-fold along [111], as the C indexer). ``None``
+        (default) keeps the a-along-x embedding for every cell.
     """
 
     def __init__(
@@ -110,6 +118,7 @@ class LaueForwardModel(nn.Module):
         tau_E: float = 0.05,
         reduce: str = "sum",
         energy_image: bool = False,
+        sg_num: Optional[int] = None,
     ):
         super().__init__()
         if hkls.dtype not in (torch.int32, torch.int64):
@@ -128,7 +137,11 @@ class LaueForwardModel(nn.Module):
         # overridden per-call via the ``psf_eta`` keyword to ``forward``.
         self.psf_eta = float(psf_eta)
         if render_window is None:
-            r = int(math.ceil(3 * self.psf_sigma))
+            # 3 sigma holds a Gaussian; a pseudo-Voigt's Lorentzian tail needs
+            # 6 sigma (with the splat's symmetric taper) to keep the spot
+            # centroid within 1e-3 px (it was biased 0.055-0.073 px at 3 sigma).
+            k = 6 if self.psf_eta > 0 else 3
+            r = int(math.ceil(k * self.psf_sigma))
             render_window = 2 * r + 1
         if render_window % 2 == 0:
             render_window += 1
@@ -142,6 +155,9 @@ class LaueForwardModel(nn.Module):
         self.tau_E = tau_E
         self.reduce = reduce
         self.energy_image = energy_image
+        # Space group, used only to pick the lattice embedding for the seven
+        # R-centred groups (geometry.lattice_setting). None = a along x always.
+        self.sg_num = None if sg_num is None else int(sg_num)
 
     # ── Helpers ────────────────────────────────────────────────────────────
 
@@ -240,10 +256,10 @@ class LaueForwardModel(nn.Module):
 
         # B0 from lattice. Allow per-grain or shared.
         if lattice.dim() == 1:
-            B0 = reciprocal_matrix(lattice)               # (3, 3)
+            B0 = reciprocal_matrix(lattice, self.sg_num)  # (3, 3)
             B0_g = B0.unsqueeze(0).expand(G, 3, 3)
         else:
-            B0_g = reciprocal_matrix(lattice)             # (G, 3, 3)
+            B0_g = reciprocal_matrix(lattice, self.sg_num)  # (G, 3, 3)
             if B0_g.shape[0] != G:
                 raise ValueError(f"lattice batch {B0_g.shape[0]} != grains {G}")
 
@@ -403,20 +419,8 @@ class LaueForwardModel(nn.Module):
                     grain_idx=grain_split,
                     n_grains=n_grains,
                 )
-                e_image = None
-                if self.energy_image:
-                    # energy * inten * mask, but only over the kept spots.
-                    e_full = (energy * mask * inten).reshape(-1)
-                    e_int_split = e_full.index_select(0, keep_idx)
-                    e_image = pseudo_voigt_splat(
-                        px_split, py_split, e_int_split,
-                        n_pix=self.n_pix,
-                        sigma=psf_sigma if psf_sigma is not None else self.psf_sigma,
-                        eta=psf_eta if psf_eta is not None else self.psf_eta,
-                        window=self.render_window,
-                        grain_idx=grain_split,
-                        n_grains=n_grains,
-                    )
+                # (No energy image here: this path returns only ``image``;
+                # the energy image is built on the return_aux path below.)
         else:
             # Diagnostic path: keep the full (G·H,) tensors so aux fields
             # align with grain_idx/hkl_idx.  Used by exp6/exp7 and utils.py
@@ -432,11 +436,14 @@ class LaueForwardModel(nn.Module):
             )
             e_image = None
             if self.energy_image:
+                # Same PSF (sigma AND eta) as the intensity image, so
+                # e_image / image is the spot energy on an isolated spot.
                 e_int = (energy * mask * inten).reshape(-1)
                 e_image = pseudo_voigt_splat(
                     px_f, py_f, e_int,
                     n_pix=self.n_pix,
                     sigma=psf_sigma if psf_sigma is not None else self.psf_sigma,
+                    eta=psf_eta if psf_eta is not None else self.psf_eta,
                     window=self.render_window,
                     grain_idx=grain_idx_f,
                     n_grains=n_grains,

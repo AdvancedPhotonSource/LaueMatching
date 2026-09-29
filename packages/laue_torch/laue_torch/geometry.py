@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import math
+from typing import Optional
+
+import numpy as np
 import torch
 from torch import Tensor
 
@@ -99,14 +102,71 @@ def to_rotation_matrix(U: Tensor) -> Tensor:
 
 # ── Lattice → reciprocal B0 ────────────────────────────────────────────────
 
-def reciprocal_matrix(lattice: Tensor) -> Tensor:
+RHOMBOHEDRAL_SPACE_GROUPS = frozenset({146, 148, 155, 160, 161, 166, 167})
+"""The R-centred trigonal space groups, which can be given on hexagonal OR
+rhombohedral axes; C ``calcRecipArray`` has a separate embedding for the latter."""
+
+# Tolerances for classifying the supplied cell of an R space group.
+_SETTING_ANGLE_TOL_DEG = 1e-4
+_SETTING_LENGTH_RTOL = 1e-6
+
+
+def lattice_setting(lattice, sg_num: Optional[int]) -> str:
+    """``"standard"`` or ``"rhombohedral"``: which Cartesian embedding to use.
+
+    ``sg_num=None`` or a space group outside :data:`RHOMBOHEDRAL_SPACE_GROUPS`
+    is always ``"standard"`` (a along x). For the seven R groups the choice is
+    made from the SUPPLIED PARAMETERS, never from the number alone:
+
+    * hexagonal axes (alpha = beta = 90, gamma = 120) -> ``"standard"``;
+    * rhombohedral axes (a = b = c, alpha = beta = gamma != 90) ->
+      ``"rhombohedral"`` (3-fold along Cartesian [111], as C ``calcRecipArray``);
+    * anything else raises ``ValueError``.
+
+    ``lattice`` is (..., 6) (a, b, c, alpha, beta, gamma); every row of a
+    batch must be in the same setting.
+    """
+    if sg_num is None or int(sg_num) not in RHOMBOHEDRAL_SPACE_GROUPS:
+        return "standard"
+    lat = np.asarray(lattice.detach().cpu() if isinstance(lattice, Tensor) else lattice,
+                     dtype=np.float64).reshape(-1, 6)
+    a, b, c = lat[:, 0], lat[:, 1], lat[:, 2]
+    al, be, ga = lat[:, 3], lat[:, 4], lat[:, 5]
+    tol = _SETTING_ANGLE_TOL_DEG
+    hexagonal = ((np.abs(al - 90.0) < tol) & (np.abs(be - 90.0) < tol)
+                 & (np.abs(ga - 120.0) < tol))
+    equal_len = ((np.abs(b - a) <= _SETTING_LENGTH_RTOL * np.abs(a))
+                 & (np.abs(c - a) <= _SETTING_LENGTH_RTOL * np.abs(a)))
+    rhombohedral = (equal_len & (np.abs(be - al) < tol) & (np.abs(ga - al) < tol)
+                    & (np.abs(al - 90.0) >= tol))
+    if hexagonal.all():
+        return "standard"
+    if rhombohedral.all():
+        return "rhombohedral"
+    raise ValueError(
+        f"space group {int(sg_num)} is R-centred: give the cell on hexagonal "
+        f"axes (a, a, c, 90, 90, 120) or rhombohedral axes (a, a, a, alpha, "
+        f"alpha, alpha with alpha != 90); got {lat.tolist()}")
+
+
+def reciprocal_matrix(lattice: Tensor, sg_num: Optional[int] = None) -> Tensor:
     """Reciprocal-lattice matrix B0 (columns are a*, b*, c*).
 
     lattice shape (..., 6) holds (a, b, c, alpha, beta, gamma). Lengths
     in nm, angles in degrees. Returns B0 in 1/nm.
 
-    Mirrors the closed form in scripts/GenerateHKLs.py:55-100.
+    ``sg_num`` (optional) selects the Cartesian embedding through
+    :func:`lattice_setting`. ``None`` (the default, and the only behaviour
+    before 0.1.5) is the standard embedding, a along x, for every cell.
+    For SG 146/148/155/160/161/166/167 on rhombohedral axes the direct
+    vectors are embedded with the 3-fold along Cartesian [111], exactly as
+    C ``calcRecipArray`` (packages/laue_index/c_src/LaueMatchingHeaders.h);
+    on hexagonal axes the standard branch is used (what midas_hkls assumes).
+
+    Mirrors the closed form in ``GenerateHKLs.calcRecipArray``
+    (packages/laue_index/laue_index/pipeline/GenerateHKLs.py).
     """
+    setting = lattice_setting(lattice, sg_num)
     a, b, c = lattice[..., 0], lattice[..., 1], lattice[..., 2]
     alpha = lattice[..., 3] * (math.pi / 180.0)
     beta = lattice[..., 4] * (math.pi / 180.0)
@@ -117,12 +177,22 @@ def reciprocal_matrix(lattice: Tensor) -> Tensor:
     Vc = a * b * c * phi
     pv = (2 * math.pi) / Vc
 
-    z = torch.zeros_like(a)
-    a0, a1, a2 = a, z, z
-    b0, b1, b2 = b * cg, b * sg, z
-    c0 = c * cb
-    c1 = c * (ca - cb * cg) / sg
-    c2 = c * phi / sg
+    if setting == "standard":
+        z = torch.zeros_like(a)
+        a0, a1, a2 = a, z, z
+        b0, b1, b2 = b * cg, b * sg, z
+        c0 = c * cb
+        c1 = c * (ca - cb * cg) / sg
+        c2 = c * phi / sg
+    else:
+        # C calcRecipArray rhombohedral branch: symmetric about [111].
+        p = torch.sqrt(1.0 + 2 * ca)
+        q = torch.sqrt(1.0 - ca)
+        pmq = (a / 3.0) * (p - q)
+        p2q = (a / 3.0) * (p + 2 * q)
+        a0, a1, a2 = p2q, pmq, pmq
+        b0, b1, b2 = pmq, p2q, pmq
+        c0, c1, c2 = pmq, pmq, p2q
 
     # Columns of B are (b×c, c×a, a×b) * pv.
     col0 = torch.stack([b1 * c2 - b2 * c1, b2 * c0 - b0 * c2, b0 * c1 - b1 * c0], dim=-1) * pv.unsqueeze(-1)

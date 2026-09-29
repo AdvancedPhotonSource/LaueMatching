@@ -16,6 +16,15 @@ That is the footprint the reflection actually paints, and it is what
 J is ~5000 px/rad, so the measured sigma_par = 0.22 deg gives a ~40 px streak
 while sigma_perp = 0.043 deg keeps it ~8 px wide.
 
+FRAME: omega here is a LAB-frame rotation, applied on the left,
+``tangent_rotation(omega) @ U`` (see ``_perturbed``), so ``Sigma_omega`` and the
+spreads (sigma_par, sigma_perp, axis) fitted by ``jointfit.JointGrainFit`` are
+lab-frame quantities. ``laue_torch.distributions.TangentGaussianSO3`` instead
+samples ``U @ exp([delta]x)`` with delta in the CRYSTAL (body) frame. The two
+covariances are related by ``Sigma_lab = U Sigma_body U^T``; compare them only
+after that conjugation. (A convention, not a bug; both are used consistently
+within their module.)
+
 ANGLE UNITS: everything here is in RADIANS (laue_torch internal convention).
 Callers holding degrees -- the measured spreads are quoted in degrees -- must
 convert.  Pixel units are pixels.

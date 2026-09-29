@@ -120,5 +120,6 @@ def test_driver_posterior_residual_is_the_fit_residual(monkeypatch):
     with torch.no_grad():
         I_fit = orig_render(seen["dist"], *seen["args"], **k)
         r = seen["residual_fn"](seen["theta"])
-    expect = I_fit - _closure(seen["residual_fn"])["I_obs"]
+    # The fit profiles out a per-frame scale and background (a, b).
+    expect = drv.affine_fit_residual(I_fit, _closure(seen["residual_fn"])["I_obs"])[0]
     assert float((r - expect).abs().max()) == 0.0

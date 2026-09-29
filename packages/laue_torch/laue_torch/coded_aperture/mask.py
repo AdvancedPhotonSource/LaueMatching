@@ -29,7 +29,8 @@ The 6-DOF pose maps the aperture from this canonical frame into the lab
 frame.  Surge/sway/heave/yaw/pitch/roll (Gürsoy *et al.* RSI 2023)
 correspond to ``(position[0], position[1], position[2])`` and the three
 components of ``rotvec``, with mapping documented in
-``laue_torch/implementation_plan_coded_aperture.md``.
+the ``CodedApertureMask`` docstrings below (the implementation plan this
+once pointed to was never committed).
 """
 from __future__ import annotations
 
@@ -39,32 +40,25 @@ from typing import Optional, Union
 import torch
 from torch import Tensor, nn
 
-from midas_stress.orientation import axis_angle_to_orient_mat
 
+from ..geometry import rodrigues_to_matrix
 from .absorption import mu_au, mu_si3n4
 
 _RAD2DEG = 180.0 / math.pi
-_EPS_ROTVEC = 1.0e-30
+
 
 
 def _rotvec_to_matrix(rotvec: Tensor) -> Tensor:
     """Axis-angle-vector (axis · θ_rad) → (3, 3) rotation matrix.
 
-    Wraps ``midas_stress.orientation.axis_angle_to_orient_mat`` — the
-    canonical MIDAS primitive (see memory ``feedback_orientation_from_midas_stress``).
-
-    Note: like every axis-angle-vector or Rodrigues parameterisation,
-    the gradient at ``rotvec = 0`` is structurally zero (the axis is
-    undefined there).  For refinement starting from the identity,
-    compose with a quaternion-delta parameter — see
-    :class:`laue_torch.realdata.DepthResolvedVoxelRefiner` for the
-    pattern.  Initialise the mask with a non-zero rotvec (the
-    calibrated pose) for the gradient w.r.t. ``rotvec`` to flow.
+    Same rotation as ``midas_stress.orientation.axis_angle_to_orient_mat``
+    (checked to 1e-14), evaluated with the smooth
+    :func:`laue_torch.geometry.rodrigues_to_matrix` so the gradient at
+    ``rotvec = 0`` is the analytic limit (``dR[0,1]/d rotvec[2] = -1``).
+    The previous wrapper normalised the axis with a 1e-30 clamp and returned
+    -1e12 there.
     """
-    norm = torch.linalg.norm(rotvec).clamp_min(_EPS_ROTVEC)
-    axis = rotvec / norm
-    angle_deg = norm * _RAD2DEG
-    return axis_angle_to_orient_mat(axis, angle_deg)
+    return rodrigues_to_matrix(rotvec)
 
 
 def build_de_bruijn_sequence(order: int = 8, alphabet: int = 2) -> Tensor:
@@ -418,4 +412,8 @@ class CodedApertureMask(nn.Module):
 
         absorb_au = mu_au_val * path_au
         absorb_sub = mu_sub_val * path_sub
-        return torch.exp(-(absorb_au + absorb_sub))
+        # Only rays that reach the aperture plane AHEAD of their origin
+        # (t > 0) pass through it; a ray going the other way is not
+        # attenuated at all.
+        return torch.where(t > 0, torch.exp(-(absorb_au + absorb_sub)),
+                           torch.ones_like(t))

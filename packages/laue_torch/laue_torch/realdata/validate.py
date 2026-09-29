@@ -9,6 +9,7 @@ unstable convergence on multi-modal real-data loss landscapes.  Use as::
         cov_full=cov_3x3,                        # body-frame Σ_U (rad²)
         I_obs=I_obs, target_psi=target_psi,
         lat=lat, P=P, R=R,
+        E_range=refiner.E_range,                 # REQUIRED: the fit's band
         M_render=512, sigma_psf_px=2.0,
         n_visible_HKLs=948, detector_distance_mm=510.0,
         px_size_mm=0.2,
@@ -106,9 +107,12 @@ class ValidationReport:
 def _render_at_sigma(model, U_seed, lat, P, R,
                      sigma_deg: float | torch.Tensor,
                      M_render: int, target_psi: torch.Tensor,
-                     seed: int, *, cov_full: Optional[torch.Tensor] = None
+                     seed: int, *, E_range: tuple[float, float],
+                     cov_full: Optional[torch.Tensor] = None
                      ) -> torch.Tensor:
-    """Render at U_seed with isotropic σ_deg cloud (or full cov_full).
+    """Render at U_seed with isotropic σ_deg cloud (or full cov_full), in the
+    energy band ``E_range`` (keV, REQUIRED: the fit's band, e.g.
+    ``refiner.E_range``; it used to render at the model's 5-30 keV default).
     Returns I_pred (Nx, Ny)."""
     device, dtype = lat.device, lat.dtype
     H = model.hkls.shape[0]
@@ -125,14 +129,15 @@ def _render_at_sigma(model, U_seed, lat, P, R,
     psi = target_psi.unsqueeze(0).expand(M_render, H)
     with torch.no_grad():
         I = model(U_cloud, lat, P, R, strain=eps, weights=w,
-                  per_spot_intensity=psi)
+                  per_spot_intensity=psi, E_range=tuple(E_range))
     return I
 
 
 # ── individual checks ─────────────────────────────────────────────────────
 
 def check_loss_floor(model, U_seed, lat, P, R, sigma_U_deg, M_render,
-                     target_psi, I_obs, *, n_seeds: int = 5,
+                     target_psi, I_obs, *, E_range: tuple[float, float],
+                     n_seeds: int = 5,
                      cov_full: Optional[torch.Tensor] = None,
                      loss_at_minimum: Optional[float] = None,
                      ) -> dict:
@@ -150,7 +155,7 @@ def check_loss_floor(model, U_seed, lat, P, R, sigma_U_deg, M_render,
     for s in range(n_seeds):
         I_pred = _render_at_sigma(model, U_seed, lat, P, R, sigma_U_deg,
                                    M_render, target_psi, seed=12345 + s,
-                                   cov_full=cov_full)
+                                   E_range=E_range, cov_full=cov_full)
         losses.append(float(((I_pred - I_obs) ** 2).mean().item()))
     arr = np.asarray(losses)
     mean = float(arr.mean()); std = float(arr.std())
@@ -202,7 +207,8 @@ def check_sigma_critical(sigma_U_recovered_deg: float, M_render: int,
 def check_per_spot_correlation(model, U_seed, lat, P, R, sigma_U_deg,
                                  M_render, target_psi, I_obs,
                                  spot_centers_xy_px: np.ndarray,
-                                 *, W: int = 13, n_seeds: int = 1,
+                                 *, E_range: tuple[float, float],
+                                 W: int = 13, n_seeds: int = 1,
                                  cov_full: Optional[torch.Tensor] = None,
                                  correlation_threshold: float = 0.2,
                                  min_obs_intensity: float = 1.0) -> dict:
@@ -214,7 +220,7 @@ def check_per_spot_correlation(model, U_seed, lat, P, R, sigma_U_deg,
     for s in range(n_seeds):
         I_pred = _render_at_sigma(model, U_seed, lat, P, R, sigma_U_deg,
                                    M_render, target_psi, seed=20000 + s,
-                                   cov_full=cov_full)
+                                   E_range=E_range, cov_full=cov_full)
         I_pred_avg = I_pred_avg + I_pred
     I_pred_avg = (I_pred_avg / n_seeds).cpu().numpy()
     I_obs_np = I_obs.cpu().numpy()
@@ -299,7 +305,7 @@ def check_multi_start(sigmas_recovered: Sequence[float],
 def check_residual_structure(model, U_seed, lat, P, R, sigma_U_deg,
                                M_render, target_psi, I_obs,
                                spot_centers_xy_px: np.ndarray,
-                               *, W: int = 13,
+                               *, E_range: tuple[float, float], W: int = 13,
                                cov_full: Optional[torch.Tensor] = None) -> dict:
     """F.  Fraction of observed peak energy explained by the model:
     1 − (Σ residual² inside peaks) / (Σ I_obs² inside peaks).
@@ -310,7 +316,7 @@ def check_residual_structure(model, U_seed, lat, P, R, sigma_U_deg,
     """
     I_pred = _render_at_sigma(model, U_seed, lat, P, R, sigma_U_deg,
                                M_render, target_psi, seed=30000,
-                               cov_full=cov_full)
+                               E_range=E_range, cov_full=cov_full)
     I_obs_np = I_obs.cpu().numpy()
     I_pred_np = I_pred.cpu().numpy()
     R_resid = I_obs_np - I_pred_np
@@ -350,6 +356,7 @@ def validate_recovery(*, model, U_seed, lat, P, R,
                        detector_distance_mm: float, px_size_mm: float,
                        I_obs: torch.Tensor, target_psi: torch.Tensor,
                        spot_centers_xy_px: np.ndarray,
+                       E_range: tuple[float, float],
                        cov_full: Optional[torch.Tensor] = None,
                        loss_at_minimum: Optional[float] = None,
                        checks: tuple = ("A", "B", "C", "F"),
@@ -362,7 +369,7 @@ def validate_recovery(*, model, U_seed, lat, P, R,
         d = check_loss_floor(model, U_seed, lat, P, R,
                               sigma_U_deg, M_render, target_psi, I_obs,
                               loss_at_minimum=loss_at_minimum,
-                              cov_full=cov_full)
+                              E_range=E_range, cov_full=cov_full)
         for k, v in d.items(): setattr(rep, k, v)
     if "B" in checks:
         d = check_sigma_critical(sigma_U_deg, M_render, sigma_psf_px,
@@ -373,7 +380,7 @@ def validate_recovery(*, model, U_seed, lat, P, R,
         d = check_per_spot_correlation(model, U_seed, lat, P, R,
                                          sigma_U_deg, M_render, target_psi,
                                          I_obs, spot_centers_xy_px,
-                                         cov_full=cov_full)
+                                         E_range=E_range, cov_full=cov_full)
         for k, v in d.items(): setattr(rep, k, v)
     if "D" in checks and refine_fn is not None:
         d = check_M_doubling(model, U_seed, lat, P, R, sigma_U_deg,
@@ -387,6 +394,6 @@ def validate_recovery(*, model, U_seed, lat, P, R,
         d = check_residual_structure(model, U_seed, lat, P, R,
                                        sigma_U_deg, M_render, target_psi,
                                        I_obs, spot_centers_xy_px,
-                                       cov_full=cov_full)
+                                       E_range=E_range, cov_full=cov_full)
         for k, v in d.items(): setattr(rep, k, v)
     return rep

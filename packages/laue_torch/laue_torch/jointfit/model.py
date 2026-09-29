@@ -75,7 +75,11 @@ class JointGrainFit(nn.Module):
 
     base_orientations : (G, 3, 3) starting orientations, e.g. the peel output.
                         Refinement is parameterized as a tangent correction to
-                        these, so the fit starts exactly at the seed.
+                        these, so the fit starts exactly at the seed. The
+                        correction and the spread are LAB-frame
+                        (``tangent_rotation(omega) @ U``), unlike the
+                        body-frame ``distributions.TangentGaussianSO3``;
+                        ``Sigma_lab = U Sigma_body U^T`` (see footprint.py).
     project_fn        : (3, 3) orientation -> (H, 2) pixel coordinates.  Rows
                         for reflections that miss the detector must be NaN, and
                         the row count must not change with orientation.

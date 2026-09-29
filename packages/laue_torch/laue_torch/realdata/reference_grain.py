@@ -28,7 +28,7 @@ from torch import Tensor, nn
 from midas_stress.orientation import quat_to_orient_mat
 
 from ..forward import LaueForwardModel
-from ..io import AXIS_ORDER_MODEL, LaueParams, to_model_layout
+from ..io import AXIS_ORDER_MODEL, LaueParams, to_model_layout, resolve_band
 
 
 def _quat_to_rotmat(q: Tensor) -> Tensor:
@@ -114,13 +114,14 @@ class ReferenceGrainParallaxRefiner:
         self.lr_z = float(lr_z)
         self.lr_rot = float(lr_rot)
         self.weight_reference = float(weight_reference)
-        self.E_range = E_range or (params.E_lo, params.E_hi)
+        self.E_range = resolve_band(params, E_range)
         self.model = LaueForwardModel(
             hkls=hkls,
             n_pix=(params.n_pix_x, params.n_pix_y),
             px_size=(params.px_x, params.px_y),
             psf_sigma=params.psf_sigma,
             rotation="matrix",
+            sg_num=params.sg_num,
             detector_rotation="rodrigues",
             strain_mode="none",
             hard=False,

@@ -80,6 +80,7 @@ from ..geometry import rodrigues_to_matrix
 from ..io import LaueParams, experiment_band, generate_hkls, to_model_layout
 from ..uncertainty import LaplacePosterior, laplace_posterior_from_residuals
 from .driver import FIXED_PRED_SEED
+from .harmonics import lowest_order_per_pixel
 
 
 def _dev5_to_voigt6(e5: Tensor) -> Tensor:
@@ -148,7 +149,7 @@ class MultiGrainResult:
     eps_means: Optional[Tensor]          # (K, 6) Voigt strain or None;
                                          # trace-free for strain_deviatoric
     final_loss: float
-    initial_seed_misos_deg: Tensor       # (K,) cubic miso between final and seed for each mode
+    initial_seed_misos_deg: Tensor       # (K,) miso (params.sg_num) between final and seed per mode
     n_steps: int
     dt_s: float
     metadata: dict = field(default_factory=dict)
@@ -241,13 +242,19 @@ class MultiGrainVoxelRefiner:
         # subspace (_DeviatoricGaussianStrain) and hands the model the
         # equivalent trace-free Voigt-6, identical to strain_mode="deviatoric"
         # on the 5-vector.
+        # A refinable eta can become a pseudo-Voigt even from psf_eta = 0:
+        # size the window for one (6 sigma, see LaueForwardModel).
+        window = (2 * int(math.ceil(6 * self.psf_sigma)) + 1
+                  if self.refine_eta else None)
         self.model = LaueForwardModel(
             hkls=self.hkls.to(device),
             n_pix=self.tensors["n_pix"],
             px_size=self.tensors["px_size"],
             psf_sigma=self.psf_sigma,
             psf_eta=self.psf_eta,
+            render_window=window,
             rotation="matrix",
+            sg_num=params.sg_num,
             detector_rotation="rodrigues",
             strain_mode="voigt",
             energy_image=False,
@@ -318,7 +325,6 @@ class MultiGrainVoxelRefiner:
         I_obs_flat = I_obs.reshape(-1)
         eps_zero = torch.zeros(1, 6, dtype=torch.float64, device=device)
         weights_one = torch.ones(1, dtype=torch.float64, device=device)
-        hkl_order = (self.hkls.to(device=device, dtype=torch.float64) ** 2).sum(-1)
 
         for k in range(K):
             U_k = U_seed_list[k:k + 1]  # (1, 3, 3)
@@ -343,19 +349,13 @@ class MultiGrainVoxelRefiner:
             mask_k = aux.mask.detach().reshape(H)
             keep_h = (mask_k > 0.5).nonzero(as_tuple=False).reshape(-1)
 
-            # One reflection per rounded seed pixel: lowest order wins.
-            if keep_h.numel() > 0:
-                order = torch.argsort(hkl_order[keep_h], stable=True)
-                seen = set()
-                for h in keep_h[order].tolist():
-                    key = (int(cx[h]), int(cy[h]))
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    # The render multiplies by the soft mask again, so divide
-                    # it out (mask > 0.5 here): rendered peak = observed peak
-                    # also for reflections near a band or detector edge.
-                    target[k, h] = patch_max[h] / mask_k[h]
+            # One reflection per rounded seed pixel: lowest order wins
+            # (realdata.harmonics, shared with VoxelODFRefiner).
+            for h in lowest_order_per_pixel(cx, cy, keep_h, self.hkls):
+                # The render multiplies by the soft mask again, so divide
+                # it out (mask > 0.5 here): rendered peak = observed peak
+                # also for reflections near a band or detector edge.
+                target[k, h] = patch_max[h] / mask_k[h]
 
             # Build patch mask from valid HKLs only, expanded slightly so
             # the σ_U gradient has room to inflate without spilling out of
@@ -493,14 +493,13 @@ class MultiGrainVoxelRefiner:
             raise ValueError(
                 f"U_seed_list must be (K, 3, 3), got {tuple(U_seed_list.shape)}")
         K = U_seed_list.shape[0]
-        # Convention reconciliation: gaussian_splat (and the C reference)
-        # produce ``img[X_col, Y_row]`` (forward's "X" is the first axis,
-        # contrary to standard numpy ``image[row, col] = image[Y, X]``).
-        # RunImage.py writes the cleaned image with standard convention,
-        # so we transpose the input here to align with the forward.  On a
-        # square image (Nx=Ny=2048) this is invisible to existing parity
-        # tests but critical for any pixel-wise comparison; the shape
-        # check in to_model_layout catches it on a non-square one.
+        # Axis order: the forward model (gaussian_splat) renders
+        # ``img[X, Y]`` (X = detector column first). The C indexer, RunImage
+        # and real frames are ``image[row, col] = image[Y, X]``, the
+        # transpose. to_model_layout transposes a "YX" input and leaves an
+        # "XY" one alone; the shape check there catches a wrong declaration
+        # on a non-square detector, and on a square one only the declared
+        # axis_order protects you (handbook invariant 38).
         I_obs = to_model_layout(image.to(self.device, dtype=torch.float64),
                                 axis_order, self.tensors["n_pix"])
         U_seed_list = U_seed_list.to(self.device, dtype=torch.float64)
@@ -746,11 +745,13 @@ class MultiGrainVoxelRefiner:
 
         pi = mix.weights().detach()
 
-        # Cubic miso between recovered means and seed means.
-        from ..symmetry import cubic_misorientation_deg
+        # Misorientation between recovered and seed means under the crystal's
+        # own point group (was hard-wired cubic).
+        from .. import symmetry
         misos = torch.tensor(
-            [cubic_misorientation_deg(U_means[k:k + 1],
-                                      U_seed_list[k:k + 1]).item()
+            [symmetry.misorientation_deg(U_means[k:k + 1], U_seed_list[k:k + 1],
+                                         self.params.sg_num,
+                                         lattice=self.params.lattice).item()
              for k in range(K)])
 
         recovered_psf_sigma_px = (float(torch.exp(log_psf).detach().item())

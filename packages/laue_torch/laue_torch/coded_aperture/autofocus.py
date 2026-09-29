@@ -45,7 +45,7 @@ from typing import TYPE_CHECKING
 from midas_stress.orientation import quat_to_orient_mat
 
 from ..forward import LaueForwardModel
-from ..io import LaueParams
+from ..io import LaueParams, resolve_band
 from .mask import CodedApertureMask
 
 if TYPE_CHECKING:
@@ -106,10 +106,9 @@ def autofocus_geometry(
         used as the shared orientation seed.  Per-voxel ``z`` is
         treated as *known* (held fixed at ``z_seed_um``).
     mask
-        Initial-guess mask.  Its ``rotvec`` must be non-zero (the
-        axis-angle path is structurally singular at zero — see the
-        note in :func:`laue_torch.coded_aperture.mask._rotvec_to_matrix`).
-        A copy with ``make_geometry_learnable=True`` is created
+        Initial-guess mask. ``rotvec = 0`` is allowed since 0.1.5 (the
+        axis-angle map is smooth there; it used to return a -1e12
+        gradient). A copy with ``make_geometry_learnable=True`` is created
         internally; the input is not modified.
     params
         :class:`LaueParams` for the underlying ``LaueForwardModel``.
@@ -215,13 +214,14 @@ def autofocus_geometry(
     opt = torch.optim.Adam(opt_groups)
 
     sigma = psf_sigma if psf_sigma is not None else params.psf_sigma
-    erange = E_range or (params.E_lo, params.E_hi)
+    erange = resolve_band(params, E_range)
     model = LaueForwardModel(
         hkls=hkls,
         n_pix=(params.n_pix_x, params.n_pix_y),
         px_size=(params.px_x, params.px_y),
         psf_sigma=sigma,
         rotation="matrix",
+        sg_num=params.sg_num,
         detector_rotation="rodrigues",
         strain_mode="none",
         hard=False,

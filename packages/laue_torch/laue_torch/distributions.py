@@ -13,7 +13,9 @@ the observed peak shape.
 For v1 we use a factored Gaussian model:
 
   - **Orientation**: tangent-space Gaussian on SO(3) — sample
-    ``δ ~ N(0, Σ_orient)`` in the body frame, then ``U = U_mean · exp(skew(δ))``.
+    ``δ ~ N(0, Σ_orient)`` in the body (crystal) frame, then
+    ``U = U_mean · exp(skew(δ))``. (``jointfit`` uses LAB-frame spreads,
+    ``exp(skew(ω)) · U``; ``Σ_lab = U Σ_body Uᵀ``.)
     Valid for mosaic widths ≲10°.
   - **Strain**: multivariate normal on Voigt-6.
 
@@ -352,11 +354,14 @@ class IndependentVoxelDistribution(nn.Module):
         M: int = 64,
         E_range: tuple[float, float] = (5.0, 30.0),
         generator: Optional[torch.Generator] = None,
+        per_spot_intensity: Optional[Tensor] = None,
     ) -> Tensor:
         """Monte-Carlo render of the voxel image with M phantom samples.
 
         ``model.rotation`` must be ``"matrix"`` and ``model.strain_mode``
         must be ``"voigt"``.  ``model.reduce='sum'`` is used implicitly.
+        ``per_spot_intensity``: optional (H,) (shared by every sample) or
+        (M, H) intrinsic intensity per reflection.
         """
         if model.rotation != "matrix":
             raise ValueError(
@@ -372,4 +377,8 @@ class IndependentVoxelDistribution(nn.Module):
                 f"(got {model.reduce!r}).")
         U, eps = self.sample(M, generator=generator)
         weights = torch.full((M,), 1.0 / M, dtype=lat.dtype, device=lat.device)
-        return model(U, lat, P, R, strain=eps, weights=weights, E_range=E_range)
+        psi = per_spot_intensity
+        if psi is not None and psi.dim() == 1:
+            psi = psi.unsqueeze(0).expand(U.shape[0], -1)
+        return model(U, lat, P, R, strain=eps, weights=weights, E_range=E_range,
+                     per_spot_intensity=psi)

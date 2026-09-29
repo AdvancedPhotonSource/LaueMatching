@@ -35,12 +35,33 @@ from ..distributions import (
 from ..forward import LaueForwardModel
 from ..io import LaueParams, experiment_band, generate_hkls, to_model_layout
 from ..uncertainty import LaplacePosterior, laplace_posterior_from_residuals
+from .harmonics import lowest_order_per_pixel
 
 # Fixed RNG seed for the MC phantom samples. Shared by the fit and the Laplace
 # posterior so the posterior is the curvature of the objective that was
 # actually minimised (it used a different seed before).
 FIXED_PRED_SEED = 0xC0FFEE
 from .io import VoxelMeasurement
+
+
+def affine_fit_residual(I_pred: Tensor, I_obs: Tensor):
+    """Residual ``a * I_pred + b - I_obs`` with (a, b) the least-squares
+    per-frame scale and background, solved in closed form.
+
+    Returns ``(residual, a, b)``; ``a`` and ``b`` stay differentiable in
+    ``I_pred`` (variable projection: the loss and the Laplace residual are
+    both the fit with (a, b) profiled out). A flat prediction gets
+    ``a = 0``, ``b = mean(I_obs)``.
+    """
+    p = I_pred.reshape(-1)
+    o = I_obs.reshape(-1)
+    pm, om = p.mean(), o.mean()
+    dp = p - pm
+    var = (dp * dp).sum()
+    a = (dp * (o - om)).sum() / var.clamp_min(1e-300)
+    a = torch.where(var > 0, a, torch.zeros_like(a))
+    b = om - a * pm
+    return (a * I_pred + b - I_obs), a, b
 
 
 @dataclass
@@ -50,9 +71,9 @@ class VoxelODFResult:
     sigma_U_deg: float                          # recovered isotropic mosaic spread (deg)
     sigma_U_full: Tensor                        # (3,) per-axis tangent covariance diagonal (rad)
     posterior_sigma_U_deg: float                # Laplace 1-σ on σ_U (deg)
-    final_loss: float                           # converged image-MSE
+    final_loss: float                           # converged MSE of a*render+b-obs
     initial_seed_index: int                     # which U_seed_list entry was used
-    initial_seed_miso_deg: float                # cubic miso between final and initial seed
+    initial_seed_miso_deg: float                # miso (params.sg_num) between final and initial seed
     n_steps: int
     dt_s: float
     metadata: dict = field(default_factory=dict)
@@ -61,6 +82,10 @@ class VoxelODFResult:
     # posterior_sigma_U_deg is a summary of it; read posterior.eigvals,
     # cond_number, rank_eff and is_positive_definite before trusting it.
     posterior: Optional[LaplacePosterior] = None
+    # (3, 3) fitted body-frame tangent covariance (rad^2). sigma_U_deg and
+    # sigma_U_full are summaries of it; project it on the directions the
+    # detector sees (see the VoxelODFRefiner identifiability warning).
+    orient_cov: Optional[Tensor] = None
 
 
 class VoxelODFRefiner:
@@ -76,9 +101,11 @@ class VoxelODFRefiner:
         Geometry and lattice parameters parsed from the LaueMatching
         config file.
     sigma_init_deg : float
-        Initial mosaic spread for the refined model.  Should be a few
-        times larger than the expected truth spread; 1° is a sensible
-        default for typical samples.
+        Initial mosaic spread for the refined model. Not a neutral choice:
+        in the tangent directions the image does not constrain (see the
+        identifiability warning below) the fit keeps, or drifts away from,
+        this value, so a start well above the truth reads high and one
+        well below reads low.
     psf_sigma : float
         **Measured instrument resolution** in pixels — the detector+geometry
         point-spread width from a pristine single-crystal standard (zero
@@ -107,6 +134,40 @@ class VoxelODFRefiner:
         If True, also refine the mean orientation alongside spread.
         Use only if the seed is not very precise; otherwise freeze
         the seed-supplied mean.
+
+    Warnings
+    --------
+    **The full 3-D orientation spread is not always identifiable, and
+    ``sigma_U_deg`` (the RMS over the three tangent axes) then depends on
+    ``sigma_init_deg``.** A Laue spot moves only with the in-plane part of a
+    rotation: per reflection the image sees the 2x2 covariance
+    ``J Sigma J^T`` (``J`` = d(spot px)/d(tangent rotation)), and rotation
+    about the reflection's own normal does not move it at all. So:
+
+    * One reflection on the detector: the spread about its normal is
+      unobservable (3 of the 6 covariance entries). Measured
+      (96x64, Ni, E 5-12 keV, truth 0.3 deg isotropic, M_render 32,
+      300 steps): from init 0.6 the in-plane stds come back 0.318 / 0.281
+      deg but the std about the normal drifts to 1.81 deg, so
+      ``sigma_U_deg`` = 1.07; from init 0.15 it lands at 0.308, by chance
+      (the unseen std drifted to 0.319). Adam is not rotation-invariant, so
+      it moves along the flat direction instead of holding the init.
+    * Several reflections on a small detector: one tangent direction (roughly
+      rotation about the mean scattering vector) moves every spot by much
+      less than the PSF, and its spread is weakly determined. Measured
+      (128x128, 5 reflections, psf 1 px, weak direction 1.95 px/deg vs
+      8.35 and 5.73): after 1000 steps (M_render 128) the two well-seen
+      directions give 0.27-0.32 deg from both inits, the weak one 0.026
+      (init 0.15) vs 0.328 (init 0.6); ``sigma_U_deg`` 0.247 vs 0.307.
+      More steps do not remove it (M_render 32: 0.038 vs 0.444 at 3000).
+
+    The loss itself is right: along an isotropic spread it is minimised at
+    the truth (0.3 deg for psf 0.5-2 px, M_render 32/128). Before quoting
+    ``sigma_U_deg``, project ``orient_cov`` on the singular vectors of the
+    stacked spot Jacobian and quote only directions whose displacement per
+    degree times the spread is not small against ``psf_sigma``; or treat
+    the spread as isotropic. Pinned by
+    ``tests/test_voxel_odf_identifiability.py``.
     """
 
     def __init__(
@@ -142,12 +203,38 @@ class VoxelODFRefiner:
             px_size=self.tensors["px_size"],
             psf_sigma=self.psf_sigma,
             rotation="matrix",
+            sg_num=params.sg_num,
             detector_rotation="rodrigues",
             strain_mode="voigt",
             energy_image=False,
             hard=False,
             reduce="sum",
         )
+
+    @torch.no_grad()
+    def seed_spot_intensity(self, U_seed: Tensor) -> Tensor:
+        """(H,) per-reflection intensity used by the fit: 1 for the
+        lowest-order in-band reflection of each seed pixel, 0 for the other
+        harmonics sharing it (and for reflections off the detector / out of
+        band at the seed). Same grouping as ``MultiGrainVoxelRefiner``
+        (``realdata.harmonics``); without it an (hhh) family rendered n times
+        brighter than a single reflection.
+        """
+        U = U_seed.to(self.device, dtype=torch.float64).reshape(1, 3, 3)
+        t = self.tensors
+        _, aux = self.model(U, t["lattice"], t["P"], t["R"],
+                            strain=torch.zeros(1, 6, dtype=torch.float64,
+                                               device=self.device),
+                            E_range=self.E_range, return_aux=True)
+        Nx, Ny = t["n_pix"]
+        cx = aux.px.round().long().clamp(0, Nx - 1)
+        cy = aux.py.round().long().clamp(0, Ny - 1)
+        keep_h = (aux.mask > 0.5).nonzero(as_tuple=False).reshape(-1)
+        psi = torch.zeros(self.hkls.shape[0], dtype=torch.float64, device=self.device)
+        idx = lowest_order_per_pixel(cx, cy, keep_h, self.hkls)
+        if idx:
+            psi[torch.tensor(idx, device=self.device)] = 1.0
+        return psi
 
     def _build_voxel(self, U_init: Tensor) -> IndependentVoxelDistribution:
         orient = TangentGaussianSO3(
@@ -180,6 +267,8 @@ class VoxelODFRefiner:
             self.tensors["n_pix"])
 
         voxel = self._build_voxel(U_seed)
+        # Harmonics deduplicated at the seed (fixed for the whole fit).
+        psi = self.seed_spot_intensity(U_seed)
 
         # Optimiser groups.
         groups = [
@@ -200,6 +289,7 @@ class VoxelODFRefiner:
         # noise that Adam reduces by inflating Σ_orient, biasing the
         # recovered mosaic spread up.
         last_loss = float("nan")
+        last_ab = (float("nan"), float("nan"))
         for step in range(self.n_steps):
             opt.zero_grad()
             g = torch.Generator().manual_seed(FIXED_PRED_SEED)
@@ -208,29 +298,39 @@ class VoxelODFRefiner:
                                   self.tensors["P"],
                                   self.tensors["R"],
                                   M=self.M_render, generator=g,
-                                  E_range=self.E_range)
-            loss = ((I_pred - I_obs) ** 2).mean()
+                                  E_range=self.E_range, per_spot_intensity=psi)
+            # Per-frame scale and background (a, b) profiled out in closed
+            # form: the spread no longer depends on the counts or pedestal.
+            resid, a_fit, b_fit = affine_fit_residual(I_pred, I_obs)
+            loss = (resid ** 2).mean()
             loss.backward()
             opt.step()
             last_loss = loss.item()
+            last_ab = (float(a_fit.detach()), float(b_fit.detach()))
 
         with torch.no_grad():
             U_mean = voxel.orient.mean().detach()
-            cov_diag = voxel.orient.covariance().diag().detach()
+            orient_cov = voxel.orient.covariance().detach()
+            cov_diag = orient_cov.diag()
             sigma_U_full = cov_diag.sqrt()
             sigma_U_deg = math.degrees(math.sqrt(cov_diag.mean().item()))
 
-        # Cubic misorientation between seed and final mean.
-        from ..symmetry import cubic_misorientation_deg
-        miso_seed = cubic_misorientation_deg(
-            U_mean.unsqueeze(0), U_seed.unsqueeze(0)).item()
+        # Misorientation between seed and final mean, under the crystal's
+        # own point group (was hard-wired cubic).
+        from .. import symmetry
+        miso_seed = symmetry.misorientation_deg(
+            U_mean.unsqueeze(0), U_seed.unsqueeze(0), self.params.sg_num,
+            lattice=self.params.lattice).item()
 
         # Laplace posterior on σ_U (only the Cholesky entries are free).
         posterior_sigma_U_deg = float("nan")
         posterior = None
         metadata = dict(measurement.metadata)
+        # (a, b) at the last step: I_obs ~ a * render + b.
+        metadata["intensity_scale"], metadata["intensity_offset"] = last_ab
         if self.compute_posterior:
-            posterior_sigma_U_deg, posterior, err = self._laplace_on_sigma(voxel, I_obs)
+            posterior_sigma_U_deg, posterior, err = self._laplace_on_sigma(
+                voxel, I_obs, psi)
             if err is not None:
                 metadata["posterior_error"] = err
             # The posterior covers only the spread; the mean orientation is
@@ -254,19 +354,23 @@ class VoxelODFRefiner:
             dt_s=time.time() - t0,
             metadata=metadata,
             posterior=posterior,
+            orient_cov=orient_cov,
         )
 
     def _laplace_on_sigma(
         self,
         voxel: IndependentVoxelDistribution,
         I_obs: Tensor,
+        psi: Tensor,
     ):
         """Laplace posterior over the 6 orientation-spread Cholesky entries.
 
         Returns ``(posterior_sigma_U_deg, posterior, error)``. The residual
         replays the fit exactly: same seed (``FIXED_PRED_SEED``), same draw
         order as ``IndependentVoxelDistribution.sample`` (orientation, then the
-        frozen strain), same energy band. The curvature scale is
+        frozen strain), same energy band, same harmonic-deduplicated
+        per-reflection intensity, and the same closed-form per-frame scale and
+        background (a, b) profiled out of the residual. The curvature scale is
         :func:`laue_torch.uncertainty.laplace_posterior_from_residuals`
         (``0.5 * SSR`` with the plug-in per-pixel noise variance), the same as
         ``MultiGrainVoxelRefiner``.
@@ -305,8 +409,10 @@ class VoxelODFRefiner:
                                 self.tensors["P"],
                                 self.tensors["R"],
                                 strain=eps, weights=weights,
-                                E_range=self.E_range)
-            return I_pred - I_obs
+                                E_range=self.E_range,
+                                per_spot_intensity=psi.unsqueeze(0).expand(M, -1))
+            # Same (a, b)-profiled residual as the fit.
+            return affine_fit_residual(I_pred, I_obs)[0]
 
         try:
             posterior = laplace_posterior_from_residuals(residual_fn, theta_map)

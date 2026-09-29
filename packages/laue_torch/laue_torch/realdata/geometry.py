@@ -3,7 +3,16 @@ into a :class:`~laue_torch.io.LaueParams` object.
 
 The 34-ID-E geometry XML stores up to ``Ndetectors`` detectors; we
 take ``Detector N="0"`` (the main 2D detector used for Laue indexing).
-Pixel size is derived from ``size`` and ``Npixels``.
+Pixel size is derived from ``size`` and ``Npixels`` (the UNBINNED count; pass
+``frame_shape`` to :func:`make_lauematching_params` for binned frames).
+
+Frames and units: ``P`` (mm) and ``R`` (radian, Rodrigues) are the detector
+pose in the beamline LAB frame of the geoN file, the same frame and meaning as
+LaueMatching's ``P_Array`` / ``R_Array`` (copied verbatim, after mm -> m); the
+forward model maps a lab direction ``k`` to the detector frame as ``R^T k`` and
+puts pixel ``(Nx-1)/2, (Ny-1)/2`` at the point ``P``. ``unit`` attributes, when
+present, are checked (``size`` / ``P`` in mm, ``R`` in radian) rather than
+assumed.
 
 Crystal structure can be given as either a small CIF-flavored
 ``.xml`` (the LaueMatching/Argonne convention --- ``Al.xml`` in the
@@ -62,15 +71,26 @@ def parse_geon_xml(path: str | Path, detector_index: int = 0) -> GeoN:
     def _floats(text: str) -> list[float]:
         return [float(t) for t in re.split(r"\s+", text.strip()) if t]
 
+    def _check_unit(elem, name, allowed):
+        unit = (elem.get("unit") or "").strip().lower()
+        if unit and unit not in allowed:
+            raise ValueError(f"{path}: <{name}> unit={unit!r}; expected one of "
+                             f"{sorted(allowed)} (no conversion is attempted)")
+
     npix_text = _find_local(det, "Npixels").text
     npix_floats = _floats(npix_text)
     npx_x, npx_y = int(npix_floats[0]), int(npix_floats[1])
 
-    size_text = _find_local(det, "size").text
-    size_floats = _floats(size_text)
+    size_elt = _find_local(det, "size")
+    _check_unit(size_elt, "size", {"mm"})
+    size_floats = _floats(size_elt.text)
     sx, sy = size_floats[0], size_floats[1]                  # mm
-    P_floats = _floats(_find_local(det, "P").text)           # mm
-    R_floats = _floats(_find_local(det, "R").text)           # rad
+    P_elt = _find_local(det, "P")
+    _check_unit(P_elt, "P", {"mm"})
+    P_floats = _floats(P_elt.text)                           # mm
+    R_elt = _find_local(det, "R")
+    _check_unit(R_elt, "R", {"radian", "rad"})
+    R_floats = _floats(R_elt.text)                           # rad
     P = (P_floats[0], P_floats[1], P_floats[2])
     R = (R_floats[0], R_floats[1], R_floats[2])
     det_id = (_find_local(det, "ID").text or "").strip()
@@ -154,10 +174,11 @@ def make_lauematching_params(
     geon: GeoN,
     crystal: Crystal,
     *,
-    E_lo: float = 5.0,
-    E_hi: float = 30.0,
+    E_lo: Optional[float] = None,
+    E_hi: Optional[float] = None,
     psf_sigma: float = 2.0,
     symmetry: str = "F",
+    frame_shape: Optional[Tuple[int, int]] = None,
 ) -> LaueParams:
     """Bundle a parsed geometry + crystal into a :class:`LaueParams`.
 
@@ -168,13 +189,44 @@ def make_lauematching_params(
       * R in **rad** (already correct).
       * Pixel sizes (``PxX``, ``PxY``) in **m**.
       * Lattice in **nm** + degrees.
-    The energy bandpass and PSF Gaussian width default to the values
-    used in the 34-ID-E setup; callers should override for non-standard
-    runs.
+    Energy band: pass the measurement's ``E_lo`` / ``E_hi`` (keV). If either
+    is omitted the band is set to 5-30 keV for the forward model only and
+    ``extras["energy_band_defaulted"] = True`` is recorded, so the real-data
+    refiners (``experiment_band``) and :func:`write_lauematching_config`
+    refuse it. (Before 0.1.5 the 5/30 default was silent and got written
+    into indexer configs.) The PSF width still defaults to 2 px.
+
+    frame_shape : (rows, cols), optional
+        Shape of the frames that will be fitted (detector layout,
+        ``(NrPxY, NrPxX)``). Checked against ``Npixels``: equal is fine; an
+        integer binning ``(Npixels_y / rows, Npixels_x / cols)`` rescales the
+        pixel count and size (recorded as ``extras["binning"]``); anything
+        else raises. ``None`` skips the check (the old behaviour).
     """
+    extras: dict = {}
+    npx_x, npx_y = geon.npx_x, geon.npx_y
+    psx_mm, psy_mm = geon.px_size_mm_x, geon.px_size_mm_y
+    if frame_shape is not None:
+        rows, cols = int(frame_shape[0]), int(frame_shape[1])
+        if (rows, cols) != (npx_y, npx_x):
+            bx, by = npx_x // max(cols, 1), npx_y // max(rows, 1)
+            if (bx < 1 or by < 1 or bx * cols != npx_x or by * rows != npx_y
+                    or (bx, by) == (1, 1)):
+                raise ValueError(
+                    f"frame_shape (rows, cols) = {(rows, cols)} does not match "
+                    f"geoN Npixels (x, y) = ({npx_x}, {npx_y}) -> expected "
+                    f"({npx_y}, {npx_x}) or an integer binning of it (is the "
+                    f"frame transposed?)")
+            npx_x, npx_y = cols, rows
+            psx_mm, psy_mm = psx_mm * bx, psy_mm * by
+            extras["binning"] = (bx, by)
+    if E_lo is None or E_hi is None:
+        extras["energy_band_defaulted"] = True
+        E_lo = 5.0 if E_lo is None else E_lo
+        E_hi = 30.0 if E_hi is None else E_hi
     P_m = tuple(p * 1e-3 for p in geon.P_mm)                  # mm → m
-    px_x_m = geon.px_size_mm_x * 1e-3
-    px_y_m = geon.px_size_mm_y * 1e-3
+    px_x_m = psx_mm * 1e-3
+    px_y_m = psy_mm * 1e-3
     return LaueParams(
         sg_num=crystal.sg_num,
         symmetry=symmetry,
@@ -183,11 +235,12 @@ def make_lauematching_params(
         R=geon.R_rad,
         px_x=px_x_m,
         px_y=px_y_m,
-        n_pix_x=geon.npx_x,
-        n_pix_y=geon.npx_y,
+        n_pix_x=npx_x,
+        n_pix_y=npx_y,
         E_lo=E_lo,
         E_hi=E_hi,
         psf_sigma=psf_sigma,
+        extras=extras,
     )
 
 
@@ -204,7 +257,13 @@ def write_lauematching_config(
     ``extras`` is a dict of additional key-value lines to inject (e.g.
     ``OrientationFile``, ``MaxNrLaueSpots``, ``ResultDir``, etc.) ---
     see the LaueMatching documentation for the full list.
+
+    Refuses (``ValueError``) a ``params`` whose energy band was defaulted
+    rather than given (``experiment_band``): the indexer would otherwise run
+    in a 5-30 keV band nobody chose.
     """
+    from ..io import experiment_band
+    experiment_band(params)          # raises on a missing / defaulted band
     extras = extras or {}
     lines: list[str] = []
 

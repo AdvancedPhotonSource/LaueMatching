@@ -56,6 +56,7 @@ def rod_forward(
     R: Tensor,
     n_pix: tuple[int, int],
     px_size: tuple[float, float],
+    sg_num: Union[int, None] = None,
 ) -> RodPoint:
     """Energy and detector position for the row (h, k, L), L continuous.
 
@@ -69,6 +70,8 @@ def rod_forward(
     R        : (3, 3) detector rotation matrix (lab -> detector).
     n_pix    : (Nx, Ny) detector pixel count.
     px_size  : (dx, dy) pixel size [m].
+    sg_num   : optional space group; picks the lattice embedding for the
+               R-centred groups, as ``LaueForwardModel(sg_num=...)``.
 
     No aperture, energy-window, or forward-scatter gating is applied here --
     see :func:`rod_accessible_mask`. Reflections that are geometrically
@@ -82,7 +85,7 @@ def rod_forward(
 
     dtype = L.dtype
     device = L.device
-    B0 = reciprocal_matrix(lattice.to(dtype=dtype, device=device))  # (3, 3)
+    B0 = reciprocal_matrix(lattice.to(dtype=dtype, device=device), sg_num)  # (3, 3)
     M = U.to(dtype=dtype, device=device) @ B0                       # (3, 3)
 
     hk = torch.stack(

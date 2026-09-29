@@ -134,9 +134,13 @@ def test_scan_loader_and_voxel_refiner_line_up_on_non_square(tmp_path):
     refiner = VoxelODFRefiner(p, sigma_init_deg=1e-4, psf_sigma=p.psf_sigma,
                               n_steps=1, M_render=4, compute_posterior=False)
     t = refiner.tensors
+    # Render as the refiner does: harmonics deduplicated at the seed.
+    psi = refiner.seed_spot_intensity(U)
     with torch.no_grad():
         img_xy = refiner.model(U.unsqueeze(0), t["lattice"], t["P"], t["R"],
-                               strain=torch.zeros(1, 6, dtype=DT))
+                               strain=torch.zeros(1, 6, dtype=DT),
+                               E_range=refiner.E_range,
+                               per_spot_intensity=psi.unsqueeze(0))
     real = img_xy.T.numpy().copy()                        # (NY, NX), as stored
     _write_output_h5(tmp_path / "image_00001.output.h5", real, U.numpy())
 

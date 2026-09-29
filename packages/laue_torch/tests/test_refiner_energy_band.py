@@ -78,9 +78,16 @@ def test_refiners_fit_in_params_band(band):
 
     dr = VoxelODFRefiner(p, sigma_init_deg=1e-4, n_steps=1, M_render=4,
                          compute_posterior=False)
-    r = dr.refine(VoxelMeasurement(0, img.T.contiguous(), U.unsqueeze(0), {},
+    # VoxelODFRefiner renders one reflection per seed pixel (harmonics
+    # deduplicated); observe the same thing.
+    t = dr.tensors
+    with torch.no_grad():
+        img_d = dr.model(U.unsqueeze(0), t["lattice"], t["P"], t["R"],
+                         strain=torch.zeros(1, 6, dtype=DT), E_range=band,
+                         per_spot_intensity=dr.seed_spot_intensity(U).unsqueeze(0))
+    r = dr.refine(VoxelMeasurement(0, img_d.T.contiguous(), U.unsqueeze(0), {},
                                          axis_order="YX"))
-    assert r.final_loss < 1e-3 * float((img ** 2).mean())
+    assert r.final_loss < 1e-3 * float((img_d ** 2).mean())
 
     # And the fixed (5, 30) band really would have been wrong here.
     t = dr.tensors

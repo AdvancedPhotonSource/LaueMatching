@@ -16,8 +16,8 @@ and per-ray energy.  All operations are torch-differentiable so the
 mask pose and bar parameters can be jointly refined with orientation
 and strain via autograd.
 
-See ``laue_torch/implementation_plan_coded_aperture.md`` for the full
-implementation roadmap and validation targets.
+The validation targets live in the tests (``tests/test_coded_aperture_*.py``);
+the implementation plan this once pointed to was never committed.
 """
 
 from .absorption import mu_au, mu_si3n4

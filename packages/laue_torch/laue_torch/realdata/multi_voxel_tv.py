@@ -43,7 +43,7 @@ from midas_stress.orientation import quat_to_orient_mat
 
 from ..coded_aperture import CodedApertureMask
 from ..forward import LaueForwardModel
-from ..io import LaueParams
+from ..io import LaueParams, resolve_band
 from .depth_resolved import (
     CodedApertureVoxelMeasurement,
     DepthResolvedVoxelResult,
@@ -85,6 +85,8 @@ class MultiVoxelTVRefiner:
     lambda_U
         TV regularization weight on consecutive rotation matrices
         ``‖U_{v+1} − U_v‖_F``.  Same scaling note as ``lambda_z``.
+        Seeds are first moved to the symmetry variant (``params.sg_num``)
+        nearest their predecessor, so equivalent seeds cost nothing.
     """
 
     def __init__(
@@ -109,7 +111,7 @@ class MultiVoxelTVRefiner:
         self.lr_rot = float(lr_rot)
         self.lambda_z = float(lambda_z)
         self.lambda_U = float(lambda_U)
-        self.E_range = E_range or (params.E_lo, params.E_hi)
+        self.E_range = resolve_band(params, E_range)
 
         sigma = psf_sigma if psf_sigma is not None else params.psf_sigma
         self.model = LaueForwardModel(
@@ -118,6 +120,7 @@ class MultiVoxelTVRefiner:
             px_size=(params.px_x, params.px_y),
             psf_sigma=sigma,
             rotation="matrix",
+            sg_num=params.sg_num,
             detector_rotation="rodrigues",
             strain_mode="none",
             hard=False,
@@ -139,8 +142,17 @@ class MultiVoxelTVRefiner:
         P = t["P"]
         R = t["R"]
 
-        # Per-voxel state:
-        U_seeds = [v.U_seed.to(dtype=dtype, device=device) for v in measurements]
+        # Per-voxel state. The orientation TV ||U_{v+1} - U_v||_F is not
+        # symmetry-reduced, so put every seed on the branch nearest its
+        # (already aligned) predecessor first: the indexer may hand back the
+        # same orientation as different variants, which cost ||S - I||_F.
+        # The refined U of each voxel is then reported on that branch.
+        from ..symmetry import nearest_variant
+        U_seeds = [measurements[0].U_seed.to(dtype=dtype, device=device)]
+        for v in measurements[1:]:
+            U_seeds.append(nearest_variant(v.U_seed.to(dtype=dtype, device=device),
+                                           U_seeds[-1], self.params.sg_num,
+                                           lattice=self.params.lattice))
         zs = nn.Parameter(torch.tensor(
             [float(v.z_seed_um) for v in measurements],
             dtype=dtype, device=device,

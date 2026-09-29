@@ -60,8 +60,18 @@ def _make_mask() -> CodedApertureMask:
         bar_widths_um=12.0,
         au_thickness_um=6.0,
         sub_thickness_um=0.0,
-        position_um=torch.tensor([0.0, 0.0, 500.0], dtype=DTYPE),
-        rotvec=torch.tensor([0.05, -0.03, 0.02], dtype=DTYPE),
+        # Between the sample and the panel, as a DAXM aperture sits: the
+        # panel is edge-on ABOVE the sample in this 34-ID-E pose (lab +y), so
+        # the mask is 500 um up with its normal ~ +y and its coding axis ~ +z,
+        # along the beam, which is what makes it sensitive to depth. That
+        # pose is -120 deg about (1,1,1) (canonical x->z, z->y), plus the
+        # same small pose error as before. Until 0.1.5 the fixture put the
+        # mask 500 um DOWNSTREAM along the beam (normal +z), where rays to
+        # this panel with 2theta > 90 deg never cross it; the old transmission
+        # coded them anyway (there was no t > 0 gate).
+        position_um=torch.tensor([0.0, 500.0, 0.0], dtype=DTYPE),
+        rotvec=torch.tensor([-1.2091996 + 0.05, -1.2091996 - 0.03,
+                             -1.2091996 + 0.02], dtype=DTYPE),
         edge_softness_um=4.0,
         make_geometry_learnable=False,
         dtype=DTYPE,
@@ -177,6 +187,11 @@ def test_strain_round_trip_deviatoric():
     # data with 2000+ scan points will tighten this dramatically (the
     # Hessian / Cramér-Rao analysis quantifies the data-to-precision
     # relationship explicitly).
+    # Measured (0.1.5, aperture between sample and panel, t > 0 gate):
+    # rel 28.3 %, z err 0.011 um, miso 0.006 deg. With the aperture
+    # downstream along the beam and no gate (before 0.1.5) it was 33.2 %,
+    # 0.125 um: better-looking only because rays that never crossed the
+    # aperture were coded.
     assert rel_err < 0.40, (
         f"strain not recovered: ‖ε_recv−ε_truth‖_F / ‖ε_truth‖_F = {rel_err:.2%}"
     )

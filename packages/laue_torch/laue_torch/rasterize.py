@@ -346,7 +346,11 @@ def pseudo_voigt_splat(
     eta           : Lorentzian mixing fraction in [0, 1].  0 = pure
                     Gaussian; 1 = pure Lorentzian.  Default 0 keeps
                     the existing behaviour bit-identical to
-                    :func:`gaussian_splat`.
+                    :func:`gaussian_splat`.  For eta != 0 the profile is
+                    multiplied by a raised-cosine taper, symmetric about the
+                    sub-pixel centre, from R/2 to the nearest tile edge
+                    R = window//2 - 0.5 (only when R >= 5 sigma), so the
+                    truncated Lorentzian tail does not bias the centroid.
     grain_idx     : (N,) integer per-spot grain id when n_grains > 1.
     n_grains      : number of grains for the stack mode.
     """
@@ -396,6 +400,23 @@ def pseudo_voigt_splat(
         lorentz_2d = lx[:, :, None] * ly[:, None, :]            # (N, W, W)
         tile = ((1.0 - eta) * gauss_2d + eta * lorentz_2d) \
                 * intensity[:, None, None]
+        # Taper the Lorentzian tail symmetrically about the TRUE centre.
+        # The tile is centred on the rounded pixel, so a hard cut at its edge
+        # removes more tail on one side than the other and pulls the spot
+        # centroid (0.07 px at eta = 0.5, sigma = 1 with the old 3-sigma
+        # window). A raised-cosine roll-off from R/2 to R = r - 0.5 (the
+        # nearest tile edge) keeps the profile symmetric; the core inside R/2
+        # is untouched. Only windows of at least ~5 sigma (R >= 5 sigma; the
+        # forward model's pseudo-Voigt default is 6 sigma) are tapered, so a
+        # small window keeps the old, untapered profile.
+        R_edge = r - 0.5
+        sig_f = float(sigma.detach().max()) if torch.is_tensor(sigma) else float(sigma)
+        r0 = 0.5 * R_edge
+        if R_edge >= 5.0 * sig_f:
+            def _taper(d2):
+                u = ((d2.sqrt() - r0) / (R_edge - r0)).clamp(0.0, 1.0)
+                return 0.5 * (1.0 + torch.cos(math.pi * u))
+            tile = tile * (_taper(dx2)[:, :, None] * _taper(dy2)[:, None, :])
     valid = (valid_x[:, :, None] & valid_y[:, None, :]).to(dtype)
     tile = tile * valid
 

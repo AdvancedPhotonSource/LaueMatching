@@ -9,7 +9,8 @@ Example
     python -m laue_torch.cli \\
         -configFile simulation/params_sim.txt \\
         -orientationFile simulation/fourOrientations.csv \\
-        -outputFile out.h5
+        -outputFile out.h5 \\
+        -axisOrder YX          # detector layout, for the indexer (default XY)
 """
 
 from __future__ import annotations
@@ -52,6 +53,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-dtype", default="float32", choices=("float32", "float64"))
     parser.add_argument("-noStretch", action="store_true",
                         help="Disable contrast stretch on the saved TIFF.")
+    parser.add_argument("-axisOrder", default="XY", choices=("XY", "YX"),
+                        help="Layout of the written images. XY = the model's "
+                             "img[X, Y] (historical default). YX = detector "
+                             "layout image[row, col], what the LaueMatching "
+                             "indexer and real frames use: every image array "
+                             "(and the TIFF) is transposed and the marker is "
+                             "b'YX'.")
 
     args = parser.parse_args(argv)
 
@@ -86,7 +94,8 @@ def main(argv: list[str] | None = None) -> int:
     model = LaueForwardModel(
         hkls=hkls, n_pix=t["n_pix"], px_size=t["px_size"],
         psf_sigma=t["psf_sigma"],
-        rotation="matrix", detector_rotation="rodrigues",
+        rotation="matrix",
+        sg_num=p.sg_num, detector_rotation="rodrigues",
         strain_mode=args.strainMode,
         hard=True,
         energy_image=args.energyImage,
@@ -102,6 +111,19 @@ def main(argv: list[str] | None = None) -> int:
             aux = None
 
     img_np = img.detach().cpu().numpy()
+    e_np = (aux.energy_image.detach().cpu().numpy()
+            if aux is not None and aux.energy_image is not None else None)
+    if args.axisOrder == "YX":
+        # Detector layout image[row, col] = image[Y, X]: the transpose of
+        # every array, so the file can be handed to the indexer as is.
+        img_np = np.ascontiguousarray(img_np.T)
+        if e_np is not None:
+            e_np = np.ascontiguousarray(e_np.T)
+    else:
+        logger.warning(
+            "writing model layout img[X, Y] (-axisOrder XY, the default); the "
+            "LaueMatching indexer and real frames are YX (image[row, col]). "
+            "Pass -axisOrder YX for a frame to index.")
     out = Path(args.outputFile)
     tif_path = out.with_suffix(out.suffix + ".tif")
     _save_tiff(img_np, tif_path, stretch=not args.noStretch)
@@ -130,22 +152,21 @@ def main(argv: list[str] | None = None) -> int:
     # transposes and shape-checks. The `/entry1/axis_order` marker written
     # below is read by `realdata.LaueScanLoader`.
     #
-    # This is left UNTRANSPOSED so the file matches the model's own convention
-    # and existing callers do not silently change meaning. If you are generating
-    # frames to index, transpose before writing.
+    # The default (-axisOrder XY) is left UNTRANSPOSED so the file matches the
+    # model's own convention and existing callers do not silently change
+    # meaning (a warning is logged). -axisOrder YX writes the transpose of
+    # every image array (data, energy_image, average_energy and the TIFF) and
+    # the marker b"YX": a frame the indexer can read directly.
     # ------------------------------------------------------------------
     with h5py.File(out, "w") as hf:
         hf.create_dataset("/entry1/data/data", data=img_np)
-        hf.create_dataset("/entry1/axis_order", data=np.bytes_("XY"))
+        hf.create_dataset("/entry1/axis_order", data=np.bytes_(args.axisOrder))
         hf.create_dataset("/entry1/orientation_matrices", data=U.cpu().numpy())
-        if aux is not None and aux.energy_image is not None:
-            hf.create_dataset("/entry1/energy_image",
-                              data=aux.energy_image.detach().cpu().numpy())
+        if e_np is not None:
+            hf.create_dataset("/entry1/energy_image", data=e_np)
             # Average energy per pixel where intensity > 0.
             with np.errstate(invalid="ignore", divide="ignore"):
-                avg = np.where(img_np > 1e-6,
-                               aux.energy_image.detach().cpu().numpy() / np.maximum(img_np, 1e-30),
-                               0.0)
+                avg = np.where(img_np > 1e-6, e_np / np.maximum(img_np, 1e-30), 0.0)
             hf.create_dataset("/entry1/average_energy", data=avg)
     logger.info("Wrote HDF5: %s", out)
     return 0

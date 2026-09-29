@@ -1,7 +1,7 @@
 # `laue_torch` — Differentiable Laue forward projection
 
 `laue_torch` is a PyTorch implementation of the LaueMatching forward model
-(the math behind [scripts/GenerateSimulation.py](../scripts/GenerateSimulation.py)
+(the math behind [GenerateSimulation.py](../packages/laue_index/laue_index/pipeline/GenerateSimulation.py)
 and [LaueMatchingCPU.c](../packages/laue_index/c_src/LaueMatchingCPU.c)). Every output pixel
 is a smooth function of the inputs, so PyTorch's autograd can backprop
 through the rendered image into:
@@ -45,9 +45,30 @@ sinθ = −q̂_z;   E = h·c · ‖q‖ / (4π · sinθ)
 ```
 
 Each spot is splatted onto the `(Nx, Ny)` image with a sub-pixel-accurate
-2D Gaussian PSF; rejection masks (`z>0`, detector bounds, energy window)
-are sigmoids by default for differentiability, and become hard booleans
-with `hard=True`.
+2D Gaussian PSF (pseudo-Voigt with `psf_eta > 0`); rejection masks (`z>0`,
+detector bounds, energy window) are sigmoids by default for
+differentiability, and become hard booleans with `hard=True`.
+
+**Lattice embedding (`sg_num`).** `recip` puts `a` along x for every cell
+unless `LaueForwardModel(..., sg_num=...)` / `reciprocal_matrix(lattice,
+sg_num)` is given one of the R-centred space groups 146, 148, 155, 160, 161,
+166, 167. Those are classified from the SUPPLIED parameters: hexagonal axes
+`(a, a, c, 90, 90, 120)` use the standard embedding (what `midas_hkls`
+assumes); rhombohedral axes `(a, a, a, α, α, α)`, `α != 90`, use the C
+indexer's embedding with the 3-fold along Cartesian [111]; anything else
+raises. `sg_num=None` (default) is the pre-0.1.5 behaviour. The real-data
+refiners pass `params.sg_num`.
+
+**Render window.** Default `2*ceil(3σ)+1` for a Gaussian PSF and
+`2*ceil(6σ)+1` for a pseudo-Voigt. With `eta != 0` and a window of at least
+~5σ the splat also applies a raised-cosine taper from half the window to its
+edge, symmetric about the sub-pixel centre, so the truncated Lorentzian tail
+does not pull the centroid (it was 0.055-0.073 px at 3σ; now < 1e-3 px for
+σ ≥ 1 px).
+
+**Axis order.** The image is `img[X, Y]` (X = detector column first). Real
+frames and the LaueMatching indexer are `image[row, col] = image[Y, X]`, the
+transpose; see `laue_torch.io.to_model_layout` and the CLI's `-axisOrder`.
 
 ## Quickstart
 
@@ -124,8 +145,10 @@ null direction; use `strain_mode="voigt"` plus an energy-resolved loss
 ### Energy-resolved fitting
 
 Setting `energy_image=True` makes the forward also splat per-spot energies
-into a `(Nx, Ny)` image. Per-spot energies are always available in
-`aux.energy`. Build a hydrostatic-sensitive loss:
+into a `(Nx, Ny)` image, returned as `aux.energy_image` with
+`return_aux=True` (without it nothing is computed); it uses the same PSF as
+the intensity image, so `energy_image / image` is the spot energy on an
+isolated spot. Per-spot energies are always available in `aux.energy`. Build a hydrostatic-sensitive loss:
 
 ```python
 _, aux_obs = model(U, lat, P, R, strain=eps_true, return_aux=True)
@@ -190,6 +213,32 @@ python -m laue_torch.cli \
     -outputFile out.h5
 ```
 
-Mirrors `scripts/GenerateSimulation.py` arguments. Add `-strainMode voigt`
+Mirrors `GenerateSimulation.py` arguments. Add `-strainMode voigt`
 + `-strainFile strains.csv` for per-grain strain. Add `-energyImage` to
 also write the intensity-weighted energy image.
+
+`-axisOrder XY` (default) writes the model layout `img[X, Y]` with the marker
+`/entry1/axis_order = b"XY"` and logs a warning; `-axisOrder YX` writes the
+transpose of every image array (and the TIFF) in detector layout
+`image[row, col]` with the marker `b"YX"`, a frame the indexer can read.
+
+## Real-data refiners (notes)
+
+- `VoxelODFRefiner` fits `a * render + b` to the frame, with the per-frame
+  scale and background `(a, b)` solved in closed form inside the loss and the
+  Laplace residual (`realdata.driver.affine_fit_residual`); the recovered
+  spread no longer depends on the counts or the pedestal. Harmonics sharing a
+  seed pixel are rendered once (lowest order; `realdata.harmonics`, same
+  grouping as `MultiGrainVoxelRefiner`); the weights are
+  `VoxelODFRefiner.seed_spot_intensity(U)`.
+- Every refiner renders in the experiment's band (`io.experiment_band` /
+  `io.resolve_band`); a band that `parse_params` or
+  `make_lauematching_params` had to default is refused, and
+  `write_lauematching_config` will not write one. The `realdata.validate`
+  checks take a required `E_range`.
+- `DepthResolvedVoxelRefiner.posterior` uses `0.5 * SSR` and a Jacobi-scaled
+  ridge: at a zero-residual optimum `sigma = sqrt(nv * inv(JᵀJ))`.
+- `laue_torch.nye.lattice_curvature` returns the curvature
+  `κ_ij = ∂ω_i/∂x_j` (both indices in the reference crystal frame by default);
+  Nye's tensor is `nye_alpha(κ) = κᵀ − tr(κ) I`. `nye_tensor` is a deprecated
+  alias of the old mixed-frame curvature.

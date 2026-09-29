@@ -25,7 +25,8 @@ from laue_torch.distributions import (
     GaussianStrain, IndependentVoxelDistribution, TangentGaussianSO3,
 )
 from laue_torch.synthetic import default_truth, make_model
-from laue_torch.nye import nye_tensor, gnd_density, fcc_slip_systems
+from laue_torch.nye import (lattice_curvature, nye_alpha, gnd_density,
+                            fcc_slip_systems)
 from laue_torch.uncertainty import laplace_posterior
 
 print("Step 1: building forward model and ground-truth voxel ...")
@@ -95,22 +96,26 @@ print(f"  recovered σ_U = {sigma_U_pred:.3f}°  "
 print("\nStep 4: tensor GND from a synthetic 1-D scan ...")
 from laue_torch.nye import synthetic_linear_gradient_field
 n_voxels = 7
-R_field, alpha_truth = synthetic_linear_gradient_field(
+R_field, kappa_truth = synthetic_linear_gradient_field(
     n_voxels=n_voxels, axis_index=2,
     rate_per_voxel_deg=0.2, spacing=1.0,
     U_base=truth.U[0],
 )
 # In a real experiment R_field would come from per-voxel U_mean recoveries.
-alpha_recovered = nye_tensor(R_field, spacing=1.0)
-alpha_central = alpha_recovered[n_voxels // 2]
-relerr = (alpha_central - alpha_truth).abs().max().item() / \
-         alpha_truth.abs().max().item()
-print(f"  Nye tensor at central voxel:")
-print(f"    truth     : {alpha_truth.numpy()}")
-print(f"    recovered : {alpha_central.numpy()}")
+# The analytic reference is the MIXED-frame curvature (omega in the crystal
+# frame, j the grid axis); Nye's tensor needs both indices in one frame.
+kappa_recovered = lattice_curvature(R_field, spacing=1.0, frame="mixed")
+kappa_central = kappa_recovered[n_voxels // 2]
+relerr = (kappa_central - kappa_truth).abs().max().item() / \
+         kappa_truth.abs().max().item()
+print(f"  Lattice curvature at central voxel:")
+print(f"    truth     : {kappa_truth.numpy()}")
+print(f"    recovered : {kappa_central.numpy()}")
 print(f"    rel error = {relerr:.4f}")
 
-# Total GND density and slip-system breakdown.
+# Nye's tensor (crystal frame) and the total GND density. Spacing here is
+# 1 "unit"; use metres for a density in m^-2.
+alpha_central = nye_alpha(lattice_curvature(R_field, spacing=1.0)[n_voxels // 2])
 b_burgers = 2.5e-10                               # ~0.25 nm for Cu/Al
 rho_total = gnd_density(alpha_central.unsqueeze(0).unsqueeze(0),
                         burgers_m=b_burgers)

@@ -141,6 +141,24 @@ def experiment_band(params: LaueParams) -> tuple[float, float]:
     return lo, hi
 
 
+def resolve_band(params: LaueParams,
+                 E_range: Optional[tuple[float, float]] = None) -> tuple[float, float]:
+    """``E_range`` if given (validated ``0 < lo < hi``), else
+    :func:`experiment_band` of ``params`` (which refuses a defaulted band).
+
+    The one place the real-data refiners get their band; replaces the
+    ``E_range or (params.E_lo, params.E_hi)`` idiom, which let a band that
+    ``parse_params`` / ``make_lauematching_params`` had defaulted to 5-30 keV
+    through silently.
+    """
+    if E_range is None:
+        return experiment_band(params)
+    lo, hi = float(E_range[0]), float(E_range[1])
+    if not (0.0 < lo < hi):
+        raise ValueError(f"invalid energy band E_range=({lo}, {hi}) keV")
+    return lo, hi
+
+
 # ── HKL generation via midas-hkls ──────────────────────────────────────────
 
 _HC_KEV_A = 12.398419739     # keV·Å (note Å, not nm — midas_hkls uses Å)
