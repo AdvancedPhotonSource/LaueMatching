@@ -42,6 +42,72 @@
 #define NrValsResults 2
 #define MaxNHKLS 200000
 
+// Pixel that contains detector coordinate f, on a panel n pixels wide, or -1
+// when f is off the panel. Pixel k is CENTRED at k: the projection puts the
+// panel centre at (n-1)/2, and GenerateSimulation, laue_torch and
+// laue_index.calibrate place spots on the same grid. Before 0.8.0 every
+// lookup truncated instead, reading pixel k for a spot at k + 0.7 (a mean
+// 0.5 px bias toward -x, -y) and, in the mains, accepting -1 < f < 0 as
+// pixel 0. ONE definition for the header and all three binaries.
+// Does a parameter line's FIRST TOKEN equal key? 0 if so (strncmp-style, so
+// it drops into the existing `LowNr == 0` tests). Before 0.8.0 the binaries
+// used strncmp(line, key, strlen(key)), a prefix match.
+static inline int paramKeyCmp(const char *line, const char *key) {
+  size_t n = strlen(key);
+  if (strncmp(line, key, n) != 0)
+    return 1;
+  char c = line[n];
+  return (c == '\0' || c == ' ' || c == '\t' || c == '\n' || c == '\r') ? 0 : 1;
+}
+
+// Keys every binary requires (user decision D5, 0.8.0): their defaults used to
+// differ between the C (MaxNrLaueSpots 500, MinIntensity 1000, R_Array 0 0 0,
+// PxX 0) and the two Python parsers, so one params file indexed differently
+// depending on the path. R_Array in particular cannot be checked by value:
+// 0 0 0 is a legitimate identity. Re-reads the file; names every missing key
+// in one message. Returns 1 when any is missing.
+static inline int requireParamKeys(const char *paramFile) {
+  static const char *keys[] = {"LatticeParameter", "P_Array", "R_Array",
+                               "PxX", "PxY", "NrPxX", "NrPxY",
+                               "MaxNrLaueSpots", "MinIntensity"};
+  const int nk = (int)(sizeof(keys) / sizeof(keys[0]));
+  int seen[16] = {0};
+  FILE *f = fopen(paramFile, "r");
+  if (f == NULL) {
+    fprintf(stderr, "FATAL: cannot open %s: %s\n", paramFile, strerror(errno));
+    return 1;
+  }
+  char line[4096];
+  while (fgets(line, sizeof(line), f))
+    for (int i = 0; i < nk; i++)
+      if (paramKeyCmp(line, keys[i]) == 0)
+        seen[i] = 1;
+  fclose(f);
+  int missing = 0;
+  for (int i = 0; i < nk; i++)
+    if (!seen[i]) {
+      if (missing++ == 0)
+        fprintf(stderr, "FATAL: %s is missing required key(s):", paramFile);
+      fprintf(stderr, " %s", keys[i]);
+    }
+  if (missing)
+    fprintf(stderr, "\n  (no defaults since 0.8.0: they differed between the "
+                    "C and the Python pipeline)\n");
+  return missing ? 1 : 0;
+}
+
+// imageNr / imageNum for a single-image (non-streaming) run. Streaming image
+// numbers are >= 0 and ALWAYS get the leading ImageNr column; before 0.8.0 the
+// test was imageNr != NOT_STREAMING, so a streaming frame numbered 0 lost the column and
+// shifted every other one.
+#define NOT_STREAMING (-1)
+
+static inline int pixelIndex(double f, int n) {
+  if (!(f >= -0.5 && f < n - 0.5))
+    return -1;
+  return (int)floor(f + 0.5);
+}
+
 // ── Forward-simulation cache ────────────────────────────────────────────
 // Can an existing cache be used? ONE implementation for all three binaries.
 //
@@ -99,6 +165,274 @@ static inline bool forwardCacheUsable(const char *outfn, size_t nrOrients,
          "simulation.\n",
          outfn);
   return true;
+}
+
+// ── Forward-simulation cache: what it was built FOR ─────────────────────
+// forwardCacheUsable() proves a cache is structurally complete; this proves
+// it belongs to THIS configuration. The record <ForwardFile>.meta.json holds the
+// cache format and a key over every input the cached pixels depend on. No
+// record: the cache is rebuilt, with a warning. A record for another
+// configuration: the run REFUSES to overwrite it (DoFwd 1 rebuilds on purpose).
+//   format 1: pixels truncated (before 0.8.0; never had a sidecar)
+//   format 2: pixels rounded to the nearest centre (pixelIndex)
+#define FORWARD_CACHE_FORMAT 2
+
+static inline uint64_t fnv1a64(uint64_t h, const void *data, size_t n) {
+  const unsigned char *p = (const unsigned char *)data;
+  for (size_t i = 0; i < n; i++) {
+    h ^= p[i];
+    h *= 1099511628211ULL;
+  }
+  return h;
+}
+
+static inline uint64_t forwardCacheKey(int sg, const double lat[6],
+                                       const double pArr[3],
+                                       const double rArr[3], double pxX,
+                                       double pxY, int nrPxX, int nrPxY,
+                                       double Elo, double Ehi, int maxNrSpots,
+                                       size_t nrOrients, const int *hkls,
+                                       int nhkls) {
+  uint64_t h = 1469598103934665603ULL;
+  int fmt = FORWARD_CACHE_FORMAT;
+  unsigned long long no = (unsigned long long)nrOrients;
+  h = fnv1a64(h, &fmt, sizeof(fmt));
+  h = fnv1a64(h, &sg, sizeof(sg));
+  h = fnv1a64(h, lat, 6 * sizeof(double));
+  h = fnv1a64(h, pArr, 3 * sizeof(double));
+  h = fnv1a64(h, rArr, 3 * sizeof(double));
+  h = fnv1a64(h, &pxX, sizeof(pxX));
+  h = fnv1a64(h, &pxY, sizeof(pxY));
+  h = fnv1a64(h, &nrPxX, sizeof(nrPxX));
+  h = fnv1a64(h, &nrPxY, sizeof(nrPxY));
+  h = fnv1a64(h, &Elo, sizeof(Elo));
+  h = fnv1a64(h, &Ehi, sizeof(Ehi));
+  h = fnv1a64(h, &maxNrSpots, sizeof(maxNrSpots));
+  h = fnv1a64(h, &no, sizeof(no));
+  h = fnv1a64(h, &nhkls, sizeof(nhkls));
+  h = fnv1a64(h, hkls, (size_t)nhkls * 3 * sizeof(int));
+  return h;
+}
+
+// Everything a forward cache's provenance record says about how it was made
+// (beyond the key): the full configuration goes into the record so the cache
+// is self-describing (HS 2026-09-28).
+typedef struct {
+  int sg;
+  double lat[6], pArr[3], rArr[3], pxX, pxY, Elo, Ehi;
+  int nrPxX, nrPxY, maxNrSpots, nhkls, threads;
+  size_t nrOrients;
+  const char *paramFile, *orientFile, *hklFile, *program;
+  double buildSeconds;
+} FwdCacheInfo;
+
+static inline FwdCacheInfo
+makeFwdCacheInfo(int sg, const double lat[6], const double pArr[3],
+                 const double rArr[3], double pxX, double pxY, int nrPxX,
+                 int nrPxY, double Elo, double Ehi, int maxNrSpots,
+                 size_t nrOrients, int nhkls, const char *paramFile,
+                 const char *orientFile, const char *hklFile,
+                 const char *program, double buildSeconds, int threads) {
+  FwdCacheInfo f;
+  memset(&f, 0, sizeof(f));
+  f.sg = sg;
+  for (int i = 0; i < 6; i++)
+    f.lat[i] = lat[i];
+  for (int i = 0; i < 3; i++) {
+    f.pArr[i] = pArr[i];
+    f.rArr[i] = rArr[i];
+  }
+  f.pxX = pxX;
+  f.pxY = pxY;
+  f.nrPxX = nrPxX;
+  f.nrPxY = nrPxY;
+  f.Elo = Elo;
+  f.Ehi = Ehi;
+  f.maxNrSpots = maxNrSpots;
+  f.nrOrients = nrOrients;
+  f.nhkls = nhkls;
+  f.paramFile = paramFile;
+  f.orientFile = orientFile;
+  f.hklFile = hklFile;
+  f.program = program;
+  f.buildSeconds = buildSeconds;
+  f.threads = threads;
+  return f;
+}
+
+// The record sits next to the cache's resolved target, as the writer puts it:
+// <target>.meta.json, the laue_index.artifacts schema (Python reads it).
+static inline void forwardCacheMetaPath(const char *outfn, char *meta,
+                                        size_t cap) {
+  char target[PATH_MAX];
+  if (realpath(outfn, target) == NULL)
+    snprintf(target, sizeof(target), "%s", outfn);
+  snprintf(meta, cap, "%s.meta.json", target);
+}
+
+// 0: the record matches this configuration; 1: no record (a pre-0.8.0 cache,
+// or one never finished): rebuild; 2: a record for ANOTHER configuration:
+// refuse (the file may belong to another configuration's runs).
+static inline int forwardCacheMetaStatus(const char *outfn, uint64_t key) {
+  char meta[PATH_MAX + 16];
+  forwardCacheMetaPath(outfn, meta, sizeof(meta));
+  FILE *f = fopen(meta, "r");
+  if (f == NULL) {
+    printf("Forward cache %s has no provenance record (%s): built before 0.8.0, "
+           "or never finished. Rebuilding it.\n",
+           outfn, meta);
+    return 1;
+  }
+  char buf[65536];
+  size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+  buf[n] = '\0';
+  fclose(f);
+  int fmt = 0;
+  unsigned long long got = 0;
+  const char *pf = strstr(buf, "\"format\": ");
+  const char *pk = strstr(buf, "\"key\": \"");
+  if (pf)
+    sscanf(pf + 10, "%d", &fmt);
+  if (pk)
+    sscanf(pk + 8, "%llx", &got);
+  if (fmt != FORWARD_CACHE_FORMAT || got != (unsigned long long)key) {
+    fprintf(stderr,
+            "Forward cache %s was built for a DIFFERENT configuration (record "
+            "%s: format %d, key %016llx; this run: format %d, key %016llx).\n",
+            outfn, meta, fmt, got, FORWARD_CACHE_FORMAT,
+            (unsigned long long)key);
+    return 2;
+  }
+  return 0;
+}
+
+static inline bool forwardCacheMetaMatches(const char *outfn, uint64_t key) {
+  return forwardCacheMetaStatus(outfn, key) == 0;
+}
+
+static inline void jsonString(FILE *f, const char *s) {
+  fputc('"', f);
+  for (const unsigned char *c = (const unsigned char *)(s ? s : ""); *c; c++) {
+    switch (*c) {
+    case '"': fputs("\\\"", f); break;
+    case '\\': fputs("\\\\", f); break;
+    case '\n': fputs("\\n", f); break;
+    case '\r': fputs("\\r", f); break;
+    case '\t': fputs("\\t", f); break;
+    default:
+      if (*c < 0x20)
+        fprintf(f, "\\u%04x", *c);
+      else
+        fputc(*c, f);
+    }
+  }
+  fputc('"', f);
+}
+
+static inline void jsonFileInput(FILE *f, const char *role, const char *path,
+                                 int nhkls) {
+  struct stat st;
+  char real[PATH_MAX];
+  if (path == NULL || realpath(path, real) == NULL)
+    snprintf(real, sizeof(real), "%s", path ? path : "");
+  fprintf(f, "    {\"role\": ");
+  jsonString(f, role);
+  fprintf(f, ", \"path\": ");
+  jsonString(f, real);
+  if (path != NULL && stat(path, &st) == 0) {
+    char tbuf[64];
+    strftime(tbuf, sizeof(tbuf), "%Y-%m-%dT%H:%M:%SZ", gmtime(&st.st_mtime));
+    fprintf(f, ", \"size\": %lld, \"mtime_utc\": \"%s\"", (long long)st.st_size,
+            tbuf);
+  } else {
+    fprintf(f, ", \"missing\": true");
+  }
+  if (nhkls >= 0)
+    fprintf(f, ", \"n_hkls\": %d", nhkls);
+  fprintf(f, ", \"record\": false}");
+}
+
+// Written after the cache is renamed into place and before its lock is
+// released, atomically (temp + rename). Returns 0 on success. The record is
+// the laue_index.artifacts schema (kind "forward_cache"), with the full
+// generating configuration and the params file's text.
+static inline int writeForwardCacheMeta(const char *target, uint64_t key,
+                                        const FwdCacheInfo *in) {
+  char meta[PATH_MAX + 16], tmp[PATH_MAX + 64], real[PATH_MAX];
+  forwardCacheMetaPath(target, meta, sizeof(meta));
+  snprintf(tmp, sizeof(tmp), "%s.tmp.%d", meta, (int)getpid());
+  if (realpath(target, real) == NULL)
+    snprintf(real, sizeof(real), "%s", target);
+  FILE *f = fopen(tmp, "w");
+  if (f == NULL)
+    return -1;
+  struct stat st;
+  long long size = (stat(target, &st) == 0) ? (long long)st.st_size : -1;
+  const char *base = strrchr(real, '/');
+  base = base ? base + 1 : real;
+  fprintf(f, "{\n  \"schema\": \"laue-artifact/1\",\n  \"kind\": \"forward_cache\",\n"
+             "  \"retroactive\": false,\n  \"artifact\": {\"path\": ");
+  jsonString(f, real);
+  fprintf(f, ", \"basename\": ");
+  jsonString(f, base);
+  fprintf(f, ", \"size\": %lld, \"layout\": {\"entry\": \"uint16[1 + 2*MaxNrLaueSpots]"
+             " per orientation: count, then (ipx, ipy) pairs\", \"pixel_centres\": "
+             "\"rounded (pixelIndex)\"}},\n", size);
+  fprintf(f, "  \"config\": {\"key\": \"%016llx\", \"format\": %d, \"SpaceGroup\": %d, ",
+          (unsigned long long)key, FORWARD_CACHE_FORMAT, in->sg);
+  fprintf(f, "\"LatticeParameter\": [%.17g, %.17g, %.17g, %.17g, %.17g, %.17g], ",
+          in->lat[0], in->lat[1], in->lat[2], in->lat[3], in->lat[4], in->lat[5]);
+  fprintf(f, "\"P_Array\": [%.17g, %.17g, %.17g], \"R_Array\": [%.17g, %.17g, %.17g], ",
+          in->pArr[0], in->pArr[1], in->pArr[2], in->rArr[0], in->rArr[1],
+          in->rArr[2]);
+  fprintf(f, "\"PxX\": %.17g, \"PxY\": %.17g, \"NrPxX\": %d, \"NrPxY\": %d, "
+             "\"Elo\": %.17g, \"Ehi\": %.17g, \"MaxNrLaueSpots\": %d, "
+             "\"n_orientations\": %llu},\n",
+          in->pxX, in->pxY, in->nrPxX, in->nrPxY, in->Elo, in->Ehi,
+          in->maxNrSpots, (unsigned long long)in->nrOrients);
+  fprintf(f, "  \"config_file\": {\"path\": ");
+  jsonString(f, in->paramFile);
+  FILE *pf = in->paramFile ? fopen(in->paramFile, "r") : NULL;
+  if (pf != NULL) {
+    char *text = (char *)calloc(1 << 20, 1);
+    if (text == NULL) {
+      fclose(pf);
+      fclose(f);
+      unlink(tmp);
+      return -1;
+    }
+    size_t nr = fread(text, 1, (1 << 20) - 1, pf);
+    text[nr] = '\0';
+    fclose(pf);
+    fprintf(f, ", \"text\": ");
+    jsonString(f, text);
+    free(text);
+  }
+  fprintf(f, "},\n  \"inputs\": [\n");
+  jsonFileInput(f, "orientation_db", in->orientFile, -1);
+  fprintf(f, ",\n");
+  jsonFileInput(f, "hkl_list", in->hklFile, in->nhkls);
+  fprintf(f, "\n  ],\n  \"extra\": {},\n  \"producer\": {\"program\": ");
+  jsonString(f, in->program);
+  struct utsname un;
+  const char *user = getenv("USER");
+  char tbuf[64];
+  time_t now = time(NULL);
+  strftime(tbuf, sizeof(tbuf), "%Y-%m-%dT%H:%M:%SZ", gmtime(&now));
+  fprintf(f, ", \"host\": ");
+  jsonString(f, uname(&un) == 0 ? un.nodename : "unknown");
+  fprintf(f, ", \"user\": ");
+  jsonString(f, user ? user : "unknown");
+  fprintf(f, ", \"timestamp_utc\": \"%s\", \"build_seconds\": %.1f, "
+             "\"threads\": %d}\n}\n",
+          tbuf, in->buildSeconds, in->threads);
+  int ok = !ferror(f);
+  ok = (fclose(f) == 0) && ok;
+  if (!ok || rename(tmp, meta) != 0) {
+    unlink(tmp);
+    return -1;
+  }
+  return 0;
 }
 
 // ── Forward-simulation cache: begin, write, finish, abandon ─────────────
@@ -592,6 +926,9 @@ struct dataFit {
   // this. 0.0 reproduces the historical `> 0` exactly, so the default is a
   // no-op; see MinSpotIntensity in the parameter file.
   double minSpotIntensity;
+  // The seed orientation: x[0..2] is a rotation vector d about it (see
+  // perturbedEuler), not three Euler angles.
+  double orient0[3][3];
 };
 
 // ── Symmetry tables ─────────────────────────────────────────────────────
@@ -601,11 +938,18 @@ struct dataFit {
 static double TricSym[2][4] = {{1.00000, 0.00000, 0.00000, 0.00000},
                                {1.00000, 0.00000, 0.00000, 0.00000}};
 
+// Every table is in THIS code's crystal Cartesian frame: a along x, b in the
+// xy plane (calcRecipArray). MIDAS/midas_stress put a* along x instead; the
+// frames differ for trigonal/hexagonal cells, so a table copied from there
+// is wrong here. tests/test_c_symmetry_tables.py checks every operator
+// against the lattice calcRecipArray builds.
+
+// 2-fold about b (along y): the unique axis of the usual b-unique setting.
 static double MonoSym[2][4] = {{1.00000, 0.00000, 0.00000, 0.00000},
-                               {0.00000, 1.00000, 0.00000, 0.00000}};
+                               {0.00000, 0.00000, 1.00000, 0.00000}};
 
 static double OrtSym[4][4] = {{1.00000, 0.00000, 0.00000, 0.00000},
-                              {1.00000, 1.00000, 0.00000, 0.00000},
+                              {0.00000, 1.00000, 0.00000, 0.00000},
                               {0.00000, 0.00000, 1.00000, 0.00000},
                               {0.00000, 0.00000, 0.00000, 1.00000}};
 
@@ -618,13 +962,32 @@ static double TetSym[8][4] = {{1.00000, 0.00000, 0.00000, 0.00000},
                               {0.00000, 0.70711, 0.70711, 0.00000},
                               {0.00000, -0.70711, 0.70711, 0.00000}};
 
-// Correct TrigSym (from CPU code — the GPU file previously had a stale copy)
-static double TrigSym[6][4] = {{1.00000, 0.00000, 0.00000, 0.00000},
-                               {0.00000, 0.86603, -0.50000, 0.00000},
-                               {0.50000, 0.00000, 0.00000, 0.86603},
-                               {0.00000, 0.00000, 1.00000, 0.00000},
-                               {0.50000, -0.00000, -0.00000, -0.86603},
-                               {0.00000, 0.86603, 0.50000, 0.00000}};
+// Trigonal, hexagonal axes: 3-fold along c (z) plus three 2-folds in the
+// basal plane. Laue class -31m (P312 and relatives) has them PERPENDICULAR to
+// a (at -30, 90, 30 deg); -3m1 (P321, R32, R-3m, R-3c ...) has them ALONG a
+// (0, 60, 120 deg). trigonalSymTable() picks by space group.
+static double TrigSymPerpA[6][4] = {{1.00000, 0.00000, 0.00000, 0.00000},
+                                    {0.00000, 0.86603, -0.50000, 0.00000},
+                                    {0.50000, 0.00000, 0.00000, 0.86603},
+                                    {0.00000, 0.00000, 1.00000, 0.00000},
+                                    {0.50000, -0.00000, -0.00000, -0.86603},
+                                    {0.00000, 0.86603, 0.50000, 0.00000}};
+
+static double TrigSymAlongA[6][4] = {{1.00000, 0.00000, 0.00000, 0.00000},
+                                     {0.50000, 0.00000, 0.00000, 0.86603},
+                                     {0.50000, -0.00000, -0.00000, -0.86603},
+                                     {0.00000, 1.00000, 0.00000, 0.00000},
+                                     {0.00000, 0.50000, 0.86603, 0.00000},
+                                     {0.00000, -0.50000, 0.86603, 0.00000}};
+
+// R groups on RHOMBOHEDRAL axes: calcRecipArray's symmetric embedding puts
+// the 3-fold along [111]; the 2-folds lie along a1-a2, a2-a3, a3-a1.
+static double TrigSymRhomb[6][4] = {{1.00000, 0.00000, 0.00000, 0.00000},
+                                    {0.50000, 0.50000, 0.50000, 0.50000},
+                                    {0.50000, -0.50000, -0.50000, -0.50000},
+                                    {0.00000, 0.70711, -0.70711, 0.00000},
+                                    {0.00000, 0.00000, 0.70711, -0.70711},
+                                    {0.00000, -0.70711, 0.00000, 0.70711}};
 
 static double HexSym[12][4] = {{1.00000, 0.00000, 0.00000, 0.00000},
                                {0.86603, 0.00000, 0.00000, 0.50000},
@@ -695,44 +1058,96 @@ static inline void QuaternionProduct(double q[4], double r[4], double Q[4]) {
   normalizeQuat(Q);
 }
 
-static inline int MakeSymmetries(int SGNr, double Sym[24][4]) {
+// The R groups: the only space groups whose lattice can be given on either
+// hexagonal or rhombohedral axes.
+static inline int isRhombohedralGroup(int sg) {
+  return sg == 146 || sg == 148 || sg == 155 || sg == 160 || sg == 161 ||
+         sg == 166 || sg == 167;
+}
+
+// Which setting a lattice is given in, read from its ANGLES (a lattice fit
+// moves lengths, and the rhombohedral branch of calcRecipArray uses only a
+// and alpha): 1 = rhombohedral axes (alpha = beta = gamma, not 90);
+// 0 = anything else. Only meaningful for isRhombohedralGroup(sg);
+// validateTrigonalSetting() refuses the cases that are neither setting.
+static inline int usesRhombohedralAxes(int sg, const double Lat[6]) {
+  if (!isRhombohedralGroup(sg))
+    return 0;
+  return fabs(Lat[3] - Lat[4]) < 1.0 && fabs(Lat[4] - Lat[5]) < 1.0 &&
+         fabs(Lat[3] - 90.0) >= 1.0;
+}
+
+// Refuse an R-group lattice that is neither hexagonal axes (a = b,
+// alpha = beta = 90, gamma = 120) nor rhombohedral axes (a = b = c,
+// alpha = beta = gamma != 90). Before 0.8.0 the setting came from the space
+// group alone, so hexagonal axes silently became a cube of edge a.
+// Returns 1 (and prints why) when refused.
+static inline int validateTrigonalSetting(int sg, const double Lat[6]) {
+  if (!isRhombohedralGroup(sg))
+    return 0;
+  const double tl = 1e-4, ta = 1e-3;
+  int hex = fabs(Lat[0] - Lat[1]) <= tl * Lat[0] && fabs(Lat[3] - 90.0) < ta &&
+            fabs(Lat[4] - 90.0) < ta && fabs(Lat[5] - 120.0) < ta;
+  int rho = fabs(Lat[0] - Lat[1]) <= tl * Lat[0] &&
+            fabs(Lat[1] - Lat[2]) <= tl * Lat[0] &&
+            fabs(Lat[3] - Lat[4]) < ta && fabs(Lat[4] - Lat[5]) < ta &&
+            fabs(Lat[3] - 90.0) >= 1.0;
+  if (hex || rho)
+    return 0;
+  fprintf(stderr,
+          "FATAL: SpaceGroup %d is rhombohedral; LatticeParameter must be on\n"
+          "  hexagonal axes (a a c 90 90 120) or rhombohedral axes\n"
+          "  (a a a alpha alpha alpha, alpha != 90). Got %g %g %g %g %g %g.\n",
+          sg, Lat[0], Lat[1], Lat[2], Lat[3], Lat[4], Lat[5]);
+  return 1;
+}
+
+static inline double (*trigonalSymTable(int sg, const double Lat[6]))[4] {
+  if (usesRhombohedralAxes(sg, Lat))
+    return TrigSymRhomb;
+  switch (sg) {
+  // Laue class -31m, and P3/P-3 (143-145, 147), whose 2-folds are lattice
+  // symmetries on either side; kept perpendicular, as before 0.8.0.
+  case 143: case 144: case 145: case 147:
+  case 149: case 151: case 153: case 157: case 159: case 162: case 163:
+    return TrigSymPerpA;
+  default: // -3m1, and R3/R-3 on hexagonal axes (only this set keeps R-centring)
+    return TrigSymAlongA;
+  }
+}
+
+// The operator set is the proper rotation group of the CRYSTAL SYSTEM, not of
+// the Laue class: an operator that is a lattice but not a crystal symmetry
+// moves no spot, so merging on it is safe for a position-only matcher.
+static inline int MakeSymmetries(int SGNr, const double Lat[6],
+                                 double Sym[24][4]) {
   int i, j, NrSymmetries;
+  double (*tab)[4];
   if (SGNr <= 2) {
     NrSymmetries = 1;
-    for (i = 0; i < NrSymmetries; i++)
-      for (j = 0; j < 4; j++)
-        Sym[i][j] = TricSym[i][j];
+    tab = TricSym;
   } else if (SGNr <= 15) {
     NrSymmetries = 2;
-    for (i = 0; i < NrSymmetries; i++)
-      for (j = 0; j < 4; j++)
-        Sym[i][j] = MonoSym[i][j];
+    tab = MonoSym;
   } else if (SGNr <= 74) {
     NrSymmetries = 4;
-    for (i = 0; i < NrSymmetries; i++)
-      for (j = 0; j < 4; j++)
-        Sym[i][j] = OrtSym[i][j];
+    tab = OrtSym;
   } else if (SGNr <= 142) {
     NrSymmetries = 8;
-    for (i = 0; i < NrSymmetries; i++)
-      for (j = 0; j < 4; j++)
-        Sym[i][j] = TetSym[i][j];
+    tab = TetSym;
   } else if (SGNr <= 167) {
     NrSymmetries = 6;
-    for (i = 0; i < NrSymmetries; i++)
-      for (j = 0; j < 4; j++)
-        Sym[i][j] = TrigSym[i][j];
+    tab = trigonalSymTable(SGNr, Lat);
   } else if (SGNr <= 194) {
     NrSymmetries = 12;
-    for (i = 0; i < NrSymmetries; i++)
-      for (j = 0; j < 4; j++)
-        Sym[i][j] = HexSym[i][j];
+    tab = HexSym;
   } else {
     NrSymmetries = 24;
-    for (i = 0; i < NrSymmetries; i++)
-      for (j = 0; j < 4; j++)
-        Sym[i][j] = CubSym[i][j];
+    tab = CubSym;
   }
+  for (i = 0; i < NrSymmetries; i++)
+    for (j = 0; j < 4; j++)
+      Sym[i][j] = tab[i][j];
   return NrSymmetries;
 }
 
@@ -1070,11 +1485,9 @@ static inline void calcRecipArray(double Lat[6], int SpaceGroup,
                                   double recip[3][3]) {
   double a = Lat[0], b = Lat[1], c = Lat[2];
   double alpha = Lat[3], beta = Lat[4], gamma = Lat[5];
-  int rhomb = 0;
-  if (SpaceGroup == 146 || SpaceGroup == 148 || SpaceGroup == 155 ||
-      SpaceGroup == 160 || SpaceGroup == 161 || SpaceGroup == 166 ||
-      SpaceGroup == 167)
-    rhomb = 1;
+  // The embedding follows the setting the lattice is GIVEN in, not the
+  // space group alone (hexagonal axes on an R group are the standard branch).
+  int rhomb = usesRhombohedralAxes(SpaceGroup, Lat);
   double ca = cos(alpha * deg2rad);
   double cb = cos(beta * deg2rad);
   double cg = cos(gamma * deg2rad);
@@ -1176,11 +1589,11 @@ static inline double calcOverlap(float *image, double euler[3], int *hkls,
     xyz[2] = pArr[2];
     xp = xyz[0] - pArr[0];
     yp = xyz[1] - pArr[1];
-    px = (xp / pxX) + (0.5 * (nrPxX - 1));
-    if (px < 0 || px > (nrPxX - 1))
+    px = pixelIndex((xp / pxX) + (0.5 * (nrPxX - 1)), nrPxX);
+    if (px < 0)
       continue;
-    py = (yp / pxY) + (0.5 * (nrPxY - 1));
-    if (py < 0 || py > (nrPxY - 1))
+    py = pixelIndex((yp / pxY) + (0.5 * (nrPxY - 1)), nrPxY);
+    if (py < 0)
       continue;
     sinTheta = -qhat[2];
     E = hc_keVnm * qlen / (4 * M_PI * sinTheta);
@@ -1247,11 +1660,11 @@ static inline int prefilterHKLs(int *hkls, int nhkls, double euler[3],
       continue;
     double xp = xyz[0] * pArr[2] / xyz[2] - pArr[0];
     double yp = xyz[1] * pArr[2] / xyz[2] - pArr[1];
-    double px = (xp / pxX) + (0.5 * (nrPxX - 1));
-    if (px < 0 || px > (nrPxX - 1))
+    double px = pixelIndex((xp / pxX) + (0.5 * (nrPxX - 1)), nrPxX);
+    if (px < 0)
       continue;
-    double py = (yp / pxY) + (0.5 * (nrPxY - 1));
-    if (py < 0 || py > (nrPxY - 1))
+    double py = pixelIndex((yp / pxY) + (0.5 * (nrPxY - 1)), nrPxY);
+    if (py < 0)
       continue;
     double sinTheta = -qhat[2];
     double E = hc_keVnm * qlen / (4 * M_PI * sinTheta);
@@ -1303,11 +1716,11 @@ calcOverlapFiltered(float *image, double euler[3], int *hkls, int *validIdx,
     xyz[2] = pArr[2];
     xp = xyz[0] - pArr[0];
     yp = xyz[1] - pArr[1];
-    px = (xp / pxX) + (0.5 * (nrPxX - 1));
-    if (px < 0 || px > (nrPxX - 1))
+    px = pixelIndex((xp / pxX) + (0.5 * (nrPxX - 1)), nrPxX);
+    if (px < 0)
       continue;
-    py = (yp / pxY) + (0.5 * (nrPxY - 1));
-    if (py < 0 || py > (nrPxY - 1))
+    py = pixelIndex((yp / pxY) + (0.5 * (nrPxY - 1)), nrPxY);
+    if (py < 0)
       continue;
     sinTheta = -qhat[2];
     E = hc_keVnm * qlen / (4 * M_PI * sinTheta);
@@ -1341,6 +1754,32 @@ calcOverlapFiltered(float *image, double euler[3], int *hkls, int *validIdx,
 }
 
 // ── NLopt problem function ──────────────────────────────────────────────
+
+// Euler angles of exp([d]x) R0: the orientation a rotation vector d (radians,
+// lab frame) away from the seed R0. The fit refines d, bounded by +-tol per
+// component. Before 0.8.0 it refined the ZXZ Euler angles themselves, and near
+// Phi = 0 (or 180 deg) psi and theta both turn about z, so a correction about
+// the in-plane axis perpendicular to the line of nodes was out of reach.
+static inline void perturbedEuler(double R0[3][3], const double *d,
+                                  double Euler[3]) {
+  double th = sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+  double Rd[3][3] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}}, R[3][3];
+  if (th > 1e-15) {
+    double u[3] = {d[0] / th, d[1] / th, d[2] / th};
+    double c = cos(th), sn = sin(th), C = 1 - c;
+    Rd[0][0] = c + u[0] * u[0] * C;
+    Rd[0][1] = u[0] * u[1] * C - u[2] * sn;
+    Rd[0][2] = u[0] * u[2] * C + u[1] * sn;
+    Rd[1][0] = u[1] * u[0] * C + u[2] * sn;
+    Rd[1][1] = c + u[1] * u[1] * C;
+    Rd[1][2] = u[1] * u[2] * C - u[0] * sn;
+    Rd[2][0] = u[2] * u[0] * C - u[1] * sn;
+    Rd[2][1] = u[2] * u[1] * C + u[0] * sn;
+    Rd[2][2] = c + u[2] * u[2] * C;
+  }
+  MatrixMultF33(Rd, R0, R);
+  OrientMat2Euler(R, Euler);
+}
 
 static inline double problem_function(unsigned n, const double *x, double *grad,
                                       void *f_data_supplied) {
@@ -1379,8 +1818,7 @@ static inline double problem_function(unsigned n, const double *x, double *grad,
   int *hkls = f_data->hkls;
   double *outArrThis = f_data->outArrThis;
   double Euler[3];
-  for (i = 0; i < 3; i++)
-    Euler[i] = x[i];
+  perturbedEuler(f_data->orient0, x, Euler);
   double overlap;
   if (f_data->validHKLIdx != NULL) {
     overlap = calcOverlapFiltered(
@@ -1423,15 +1861,12 @@ FitOrientation(float *image, double euler[3], int *hkls, int nhkls, int nrPxX,
   }
   double minf;
   double x[n], xl[n], xu[n];
-  x[0] = euler[0];
-  xl[0] = euler[0] - tol;
-  xu[0] = euler[0] + tol;
-  x[1] = euler[1];
-  xl[1] = euler[1] - tol;
-  xu[1] = euler[1] + tol;
-  x[2] = euler[2];
-  xl[2] = euler[2] - tol;
-  xu[2] = euler[2] + tol;
+  // Orientation: a rotation vector about the seed, |d_i| <= tol (radians).
+  for (i = 0; i < 3; i++) {
+    x[i] = 0.0;
+    xl[i] = -tol;
+    xu[i] = tol;
+  }
   if (doCrystalFit != 0) {
     int cntr = 3;
     for (i = 0; i < 6; i++) {
@@ -1473,6 +1908,7 @@ FitOrientation(float *image, double euler[3], int *hkls, int nhkls, int nrPxX,
   f_data.pxY = pxY;
   f_data.Elo = Elo;
   f_data.Ehi = Ehi;
+  Euler2OrientMat(euler, f_data.orient0);
   void *trp = (void *)&f_data;
   // Nelder-Mead for BOTH stages, via the vendored simplex -- no NLopt.
   //
@@ -1518,8 +1954,7 @@ FitOrientation(float *image, double euler[3], int *hkls, int nhkls, int nrPxX,
   }
   run_nlopt_optimization(MIDAS_LN_NELDERMEAD, &cfg);
   minf = cfg.min_function_val;
-  for (i = 0; i < 3; i++)
-    eulerFit[i] = x[i];
+  perturbedEuler(f_data.orient0, x, eulerFit);
   if (doCrystalFit != 0) {
     int cntr2 = 0;
     for (i = 0; i < 6; i++) {
@@ -1546,15 +1981,16 @@ FitOrientation(float *image, double euler[3], int *hkls, int nhkls, int nrPxX,
 // Always buffers spot data. Caller decides whether to flush based on
 // nrSps return value, or passes saveExtraInfo != 0 to auto-flush.
 
-static inline int writeCalcOverlap(float *image, double euler[3], int *hkls,
-                                   int nhkls, int nrPxX, int nrPxY,
-                                   double recip[3][3], double *outArrThis,
-                                   int maxNrSpots, double rotTranspose[3][3],
-                                   double pArr[3], double pxX, double pxY,
-                                   double Elo, double Ehi,
-                                   double minSpotIntensity, FILE *ExtraInfo,
-                                   int saveExtraInfo, int *simulNrSps,
-                                   int imageNr) {
+// Spot lines are buffered per grain and reach ExtraInfo only when the grain
+// has at least minSpotsToWrite matches, i.e. passes the same gate as its
+// solutions.txt row (before 0.8.0 they were written first and the gate ran
+// afterwards, so spots.txt held grains solutions.txt did not).
+static inline int writeCalcOverlapGated(
+    float *image, double euler[3], int *hkls, int nhkls, int nrPxX, int nrPxY,
+    double recip[3][3], double *outArrThis, int maxNrSpots,
+    double rotTranspose[3][3], double pArr[3], double pxX, double pxY,
+    double Elo, double Ehi, double minSpotIntensity, FILE *ExtraInfo,
+    int saveExtraInfo, int *simulNrSps, int imageNr, int minSpotsToWrite) {
   int nrSps = 0;
   double OM[3][3], OMt[3][3];
   Euler2OrientMat(euler, OMt);
@@ -1570,8 +2006,12 @@ static inline int writeCalcOverlap(float *image, double euler[3], int *hkls,
   size_t outputBufCap = (size_t)maxNrSpots * 256;  // per-spot line budget
   if (saveExtraInfo != 0) {
     outputBuf = (char *)malloc(outputBufCap);
-    if (outputBuf)
-      outputBuf[0] = '\0';
+    if (outputBuf == NULL) {
+      fprintf(stderr, "FATAL: could not allocate the %zu-byte spot buffer.\n",
+              outputBufCap);
+      exit(EXIT_FAILURE);
+    }
+    outputBuf[0] = '\0';
   }
 
   for (hklnr = 0; hklnr < nhkls; hklnr++) {
@@ -1597,11 +2037,11 @@ static inline int writeCalcOverlap(float *image, double euler[3], int *hkls,
     xyz[2] = pArr[2];
     xp = xyz[0] - pArr[0];
     yp = xyz[1] - pArr[1];
-    px = (xp / pxX) + (0.5 * (nrPxX - 1));
-    if (px < 0 || px > (nrPxX - 1))
+    px = pixelIndex((xp / pxX) + (0.5 * (nrPxX - 1)), nrPxX);
+    if (px < 0)
       continue;
-    py = (yp / pxY) + (0.5 * (nrPxY - 1));
-    if (py < 0 || py > (nrPxY - 1))
+    py = pixelIndex((yp / pxY) + (0.5 * (nrPxY - 1)), nrPxY);
+    if (py < 0)
       continue;
     sinTheta = -qhat[2];
     E = hc_keVnm * qlen / (4 * M_PI * sinTheta);
@@ -1623,48 +2063,28 @@ static inline int writeCalcOverlap(float *image, double euler[3], int *hkls,
       if (image[(size_t)((size_t)py * nrPxX + (size_t)px)] >
           minSpotIntensity) {
         if (saveExtraInfo != 0) {
-          if (outputBuf != NULL) {
-            // snprintf with remaining space: never overrun outputBuf even if a
-            // line is unexpectedly wide (large hkl / imageNr / intensity).
-            size_t remBuf = (currentOffset < outputBufCap)
-                                ? outputBufCap - currentOffset : 0;
-            int wrote = 0;
-            if (imageNr > 0)
-              wrote = snprintf(
-                  outputBuf + currentOffset, remBuf,
-                  "%d\t%d\t%d\t%d\t%d\t%d\t%5d\t%5d\t%lf\t%lf\t%lf\t%lf\n",
-                  imageNr, saveExtraInfo, spotNr, (int)hkl[0], (int)hkl[1],
-                  (int)hkl[2], (int)px, (int)py, qhat[0], qhat[1], qhat[2],
-                  (double)image[(size_t)((size_t)py * nrPxX + (size_t)px)]);
-            else
-              wrote = snprintf(
-                  outputBuf + currentOffset, remBuf,
-                  "%d\t%d\t%d\t%d\t%d\t%5d\t%5d\t%lf\t%lf\t%lf\t%lf\n",
-                  saveExtraInfo, spotNr, (int)hkl[0], (int)hkl[1], (int)hkl[2],
-                  (int)px, (int)py, qhat[0], qhat[1], qhat[2],
-                  (double)image[(size_t)((size_t)py * nrPxX + (size_t)px)]);
-            if (wrote > 0)
-              currentOffset += ((size_t)wrote < remBuf) ? (size_t)wrote
-                                                        : (remBuf ? remBuf - 1 : 0);
-          } else {
-#pragma omp critical
-            {
-              if (imageNr > 0)
-                fprintf(
-                    ExtraInfo,
-                    "%d\t%d\t%d\t%d\t%d\t%d\t%5d\t%5d\t%lf\t%lf\t%lf\t%lf\n",
-                    imageNr, saveExtraInfo, spotNr, (int)hkl[0], (int)hkl[1],
-                    (int)hkl[2], (int)px, (int)py, qhat[0], qhat[1], qhat[2],
-                    (double)image[(size_t)((size_t)py * nrPxX + (size_t)px)]);
-              else
-                fprintf(ExtraInfo,
-                        "%d\t%d\t%d\t%d\t%d\t%5d\t%5d\t%lf\t%lf\t%lf\t%lf\n",
-                        saveExtraInfo, spotNr, (int)hkl[0], (int)hkl[1],
-                        (int)hkl[2], (int)px, (int)py, qhat[0], qhat[1],
-                        qhat[2],
-                        (double)image[(size_t)((size_t)py * nrPxX + (size_t)px)]);
-            }
-          }
+          // snprintf with remaining space: never overrun outputBuf even if a
+          // line is unexpectedly wide (large hkl / imageNr / intensity).
+          size_t remBuf = (currentOffset < outputBufCap)
+                              ? outputBufCap - currentOffset : 0;
+          int wrote = 0;
+          if (imageNr != NOT_STREAMING)
+            wrote = snprintf(
+                outputBuf + currentOffset, remBuf,
+                "%d\t%d\t%d\t%d\t%d\t%d\t%5d\t%5d\t%lf\t%lf\t%lf\t%lf\n",
+                imageNr, saveExtraInfo, spotNr, (int)hkl[0], (int)hkl[1],
+                (int)hkl[2], (int)px, (int)py, qhat[0], qhat[1], qhat[2],
+                (double)image[(size_t)((size_t)py * nrPxX + (size_t)px)]);
+          else
+            wrote = snprintf(
+                outputBuf + currentOffset, remBuf,
+                "%d\t%d\t%d\t%d\t%d\t%5d\t%5d\t%lf\t%lf\t%lf\t%lf\n",
+                saveExtraInfo, spotNr, (int)hkl[0], (int)hkl[1], (int)hkl[2],
+                (int)px, (int)py, qhat[0], qhat[1], qhat[2],
+                (double)image[(size_t)((size_t)py * nrPxX + (size_t)px)]);
+          if (wrote > 0)
+            currentOffset += ((size_t)wrote < remBuf) ? (size_t)wrote
+                                                      : (remBuf ? remBuf - 1 : 0);
         }
         result += image[(size_t)((size_t)py * nrPxX + (size_t)px)];
         nrPos++;
@@ -1676,7 +2096,7 @@ static inline int writeCalcOverlap(float *image, double euler[3], int *hkls,
   }
 
   if (saveExtraInfo != 0 && outputBuf != NULL) {
-    if (currentOffset > 0) {
+    if (currentOffset > 0 && nrPos >= minSpotsToWrite) {
 #pragma omp critical
       {
         fputs(outputBuf, ExtraInfo);
@@ -1690,6 +2110,22 @@ static inline int writeCalcOverlap(float *image, double euler[3], int *hkls,
   return nrSps;
 }
 
+// Ungated: every grain's spot lines are written.
+static inline int writeCalcOverlap(float *image, double euler[3], int *hkls,
+                                   int nhkls, int nrPxX, int nrPxY,
+                                   double recip[3][3], double *outArrThis,
+                                   int maxNrSpots, double rotTranspose[3][3],
+                                   double pArr[3], double pxX, double pxY,
+                                   double Elo, double Ehi,
+                                   double minSpotIntensity, FILE *ExtraInfo,
+                                   int saveExtraInfo, int *simulNrSps,
+                                   int imageNr) {
+  return writeCalcOverlapGated(image, euler, hkls, nhkls, nrPxX, nrPxY, recip,
+                               outArrThis, maxNrSpots, rotTranspose, pArr, pxX,
+                               pxY, Elo, Ehi, minSpotIntensity, ExtraInfo,
+                               saveExtraInfo, simulNrSps, imageNr, 0);
+}
+
 // Cap on the number of coarse match results fed into the O(N^2) merge below.
 // Far above any realistic per-frame count (hundreds to a few thousand), so it
 // is a no-op for normal data; it only fires on a pathological frame to keep the
@@ -1701,10 +2137,13 @@ typedef struct {
   size_t row;
 } ScoreRow_t;
 
+// Descending by score, then ascending by database row: a TOTAL order, so the
+// sort (qsort is not stable) and everything after it are deterministic.
 static int cmpScoreRowDesc(const void *a, const void *b) {
-  double sa = ((const ScoreRow_t *)a)->score;
-  double sb = ((const ScoreRow_t *)b)->score;
-  return (sa < sb) - (sa > sb); // descending by score
+  const ScoreRow_t *ra = (const ScoreRow_t *)a, *rb = (const ScoreRow_t *)b;
+  if (ra->score != rb->score)
+    return (ra->score < rb->score) - (ra->score > rb->score);
+  return (ra->row > rb->row) - (ra->row < rb->row);
 }
 
 // ── Merge duplicate orientations (parallel) ──────────────────────────────
@@ -1715,13 +2154,14 @@ static inline int mergeDuplicateOrientations(double *orients, size_t *rowNrs,
                                              double maxAngle, int numProcs,
                                              double *FinOrientArr, int *dArr,
                                              int *bsArr, double *bsScoreArr) {
-  // Cap pathological result counts: keep the top MERGE_MAX_RESULTS by coarse
-  // score before the O(N^2) clustering.  No-op for realistic frames.
-  if (nrResults > MERGE_MAX_RESULTS) {
-    fprintf(stderr,
-            "WARNING: %d coarse matches exceed merge cap %d; keeping the "
-            "top-scored before clustering.\n",
-            nrResults, MERGE_MAX_RESULTS);
+  // Sort by (score desc, row asc) first, ALWAYS. The greedy clustering below
+  // seeds each cluster with the first unmerged candidate, so its result
+  // depends on input order; the GPU kernels deliver candidates in atomicAdd
+  // arrival order (different every run) and the CPU in database-row order.
+  // Sorting makes every path agree and seeds each cluster with its strongest
+  // candidate. Then cap pathological counts to the top MERGE_MAX_RESULTS
+  // before the O(N^2) clustering (a no-op for realistic frames).
+  if (nrResults > 1) {
     ScoreRow_t *sr = (ScoreRow_t *)malloc((size_t)nrResults * sizeof(ScoreRow_t));
     if (sr == NULL) {
       fprintf(stderr, "FATAL: could not allocate score-sort buffer.\n");
@@ -1732,12 +2172,18 @@ static inline int mergeDuplicateOrientations(double *orients, size_t *rowNrs,
       sr[i].row = rowNrs[i];
     }
     qsort(sr, (size_t)nrResults, sizeof(ScoreRow_t), cmpScoreRowDesc);
-    for (int i = 0; i < MERGE_MAX_RESULTS; i++) {
+    if (nrResults > MERGE_MAX_RESULTS) {
+      fprintf(stderr,
+              "WARNING: %d coarse matches exceed merge cap %d; keeping the "
+              "top-scored before clustering.\n",
+              nrResults, MERGE_MAX_RESULTS);
+      nrResults = MERGE_MAX_RESULTS;
+    }
+    for (int i = 0; i < nrResults; i++) {
       matchScores[i] = sr[i].score;
       rowNrs[i] = sr[i].row;
     }
     free(sr);
-    nrResults = MERGE_MAX_RESULTS;
   }
   int *doneArr = (int *)calloc(nrResults, sizeof(int));
   // Step 1: Precompute quaternions for all matches (parallel)
@@ -1780,7 +2226,7 @@ static inline int mergeDuplicateOrientations(double *orients, size_t *rowNrs,
     if (doneArr[gi] != 0)
       continue;
     doneArr[gi] = 1;
-    int bestSol = rowNrs[gi];
+    size_t bestSol = rowNrs[gi];
     double bestIntensity = matchScores[gi];
     for (int l = gi + 1; l < nrResults; l++) {
       if (doneArr[l] > 0)
@@ -1798,7 +2244,7 @@ static inline int mergeDuplicateOrientations(double *orients, size_t *rowNrs,
     for (int k = 0; k < 9; k++)
       FinOrientArr[iterNr * 9 + k] = orients[(size_t)bestSol * 9 + k];
     dArr[iterNr] = doneArr[gi];
-    bsArr[iterNr] = bestSol;
+    bsArr[iterNr] = (int)bestSol;
     bsScoreArr[iterNr] = bestIntensity;
     iterNr++;
   }
@@ -1811,7 +2257,7 @@ static inline int mergeDuplicateOrientations(double *orients, size_t *rowNrs,
 // ── Fit and write orientations (parallel) ────────────────────────────────
 // OMP-parallel fitting loop: prefilter HKLs, single-pass FitOrientation,
 // writeCalcOverlap, fprintf results.
-// imageNum > 0: prepend image number column (streaming mode)
+// imageNum != NOT_STREAMING: prepend image number column (streaming mode)
 // imageNum <= 0: no image column (batch mode)
 // Geometry-scaled coarse-fit blur width (px).  Chosen so ~3 sigma covers the
 // spot displacement of a worst-case orientation-grid seed error (~1.3x the
@@ -1978,7 +2424,7 @@ static inline void fitAndWriteOrientations(
   double _wtBlur = omp_get_wtime();
   gaussianBlurImage(image, imageCoarse, nrPxX, nrPxY, coarseSigma, numProcs);
   double _blurMs = (omp_get_wtime() - _wtBlur) * 1000.0;
-  if (imageNum > 0)
+  if (imageNum != NOT_STREAMING)
     printf("[Image %d]   coarse blur: %.0f ms (sigma %.2f px, radius %d)\n",
            imageNum, _blurMs, coarseSigma, (int)(3.0 * coarseSigma + 0.5));
   else
@@ -2047,10 +2493,10 @@ static inline void fitAndWriteOrientations(
     calcRecipArray(latCFit, sg_num, recipFit);
     memset(outArrThisFit, 0, 3 * maxNrSpots * sizeof(double));
     int saveExtraInfo = iterNr + 1;
-    int nrSps = writeCalcOverlap(
+    int nrSps = writeCalcOverlapGated(
         image, eulerFit, hkls, nhkls, nrPxX, nrPxY, recipFit, outArrThisFit,
         maxNrSpots, rotTranspose, pArr, pxX, pxY, Elo, Ehi, minSpotIntensity,
-        ExtraInfo, saveExtraInfo, &simulNrSps, imageNum);
+        ExtraInfo, saveExtraInfo, &simulNrSps, imageNum, minNrSpots);
     if (nrSps >= minNrSpots) {
       int bs = bsArr[iterNr];
       double miso = GetMisOrientation(q1, q2);
@@ -2058,7 +2504,7 @@ static inline void fitAndWriteOrientations(
       MatrixMultF33(orientFit, recipFit, OF);
 #pragma omp critical
       {
-        if (imageNum > 0)
+        if (imageNum != NOT_STREAMING)
           fprintf(outF, "%d\t", imageNum);
         fprintf(outF, "%d\t%d\t", iterNr + 1, dArr[iterNr]);
         fprintf(outF, "%-13.4lf\t", (mv / nrSps) * (mv / nrSps));

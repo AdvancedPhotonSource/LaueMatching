@@ -49,12 +49,12 @@ inline void gpuAssert(cudaError_t code, const char *file, int line,
 // Sized for DENSE (many-grain, streaky) frames: the kernel appends in
 // arrival order, so an overflow here discards candidates ARBITRARILY --
 // true grains included -- before the top-score merge can rank them.
-// 4M entries x 12 B x MAX_STREAMS is < 200 MB on device and pinned host.
+// 4M entries x 16 B x MAX_STREAMS is < 300 MB on device and pinned host.
 
 __global__ void compare(size_t nrPxX, size_t nrPxY, size_t nOr,
-                        size_t nrMaxSpots, float minInt, size_t minSps,
+                        size_t nrMaxSpots, double minInt, size_t minSps,
                         float minSpotInt, uint16_t *oA, float *im,
-                        int *matchCount, size_t *matchIdx, float *matchScore,
+                        int *matchCount, size_t *matchIdx, double *matchScore,
                         size_t chunkOffset) {
   size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < nOr) {
@@ -64,7 +64,10 @@ __global__ void compare(size_t nrPxX, size_t nrPxY, size_t nOr,
       nrSpots = nrMaxSpots;
     size_t hklnr;
     size_t px, py;
-    float thisInt, totInt = 0;
+    // Accumulated in double, as on the CPU: the MinIntensity gate and the
+    // merge order must not depend on which binary ran.
+    float thisInt;
+    double totInt = 0;
     size_t nSps = 0;
     for (hklnr = 0; hklnr < nrSpots; hklnr++) {
       loc++;
@@ -83,7 +86,7 @@ __global__ void compare(size_t nrPxX, size_t nrPxY, size_t nOr,
       int pos = atomicAdd(matchCount, 1);
       if (pos < MAX_MATCHES) {
         matchIdx[pos] = i + chunkOffset;
-        matchScore[pos] = totInt * sqrtf((float)nSps);
+        matchScore[pos] = totInt * sqrt((double)nSps);
       }
     }
   }
@@ -138,6 +141,8 @@ int main(int argc, char *argv[]) {
   for (iter = 0; iter < 6; iter++)
     tol_LatC[iter] = 0;
   double minIntensity = 1000.0, maxAngle = 2.0;
+  double orientSpacing = 0.4;       // orientation-DB grid spacing (deg)
+  double coarseFitSigmaParam = 0.0; // >0 overrides geometry-scaled coarse blur
   // See MinSpotIntensity in LaueMatchingCPU.c; 0.0 == the historical `> 0`.
   double minSpotIntensity = 0.0;
   double LatticeParameter[6] = {0, 0, 0, 0, 0, 0};
@@ -146,7 +151,7 @@ int main(int argc, char *argv[]) {
   tol_c_over_a = 0;
   while (fgets(aline, 1000, fileParam) != NULL) {
     str = "LatticeParameter";
-    LowNr = strncmp(aline, str, strlen(str));
+    LowNr = paramKeyCmp(aline, str);
     if (LowNr == 0) {
       if (!paramLineComplete(
               sscanf(aline, "%s %lf %lf %lf %lf %lf %lf", dummy,
@@ -159,7 +164,7 @@ int main(int argc, char *argv[]) {
       continue;
     }
     str = "P_Array";
-    LowNr = strncmp(aline, str, strlen(str));
+    LowNr = paramKeyCmp(aline, str);
     if (LowNr == 0) {
       if (!paramLineComplete(sscanf(aline, "%s %lf %lf %lf", dummy, &pArr[0],
                                     &pArr[1], &pArr[2]),
@@ -168,7 +173,7 @@ int main(int argc, char *argv[]) {
       continue;
     }
     str = "R_Array";
-    LowNr = strncmp(aline, str, strlen(str));
+    LowNr = paramKeyCmp(aline, str);
     if (LowNr == 0) {
       if (!paramLineComplete(sscanf(aline, "%s %lf %lf %lf", dummy, &rArr[0],
                                     &rArr[1], &rArr[2]),
@@ -177,25 +182,25 @@ int main(int argc, char *argv[]) {
       continue;
     }
     str = "tol_c_over_a";
-    LowNr = strncmp(aline, str, strlen(str));
+    LowNr = paramKeyCmp(aline, str);
     if (LowNr == 0) {
       sscanf(aline, "%s %lf", dummy, &tol_c_over_a);
       continue;
     }
     str = "PxX";
-    LowNr = strncmp(aline, str, strlen(str));
+    LowNr = paramKeyCmp(aline, str);
     if (LowNr == 0) {
       sscanf(aline, "%s %lf", dummy, &pxX);
       continue;
     }
     str = "PxY";
-    LowNr = strncmp(aline, str, strlen(str));
+    LowNr = paramKeyCmp(aline, str);
     if (LowNr == 0) {
       sscanf(aline, "%s %lf", dummy, &pxY);
       continue;
     }
     str = "Elo";
-    LowNr = strncmp(aline, str, strlen(str));
+    LowNr = paramKeyCmp(aline, str);
     if (LowNr == 0) {
       if (!paramLineComplete(sscanf(aline, "%s %lf", dummy, &Elo), 2,
                              "Elo", aline))
@@ -203,7 +208,7 @@ int main(int argc, char *argv[]) {
       continue;
     }
     str = "Ehi";
-    LowNr = strncmp(aline, str, strlen(str));
+    LowNr = paramKeyCmp(aline, str);
     if (LowNr == 0) {
       if (!paramLineComplete(sscanf(aline, "%s %lf", dummy, &Ehi), 2,
                              "Ehi", aline))
@@ -211,67 +216,79 @@ int main(int argc, char *argv[]) {
       continue;
     }
     str = "DoFwd";
-    LowNr = strncmp(aline, str, strlen(str));
+    LowNr = paramKeyCmp(aline, str);
     if (LowNr == 0) {
       sscanf(aline, "%s %d", dummy, &doFwd);
       continue;
     }
     str = "NrPxX";
-    LowNr = strncmp(aline, str, strlen(str));
+    LowNr = paramKeyCmp(aline, str);
     if (LowNr == 0) {
       sscanf(aline, "%s %d", dummy, &nrPxX);
       continue;
     }
     str = "NrPxY";
-    LowNr = strncmp(aline, str, strlen(str));
+    LowNr = paramKeyCmp(aline, str);
     if (LowNr == 0) {
       sscanf(aline, "%s %d", dummy, &nrPxY);
       continue;
     }
     str = "MaxNrLaueSpots";
-    LowNr = strncmp(aline, str, strlen(str));
+    LowNr = paramKeyCmp(aline, str);
     if (LowNr == 0) {
       sscanf(aline, "%s %d", dummy, &maxNrSpots);
       continue;
     }
     str = "MinNrSpots";
-    LowNr = strncmp(aline, str, strlen(str));
+    LowNr = paramKeyCmp(aline, str);
     if (LowNr == 0) {
       sscanf(aline, "%s %d", dummy, &minNrSpots);
       continue;
     }
     str = "SpaceGroup";
-    LowNr = strncmp(aline, str, strlen(str));
+    LowNr = paramKeyCmp(aline, str);
     if (LowNr == 0) {
       sscanf(aline, "%s %d", dummy, &sg_num);
       continue;
     }
     str = "MinSpotIntensity";
-    LowNr = strncmp(aline, str, strlen(str));
+    LowNr = paramKeyCmp(aline, str);
     if (LowNr == 0) {
       sscanf(aline, "%s %lf", dummy, &minSpotIntensity);
       continue;
     }
     str = "MinIntensity";
-    LowNr = strncmp(aline, str, strlen(str));
+    LowNr = paramKeyCmp(aline, str);
     if (LowNr == 0) {
       sscanf(aline, "%s %lf", dummy, &minIntensity);
       continue;
     }
+    str = "OrientationSpacing";
+    LowNr = paramKeyCmp(aline, str);
+    if (LowNr == 0) {
+      sscanf(aline, "%s %lf", dummy, &orientSpacing);
+      continue;
+    }
+    str = "CoarseFitSigma";
+    LowNr = paramKeyCmp(aline, str);
+    if (LowNr == 0) {
+      sscanf(aline, "%s %lf", dummy, &coarseFitSigmaParam);
+      continue;
+    }
     str = "MaxAngle";
-    LowNr = strncmp(aline, str, strlen(str));
+    LowNr = paramKeyCmp(aline, str);
     if (LowNr == 0) {
       sscanf(aline, "%s %lf", dummy, &maxAngle);
       continue;
     }
     str = "ForwardFile";
-    LowNr = strncmp(aline, str, strlen(str));
+    LowNr = paramKeyCmp(aline, str);
     if (LowNr == 0) {
       sscanf(aline, "%s %s", dummy, outfn); // FIX: was &outfn
       continue;
     }
     str = "tol_LatC";
-    LowNr = strncmp(aline, str, strlen(str));
+    LowNr = paramKeyCmp(aline, str);
     if (LowNr == 0) {
       sscanf(aline, "%s %lf %lf %lf %lf %lf %lf", dummy, &tol_LatC[0],
              &tol_LatC[1], &tol_LatC[2], &tol_LatC[3], &tol_LatC[4],
@@ -279,7 +296,7 @@ int main(int argc, char *argv[]) {
       continue;
     }
     str = "Optimizer";
-    LowNr = strncmp(aline, str, strlen(str));
+    LowNr = paramKeyCmp(aline, str);
     if (LowNr == 0) {
       sscanf(aline, "%s %s", dummy, dummy2); // two buffers, as in CPU.c
       /* Parsed, never acted on: Nelder-Mead always (LaueMatchingHeaders.h). */
@@ -294,6 +311,10 @@ int main(int argc, char *argv[]) {
   // Validates the EFFECTIVE tolerances itself (it knows tol_c_over_a
   // overrides tol_LatC), so its place relative to the zeroing below is moot.
   if (validateCrystalFitTolerances())
+    return 1;
+  if (validateTrigonalSetting(sg_num, LatticeParameter))
+    return 1;
+  if (requireParamKeys(argv[1]))
     return 1;
   if (tol_c_over_a != 0) {
     // c/a is a ratio at CONSTANT cell volume, so it must not compete with
@@ -495,15 +516,34 @@ int main(int argc, char *argv[]) {
 
   // Compact match results from GPU path (NULL if forward sim path)
   size_t *h_matchIdx = NULL;
-  float *h_matchScore = NULL;
+  double *h_matchScore = NULL;
   int h_matchCount = 0;
 
+  // What the cache must have been built for (record <ForwardFile>.meta.json).
+  const uint64_t fwdKey = forwardCacheKey(
+    sg_num, LatticeParameter, pArr, rArr, pxX, pxY, nrPxX, nrPxY, Elo, Ehi,
+    maxNrSpots, (size_t)nrOrients, hkls, nhkls);
   if (doFwd == 0) {
     // Shared with the CPU binary (LaueMatchingHeaders.h). This used to accept
     // any file that merely EXISTED, so a 0-byte leftover was mapped and
     // faulted with SIGBUS on first touch.
-    if (!forwardCacheUsable(outfn, (size_t)nrOrients, maxNrSpots))
+    if (!forwardCacheUsable(outfn, (size_t)nrOrients, maxNrSpots)) {
       doFwd = 1;
+    } else {
+      // Provenance record: none -> rebuild (a pre-0.8.0 cache); a record for
+      // ANOTHER configuration -> refuse rather than overwrite a cache that
+      // configuration's runs may be using.
+      int fwdStatus = forwardCacheMetaStatus(outfn, fwdKey);
+      if (fwdStatus == 2) {
+        fprintf(stderr, "FATAL: refusing to overwrite %s. Delete it, point "
+                        "ForwardFile elsewhere, or set DoFwd 1 to rebuild it "
+                        "for this configuration.\n",
+                outfn);
+        return 1;
+      }
+      if (fwdStatus == 1)
+        doFwd = 1;
+    }
   } else
     printf("Forward simulation was requested, will be saved to %s.\n", outfn);
 
@@ -513,11 +553,19 @@ int main(int argc, char *argv[]) {
   // and durable. See the forward-cache helpers in the header.
   FwdCache fc;
   int fwdFd = -1;
+  double fwdT0 = 0.0;
   if (doFwd == 1) {
     fwdFd = beginForwardCacheWrite(outfn, (size_t)nrOrients, maxNrSpots, &fc);
-    if (fwdFd == FWD_CACHE_REUSE)
+    fwdT0 = omp_get_wtime();
+    if (fwdFd == FWD_CACHE_REUSE) {
+      if (!forwardCacheMetaMatches(outfn, fwdKey)) {
+        fprintf(stderr, "FATAL: a sibling published %s for a different "
+                        "configuration while this run waited; rerun.\n",
+                outfn);
+        return 1;
+      }
       doFwd = 0;
-    else if (fwdFd < 0) // reason already printed
+    } else if (fwdFd < 0) // reason already printed
       return 1;
   }
   if (doFwd == 1) {
@@ -594,16 +642,16 @@ int main(int argc, char *argv[]) {
                    rotTranspose[0][2] * kf[2];
           xyz[0] = xyz[0] * pArr[2] / xyz[2];
           xp = xyz[0] - pArr[0];
-          ipx = (int)((xp / pxX) + halfNrPxX);
-          if (ipx < 0 || ipx > (nrPxX - 1))
+          ipx = pixelIndex((xp / pxX) + halfNrPxX, nrPxX);
+          if (ipx < 0)
             continue;
           // ipx rejects a further ~42%; row 1 is dead work for those.
           xyz[1] = rotTranspose[1][0] * kf[0] + rotTranspose[1][1] * kf[1] +
                    rotTranspose[1][2] * kf[2];
           xyz[1] = xyz[1] * pArr[2] / xyz[2];
           yp = xyz[1] - pArr[1];
-          ipy = (int)((yp / pxY) + halfNrPxY);
-          if (ipy < 0 || ipy > (nrPxY - 1))
+          ipy = pixelIndex((yp / pxY) + halfNrPxY, nrPxY);
+          if (ipy < 0)
             continue;
           E = -hcOver4Pi * q2 / qvec[2];
           if (E < Elo || E > Ehi)
@@ -647,6 +695,14 @@ int main(int argc, char *argv[]) {
     // Durable or abandoned: an fsync/close failure removes the cache, as a
     // failed write does (this ignored fsync's result). See the header.
     finishForwardCacheOrDie(fwdFd, fc.partial, fc.target);
+    FwdCacheInfo fwdInfo = makeFwdCacheInfo(
+        sg_num, LatticeParameter, pArr, rArr, pxX, pxY, nrPxX, nrPxY, Elo, Ehi,
+        maxNrSpots, (size_t)nrOrients, nhkls, argv[1], argv[2], argv[3], argv[0],
+        omp_get_wtime() - fwdT0, numProcs);
+    if (writeForwardCacheMeta(fc.target, fwdKey, &fwdInfo) != 0)
+      fprintf(stderr, "WARNING: could not write %s.meta.json; the next run will "
+                      "rebuild the forward cache.\n",
+              fc.target);
     releaseForwardCacheLock(&fc);
   } else {
     // ── Read forward simulation ────────────────────────────────────────
@@ -737,12 +793,12 @@ int main(int argc, char *argv[]) {
     float *d_image;
     int *d_matchCount;
     size_t *d_matchIdx;
-    float *d_matchScore;
+    double *d_matchScore;
     gpuErrchk(cudaMalloc(&d_outChunk, chunkOutBytes));
     gpuErrchk(cudaMalloc(&d_image, imageBytes));
     gpuErrchk(cudaMalloc(&d_matchCount, sizeof(int)));
     gpuErrchk(cudaMalloc(&d_matchIdx, MAX_MATCHES * sizeof(size_t)));
-    gpuErrchk(cudaMalloc(&d_matchScore, MAX_MATCHES * sizeof(float)));
+    gpuErrchk(cudaMalloc(&d_matchScore, MAX_MATCHES * sizeof(double)));
     printf("  cudaMalloc (%.1f GB + %.1f MB): %lf s\n", chunkOutBytes / 1e9,
            imageBytes / 1e6, omp_get_wtime() - wt_alloc);
 
@@ -813,7 +869,7 @@ int main(int argc, char *argv[]) {
       h_matchCount = MAX_MATCHES;
     }
     size_t *h_matchIdx_dev = (size_t *)malloc(h_matchCount * sizeof(size_t));
-    float *h_matchScore_dev = (float *)malloc(h_matchCount * sizeof(float));
+    double *h_matchScore_dev = (double *)malloc(h_matchCount * sizeof(double));
     if (h_matchIdx_dev == NULL || h_matchScore_dev == NULL) {
       fprintf(stderr, "FATAL: Could not allocate host match buffers.\n");
       return 1;
@@ -822,7 +878,7 @@ int main(int argc, char *argv[]) {
                          h_matchCount * sizeof(size_t),
                          cudaMemcpyDeviceToHost));
     gpuErrchk(cudaMemcpy(h_matchScore_dev, d_matchScore,
-                         h_matchCount * sizeof(float), cudaMemcpyDeviceToHost));
+                         h_matchCount * sizeof(double), cudaMemcpyDeviceToHost));
 
     // Transfer to outer-scope pointers
     h_matchIdx = h_matchIdx_dev;
@@ -853,7 +909,7 @@ int main(int argc, char *argv[]) {
   fflush(stdout);
 
   // Unique solutions
-  nSym = MakeSymmetries(sg_num, Symm);
+  nSym = MakeSymmetries(sg_num, LatticeParameter, Symm);
 
   double tol = 3 * deg2rad;
   maxNrSpots *= 3;
@@ -885,7 +941,7 @@ int main(int argc, char *argv[]) {
       "OrientMatrix0\tOrientMatrix1\tOrientMatrix2\tOrientMatrix3\tOrientMatrix"
       "4\tOrientMatrix5\t"
       "OrientMatrix6\tOrientMatrix7\tOrientMatrix8\t"
-      "CoarseNMatches*sqrt(Intensity)\t"
+      "CoarseIntensity*sqrt(NMatches)\t"
       "misOrientationPostRefinement[degrees]\torientationRowNr\n");
 
   // Collect results
@@ -932,11 +988,17 @@ int main(int argc, char *argv[]) {
   double time3 = omp_get_wtime() - start_time;
   printf("Finished finding unique solutions, took: %lf seconds.\n",
          time3 - time2);
+  double coarseFitSigmaValue =
+      (coarseFitSigmaParam > 0.0)
+          ? coarseFitSigmaParam
+          : autoCoarseSigma(pArr[2], pxX, orientSpacing);
+  printf("Coarse-fit blur sigma: %.2f px (orientation grid %.2f deg).\n",
+         coarseFitSigmaValue, orientSpacing);
   fitAndWriteOrientations(
       imageF, FinOrientArr, dArr, bsArr, bsScoreArr, totalSols, hkls, nhkls,
       nrPxX, nrPxY, recip, rotTranspose, pArr, pxX, pxY, Elo, Ehi, tol,
-      LatticeParameter, maxNrSpots, minNrSpots, numProcs, outF, ExtraInfo, 0,
-      0.0 /* auto geometry-scaled coarse-fit sigma */, minSpotIntensity);
+      LatticeParameter, maxNrSpots, minNrSpots, numProcs, outF, ExtraInfo,
+      NOT_STREAMING, coarseFitSigmaValue, minSpotIntensity);
   fclose(ExtraInfo);
   fclose(outF);
 

@@ -8,7 +8,8 @@ converts one to the other for a REFLECTION-geometry station: panel edge-on
 above the sample, 2theta = 90 deg, ki = (0, 0, 1).
 
 The target convention is transcribed from ``laue_index.calibrate.project`` and
-``c_src/LaueMatchingCPU.c:589-620``.  The C there no longer spells ``qhat``
+the coarse forward loop of ``c_src/LaueMatchingCPU.c`` (search for
+``pixelIndex``; line numbers drift).  The C there no longer spells ``qhat``
 explicitly -- it folds it into ``|q|^2`` (``sFac = 2*q_z/|q|^2``, so
 ``kf = ki - sFac*q``), which is the same arithmetic as ``ki - 2(qhat.ki)qhat``::
 

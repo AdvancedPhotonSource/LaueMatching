@@ -101,7 +101,12 @@ def test_every_fit_stage_function_keeps_its_qhat_dedup():
         pytest.skip("c_src not present (installed wheel, not a checkout)")
     with open(HEADERS) as f:
         src = f.read()
-    for fn in ("calcOverlap", "calcOverlapFiltered", "writeCalcOverlap"):
+    # writeCalcOverlap is a thin wrapper over writeCalcOverlapGated (0.8.0),
+    # which holds the body; the wrapper must stay a pure delegation.
+    wrap = src[src.index("static inline int writeCalcOverlap(float"):]
+    wrap = wrap[:wrap.index("\n}\n")]
+    assert "return writeCalcOverlapGated(" in wrap
+    for fn in ("calcOverlap", "calcOverlapFiltered", "writeCalcOverlapGated"):
         m = re.search(r"static inline (?:double|int)\s+" + fn + r"\(", src)
         assert m, f"{fn} definition not found in LaueMatchingHeaders.h"
         start = m.start()

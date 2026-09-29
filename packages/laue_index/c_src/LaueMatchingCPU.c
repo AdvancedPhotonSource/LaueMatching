@@ -82,7 +82,7 @@ int main(int argc, char *argv[]) {
   tol_c_over_a = 0;
   while (fgets(aline, 1000, fileParam) != NULL) {
     str = "LatticeParameter";
-    LowNr = strncmp(aline, str, strlen(str));
+    LowNr = paramKeyCmp(aline, str);
     if (LowNr == 0) {
       if (!paramLineComplete(
               sscanf(aline, "%s %lf %lf %lf %lf %lf %lf", dummy,
@@ -95,7 +95,7 @@ int main(int argc, char *argv[]) {
       continue;
     }
     str = "P_Array";
-    LowNr = strncmp(aline, str, strlen(str));
+    LowNr = paramKeyCmp(aline, str);
     if (LowNr == 0) {
       if (!paramLineComplete(sscanf(aline, "%s %lf %lf %lf", dummy, &pArr[0],
                                     &pArr[1], &pArr[2]),
@@ -104,7 +104,7 @@ int main(int argc, char *argv[]) {
       continue;
     }
     str = "R_Array";
-    LowNr = strncmp(aline, str, strlen(str));
+    LowNr = paramKeyCmp(aline, str);
     if (LowNr == 0) {
       if (!paramLineComplete(sscanf(aline, "%s %lf %lf %lf", dummy, &rArr[0],
                                     &rArr[1], &rArr[2]),
@@ -113,37 +113,37 @@ int main(int argc, char *argv[]) {
       continue;
     }
     str = "tol_c_over_a";
-    LowNr = strncmp(aline, str, strlen(str));
+    LowNr = paramKeyCmp(aline, str);
     if (LowNr == 0) {
       sscanf(aline, "%s %lf", dummy, &tol_c_over_a);
       continue;
     }
     str = "OrientationSpacing";
-    LowNr = strncmp(aline, str, strlen(str));
+    LowNr = paramKeyCmp(aline, str);
     if (LowNr == 0) {
       sscanf(aline, "%s %lf", dummy, &orientSpacing);
       continue;
     }
     str = "CoarseFitSigma";
-    LowNr = strncmp(aline, str, strlen(str));
+    LowNr = paramKeyCmp(aline, str);
     if (LowNr == 0) {
       sscanf(aline, "%s %lf", dummy, &coarseFitSigmaParam);
       continue;
     }
     str = "PxX";
-    LowNr = strncmp(aline, str, strlen(str));
+    LowNr = paramKeyCmp(aline, str);
     if (LowNr == 0) {
       sscanf(aline, "%s %lf", dummy, &pxX);
       continue;
     }
     str = "PxY";
-    LowNr = strncmp(aline, str, strlen(str));
+    LowNr = paramKeyCmp(aline, str);
     if (LowNr == 0) {
       sscanf(aline, "%s %lf", dummy, &pxY);
       continue;
     }
     str = "Elo";
-    LowNr = strncmp(aline, str, strlen(str));
+    LowNr = paramKeyCmp(aline, str);
     if (LowNr == 0) {
       if (!paramLineComplete(sscanf(aline, "%s %lf", dummy, &Elo), 2,
                              "Elo", aline))
@@ -151,7 +151,7 @@ int main(int argc, char *argv[]) {
       continue;
     }
     str = "Ehi";
-    LowNr = strncmp(aline, str, strlen(str));
+    LowNr = paramKeyCmp(aline, str);
     if (LowNr == 0) {
       if (!paramLineComplete(sscanf(aline, "%s %lf", dummy, &Ehi), 2,
                              "Ehi", aline))
@@ -159,74 +159,74 @@ int main(int argc, char *argv[]) {
       continue;
     }
     str = "DoFwd";
-    LowNr = strncmp(aline, str, strlen(str));
+    LowNr = paramKeyCmp(aline, str);
     if (LowNr == 0) {
       sscanf(aline, "%s %d", dummy, &doFwd);
       continue;
     }
     str = "NrPxX";
-    LowNr = strncmp(aline, str, strlen(str));
+    LowNr = paramKeyCmp(aline, str);
     if (LowNr == 0) {
       sscanf(aline, "%s %d", dummy, &nrPxX);
       continue;
     }
     str = "NrPxY";
-    LowNr = strncmp(aline, str, strlen(str));
+    LowNr = paramKeyCmp(aline, str);
     if (LowNr == 0) {
       sscanf(aline, "%s %d", dummy, &nrPxY);
       continue;
     }
     str = "MaxNrLaueSpots";
-    LowNr = strncmp(aline, str, strlen(str));
+    LowNr = paramKeyCmp(aline, str);
     if (LowNr == 0) {
       sscanf(aline, "%s %d", dummy, &maxNrSpots);
       continue;
     }
     str = "BatchSize";
-    LowNr = strncmp(aline, str, strlen(str));
+    LowNr = paramKeyCmp(aline, str);
     if (LowNr == 0) {
       sscanf(aline, "%s %zu", dummy, &batchSize);
       if (batchSize == 0) batchSize = 1000000; // guard against 0
       continue;
     }
     str = "MinNrSpots";
-    LowNr = strncmp(aline, str, strlen(str));
+    LowNr = paramKeyCmp(aline, str);
     if (LowNr == 0) {
       sscanf(aline, "%s %d", dummy, &minNrSpots);
       continue;
     }
     str = "SpaceGroup";
-    LowNr = strncmp(aline, str, strlen(str));
+    LowNr = paramKeyCmp(aline, str);
     if (LowNr == 0) {
       sscanf(aline, "%s %d", dummy, &sg_num);
       continue;
     }
     str = "MinSpotIntensity";
-    LowNr = strncmp(aline, str, strlen(str));
+    LowNr = paramKeyCmp(aline, str);
     if (LowNr == 0) {
       sscanf(aline, "%s %lf", dummy, &minSpotIntensity);
       continue;
     }
     str = "MinIntensity";
-    LowNr = strncmp(aline, str, strlen(str));
+    LowNr = paramKeyCmp(aline, str);
     if (LowNr == 0) {
       sscanf(aline, "%s %lf", dummy, &minIntensity);
       continue;
     }
     str = "MaxAngle";
-    LowNr = strncmp(aline, str, strlen(str));
+    LowNr = paramKeyCmp(aline, str);
     if (LowNr == 0) {
       sscanf(aline, "%s %lf", dummy, &maxAngle);
       continue;
     }
     str = "ForwardFile";
-    LowNr = strncmp(aline, str, strlen(str));
+    LowNr = paramKeyCmp(aline, str);
     if (LowNr == 0) {
       sscanf(aline, "%s %s", dummy, outfn); // FIX: was &outfn
       continue;
     }
     str = "tol_LatC";
-    LowNr = strncmp(aline, str, strlen(str));
+    LowNr = paramKeyCmp(aline, str);
     if (LowNr == 0) {
       sscanf(aline, "%s %lf %lf %lf %lf %lf %lf", dummy, &tol_LatC[0],
              &tol_LatC[1], &tol_LatC[2], &tol_LatC[3], &tol_LatC[4],
@@ -234,7 +234,7 @@ int main(int argc, char *argv[]) {
       continue;
     }
     str = "Optimizer";
-    LowNr = strncmp(aline, str, strlen(str));
+    LowNr = paramKeyCmp(aline, str);
     if (LowNr == 0) {
       sscanf(aline, "%s %s", dummy, dummy2);
       /* Parsed, never acted on: Nelder-Mead always (LaueMatchingHeaders.h). */
@@ -249,6 +249,10 @@ int main(int argc, char *argv[]) {
   // Validates the EFFECTIVE tolerances itself (it knows tol_c_over_a
   // overrides tol_LatC), so its place relative to the zeroing below is moot.
   if (validateCrystalFitTolerances())
+    return 1;
+  if (validateTrigonalSetting(sg_num, LatticeParameter))
+    return 1;
+  if (requireParamKeys(argv[1]))
     return 1;
   if (tol_c_over_a != 0) {
     // c/a is a ratio at CONSTANT cell volume, so it must not compete with
@@ -454,9 +458,28 @@ int main(int argc, char *argv[]) {
     hklsD[_h] = (double)hkls[_h];
 
   // Check if forward file already exists
+  // What the cache must have been built for (record <ForwardFile>.meta.json).
+  const uint64_t fwdKey = forwardCacheKey(
+    sg_num, LatticeParameter, pArr, rArr, pxX, pxY, nrPxX, nrPxY, Elo, Ehi,
+    maxNrSpots, (size_t)nrOrients, hkls, nhkls);
   if (doFwd == 0) {
-    if (!forwardCacheUsable(outfn, (size_t)nrOrients, maxNrSpots))
+    if (!forwardCacheUsable(outfn, (size_t)nrOrients, maxNrSpots)) {
       doFwd = 1;
+    } else {
+      // Provenance record: none -> rebuild (a pre-0.8.0 cache); a record for
+      // ANOTHER configuration -> refuse rather than overwrite a cache that
+      // configuration's runs may be using.
+      int fwdStatus = forwardCacheMetaStatus(outfn, fwdKey);
+      if (fwdStatus == 2) {
+        fprintf(stderr, "FATAL: refusing to overwrite %s. Delete it, point "
+                        "ForwardFile elsewhere, or set DoFwd 1 to rebuild it "
+                        "for this configuration.\n",
+                outfn);
+        return 1;
+      }
+      if (fwdStatus == 1)
+        doFwd = 1;
+    }
   } else {
     printf("Forward simulation was requested, will be saved to %s.\n", outfn);
   }
@@ -475,11 +498,19 @@ int main(int argc, char *argv[]) {
   // and durable. See the forward-cache helpers in the header.
   FwdCache fc;
   int fwdFd = -1;
+  double fwdT0 = 0.0;
   if (doFwd == 1) {
     fwdFd = beginForwardCacheWrite(outfn, (size_t)nrOrients, maxNrSpots, &fc);
-    if (fwdFd == FWD_CACHE_REUSE)
+    fwdT0 = omp_get_wtime();
+    if (fwdFd == FWD_CACHE_REUSE) {
+      if (!forwardCacheMetaMatches(outfn, fwdKey)) {
+        fprintf(stderr, "FATAL: a sibling published %s for a different "
+                        "configuration while this run waited; rerun.\n",
+                outfn);
+        return 1;
+      }
       doFwd = 0;
-    else if (fwdFd < 0) // reason already printed
+    } else if (fwdFd < 0) // reason already printed
       return 1;
   }
   if (doFwd == 0) {
@@ -637,16 +668,16 @@ int main(int argc, char *argv[]) {
                      rotTranspose[0][2] * kf[2];
             xyz[0] = xyz[0] * pArr[2] / xyz[2];
             xp = xyz[0] - pArr[0];
-            ipx = (int)((xp / pxX) + halfNrPxX);
-            if (ipx < 0 || ipx > (nrPxX - 1))
+            ipx = pixelIndex((xp / pxX) + halfNrPxX, nrPxX);
+            if (ipx < 0)
               continue;
             // ipx rejects a further ~42%; row 1 is dead work for those.
             xyz[1] = rotTranspose[1][0] * kf[0] + rotTranspose[1][1] * kf[1] +
                      rotTranspose[1][2] * kf[2];
             xyz[1] = xyz[1] * pArr[2] / xyz[2];
             yp = xyz[1] - pArr[1];
-            ipy = (int)((yp / pxY) + halfNrPxY);
-            if (ipy < 0 || ipy > (nrPxY - 1))
+            ipy = pixelIndex((yp / pxY) + halfNrPxY, nrPxY);
+            if (ipy < 0)
               continue;
             E = -hcOver4Pi * q2 / qvec[2];
             if (E < Elo || E > Ehi)
@@ -698,6 +729,14 @@ int main(int argc, char *argv[]) {
     // is durable on disk before subsequent runs try to read it. A failure is
     // fatal and removes the cache, as a failed write does; see the header.
     finishForwardCacheOrDie(fwdFd, fc.partial, fc.target);
+    FwdCacheInfo fwdInfo = makeFwdCacheInfo(
+        sg_num, LatticeParameter, pArr, rArr, pxX, pxY, nrPxX, nrPxY, Elo, Ehi,
+        maxNrSpots, (size_t)nrOrients, nhkls, argv[1], argv[2], argv[3], argv[0],
+        omp_get_wtime() - fwdT0, numProcs);
+    if (writeForwardCacheMeta(fc.target, fwdKey, &fwdInfo) != 0)
+      fprintf(stderr, "WARNING: could not write %s.meta.json; the next run will "
+                      "rebuild the forward cache.\n",
+              fc.target);
     releaseForwardCacheLock(&fc);
   }
 
@@ -710,7 +749,7 @@ int main(int argc, char *argv[]) {
 
   // Figure out the unique orientations (within maxAngle) and do optimization
   // for those.
-  nSym = MakeSymmetries(sg_num, Symm);
+  nSym = MakeSymmetries(sg_num, LatticeParameter, Symm);
 
   double tol = 3 * deg2rad;
   maxNrSpots *= 3;
@@ -742,7 +781,7 @@ int main(int argc, char *argv[]) {
       "OrientMatrix0\tOrientMatrix1\tOrientMatrix2\tOrientMatrix3\tOrientMatrix"
       "4\tOrientMatrix5\t"
       "OrientMatrix6\tOrientMatrix7\tOrientMatrix8\t"
-      "CoarseNMatches*sqrt(Intensity)\t"
+      "CoarseIntensity*sqrt(NMatches)\t"
       "misOrientationPostRefinement[degrees]\torientationRowNr\n");
 
   // Collect results
@@ -788,7 +827,7 @@ int main(int argc, char *argv[]) {
   fitAndWriteOrientations(
       imageF, FinOrientArr, dArr, bsArr, bsScoreArr, totalSols, hkls, nhkls,
       nrPxX, nrPxY, recip, rotTranspose, pArr, pxX, pxY, Elo, Ehi, tol,
-      LatticeParameter, maxNrSpots, minNrSpots, numProcs, outF, ExtraInfo, 0,
+      LatticeParameter, maxNrSpots, minNrSpots, numProcs, outF, ExtraInfo, NOT_STREAMING,
       coarseFitSigmaValue, minSpotIntensity);
   fclose(ExtraInfo);
   fclose(outF);

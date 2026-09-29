@@ -144,11 +144,20 @@ def cpu_exe(tmp_path_factory):
         pytest.skip("c_src not present (installed wheel, not a checkout)")
     exe = str(tmp_path_factory.mktemp("cpu") / "LaueMatchingCPU")
     if not _build_cpu(exe):
-        pytest.skip("cannot build LaueMatchingCPU (needs OpenMP)")
+        # Skip only when the TOOLCHAIN cannot build OpenMP at all; a compile
+        # error in LaueMatchingCPU.c itself must fail, not look like a missing
+        # compiler (it did, 2026-09-28: a scope error read as "needs OpenMP").
+        from _cbuild import build
+        err = build(exe, [str(C_DIR / CPU)])
+        if err is not None and err.startswith("no toolchain"):
+            pytest.skip("cannot build LaueMatchingCPU (needs OpenMP)")
+        assert err is None, f"LaueMatchingCPU.c does not compile:\n{err}"
     return exe
 
 
 _GOOD = {
+    # 0.8.0: required by every binary (requireParamKeys, user decision D5)
+    "MaxNrLaueSpots": "5", "MinIntensity": "50",
     "LatticeParameter": "0.4 0.4 0.4 90 90 90",
     "SpaceGroup": "225", "NrPxX": "8", "NrPxY": "8", "PxX": "0.2", "PxY": "0.2",
     "P_Array": "0 0 50", "R_Array": "0 0 0.0001",
@@ -225,11 +234,15 @@ def test_valid_energy_band_passes(cpu_exe, tmp_path):
     assert r.returncode == 0, r.stdout + r.stderr
 
 
-@pytest.mark.parametrize("value", ["0 0 0", None])
-def test_zero_or_missing_detector_distance_is_fatal(cpu_exe, tmp_path, value):
+@pytest.mark.parametrize("value,msg", [
+    ("0 0 0", "FATAL: P_Array[2] (detector distance) is 0"),
+    # 0.8.0: an ABSENT P_Array is refused by name before the distance check
+    (None, "missing required key(s): P_Array"),
+])
+def test_zero_or_missing_detector_distance_is_fatal(cpu_exe, tmp_path, value, msg):
     r = _run_cpu(cpu_exe, tmp_path, {"P_Array": value})
     assert r.returncode != 0
-    assert "FATAL: P_Array[2] (detector distance) is 0" in r.stderr, r.stderr
+    assert msg in r.stderr, r.stderr
 
 
 def test_zero_r_array_runs_as_the_identity_rotation(cpu_exe, tmp_path):
@@ -240,21 +253,24 @@ def test_zero_r_array_runs_as_the_identity_rotation(cpu_exe, tmp_path):
     Geometry: a = 0.2 nm cubic, orientation = 180 deg about x, reflection (111):
     q-hat = (1,-1,-1)/sqrt(3), E = 9.30 keV (in the default 5-30 band), and the
     diffracted beam is (2,-2,1)/3. With R_Array 0 (detector normal along the
-    beam) at distance 50 and P_Array (100, -100, 50), the spot lands exactly at
-    the detector centre: pixel (31, 31) of 64x64 at 0.2 units/pixel. The forward
-    cache row is [n_spots, ipx, ipy, ...]; it must be [1, 31, 31]. With the old
-    code the 0/0 axis made every coordinate NaN and the row was empty."""
+    beam) at distance 50 and P_Array (99.94, -99.94, 50), the spot lands at
+    detector coordinate (31.8, 31.2) of 64x64 at 0.2 units/pixel, i.e. in pixel
+    (32, 31) (pixel k is centred at k; before 0.8.0 this point was the panel
+    centre, 31.5, a corner shared by four pixels, which truncation called 31).
+    The forward cache row is [n_spots, ipx, ipy, ...]; it must be [1, 32, 31].
+    With the old code the 0/0 axis made every coordinate NaN and the row was
+    empty."""
     import struct
     fwd = tmp_path / "fwd.bin"
     r = _run_cpu(cpu_exe, tmp_path,
                  {"R_Array": "0 0 0", "LatticeParameter": "0.2 0.2 0.2 90 90 90",
-                  "NrPxX": "64", "NrPxY": "64", "P_Array": "100 -100 50"},
+                  "NrPxX": "64", "NrPxY": "64", "P_Array": "99.94 -99.94 50"},
                  extra=f"MaxNrLaueSpots 5\nForwardFile {fwd}\nDoFwd 1\n",
                  orient=(1, 0, 0, 0, -1, 0, 0, 0, -1), npx=64)
     assert r.returncode == 0, r.stdout + r.stderr
     assert "FATAL" not in r.stderr
     row = struct.unpack("11H", fwd.read_bytes())
-    assert row[:3] == (1, 31, 31), f"forward-cache row {row}"
+    assert row[:3] == (1, 32, 31), f"forward-cache row {row}"
 
 
 def test_detector_geometry_helpers(tmp_path):
